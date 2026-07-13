@@ -101,6 +101,13 @@
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
+    "com.unity.nuget.newtonsoft-json": {
+      "version": "3.2.2",
+      "depth": 1,
+      "source": "registry",
+      "dependencies": {},
+      "url": "https://packages.unity.com"
+    },
     "com.unity.render-pipelines.core": {
       "version": "17.3.0",
       "depth": 1,
@@ -199,6 +206,15 @@
         "com.unity.modules.jsonserialize": "1.0.0"
       },
       "url": "https://packages.unity.com"
+    },
+    "com.youngwoocho02.unity-cli-connector": {
+      "version": "https://github.com/youngwoocho02/unity-cli.git?path=unity-connector#v0.3.22",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {
+        "com.unity.nuget.newtonsoft-json": "3.2.1"
+      },
+      "hash": "149896faeb3b5165a3af4739342c637ed66d94b6"
     },
     "com.unity.modules.accessibility": {
       "version": "1.0.0",
