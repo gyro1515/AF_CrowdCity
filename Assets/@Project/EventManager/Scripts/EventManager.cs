@@ -1,220 +1,272 @@
 using System;
-using System.Collections.Generic;
-using System.Threading;
 using UnityEngine;
 
 /// <summary>
-/// 현재 게임 세션에서 이미 일어난 사실을 동기 전달한다.
+/// Track 1: 이미 일어난 과거형 사실을 구독하는 채널이다.
+/// Payload는 가능한 한 변경 불가능한 <c>readonly struct</c>로 정의한다.
 /// </summary>
-public interface IEventBus : IDisposable
+public interface IEventSubscriber<T>
+    where T : struct
 {
     /// <summary>
-    /// 필드가 없는 marker 이벤트를 발행한다.
+    /// 콜백을 구독한다. 같은 delegate를 다시 구독하면 중복 등록하지 않고 호출 순서의 끝으로 옮긴다.
+    /// static manager가 파괴된 객체를 계속 참조하지 않도록 같은 lifecycle에서 반드시 해제한다.
     /// </summary>
-    void Publish<T>() where T : struct;
+    /// <exception cref="ArgumentNullException"><paramref name="callback"/>이 null이면 발생한다.</exception>
+    void Subscribe(Action<T> callback);
 
     /// <summary>
-    /// 이벤트를 Unity 메인 스레드에서 즉시 전달한다.
+    /// 이전에 등록한 콜백을 해제한다.
     /// </summary>
-    void Publish<T>(T eventData) where T : struct;
-
-    /// <summary>
-    /// 이벤트를 구독한다. 반환된 token은 구독한 lifecycle에서 Dispose해야 한다.
-    /// </summary>
-    IDisposable Subscribe<T>(Action<T> callback) where T : struct;
+    void Unsubscribe(Action<T> callback);
 }
 
 /// <summary>
-/// GameSession 또는 GameplayRoot가 생성하고 세션 종료 시 Dispose하는 EventBus다.
+/// Track 1: 이미 일어난 과거형 사실을 동기 발행한다.
 /// </summary>
-public sealed class EventManager : IEventBus
+public interface IEventPublisher<T>
+    where T : struct
 {
-    private readonly Dictionary<Type, IEventChannel> _channels =
-        new Dictionary<Type, IEventChannel>();
-    private readonly int _mainThreadId;
-    private bool _isDisposed;
+    /// <summary>
+    /// 필드가 없는 marker/signal용 이벤트를 기본값으로 발행한다.
+    /// </summary>
+    void Publish();
 
-    public EventManager()
+    /// <summary>
+    /// 이벤트를 호출한 스레드에서 즉시 전달한다.
+    /// </summary>
+    void Publish(T eventData);
+}
+
+/// <summary>
+/// Track 2: 현재 값이 즉시 필요한 읽기 전용 Query provider를 등록한다.
+/// </summary>
+public interface IProvider<TRequest, TResponse>
+    where TRequest : struct
+{
+    /// <summary>
+    /// 현재 provider를 등록하거나 교체한다.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="handler"/>가 null이면 발생한다.</exception>
+    void Register(Func<TRequest, TResponse> handler);
+
+    /// <summary>
+    /// 현재 provider를 해제한다.
+    /// </summary>
+    void Unregister();
+}
+
+/// <summary>
+/// Track 2: 등록된 provider에 읽기 전용 Query를 동기 전달한다.
+/// </summary>
+public interface IRequester<TRequest, TResponse>
+    where TRequest : struct
+{
+    /// <summary>
+    /// provider가 없으면 <typeparamref name="TResponse"/>의 기본값을 반환한다.
+    /// </summary>
+    TResponse Send(TRequest request);
+}
+
+/// <summary>
+/// Track 1 Event와 Track 2 Query 채널의 전역 진입점이다.
+/// Runtime state를 소유하지 않으며 각 등록은 수동 해제 또는 ClearAll로 정리한다.
+/// </summary>
+public static class EventManager
+{
+    private static Action _onClearAll;
+
+    /// <summary>
+    /// 지정한 이벤트 타입의 발행 전용 채널을 반환한다.
+    /// </summary>
+    public static IEventPublisher<T> GetPublisher<T>()
+        where T : struct
     {
-        _mainThreadId = Thread.CurrentThread.ManagedThreadId;
+        return EventStorage<T>.Channel;
     }
 
-    public void Publish<T>() where T : struct
+    /// <summary>
+    /// 지정한 이벤트 타입의 구독 전용 채널을 반환한다.
+    /// </summary>
+    public static IEventSubscriber<T> GetSubscriber<T>()
+        where T : struct
     {
-        Publish(default(T));
+        return EventStorage<T>.Channel;
     }
 
-    public void Publish<T>(T eventData) where T : struct
+    /// <summary>
+    /// 지정한 요청과 응답 타입의 Query provider 등록 채널을 반환한다.
+    /// </summary>
+    public static IProvider<TRequest, TResponse> GetProvider<TRequest, TResponse>()
+        where TRequest : struct
     {
-        ThrowIfDisposed();
-        ThrowIfNotMainThread();
-
-        IEventChannel channel;
-        if (!_channels.TryGetValue(typeof(T), out channel))
-        {
-            return;
-        }
-
-        ((EventChannel<T>)channel).Publish(eventData);
+        return QueryStorage<TRequest, TResponse>.Channel;
     }
 
-    public IDisposable Subscribe<T>(Action<T> callback) where T : struct
+    /// <summary>
+    /// 지정한 요청과 응답 타입의 Query 요청 채널을 반환한다.
+    /// </summary>
+    public static IRequester<TRequest, TResponse> GetRequester<TRequest, TResponse>()
+        where TRequest : struct
     {
-        ThrowIfDisposed();
-
-        if (callback == null)
-        {
-            throw new ArgumentNullException(nameof(callback));
-        }
-
-        IEventChannel channel;
-        if (!_channels.TryGetValue(typeof(T), out channel))
-        {
-            channel = new EventChannel<T>();
-            _channels.Add(typeof(T), channel);
-        }
-
-        return ((EventChannel<T>)channel).Subscribe(callback);
+        return QueryStorage<TRequest, TResponse>.Channel;
     }
 
-    public void Dispose()
+    /// <summary>
+    /// 생성된 모든 채널의 구독과 provider 등록을 지운다.
+    /// 채널 registry는 유지해 같은 generic type을 이후에도 다시 정리할 수 있게 한다.
+    /// </summary>
+    public static void ClearAll()
     {
-        if (_isDisposed)
+        if (_onClearAll != null)
         {
-            return;
-        }
-
-        _isDisposed = true;
-
-        foreach (IEventChannel channel in _channels.Values)
-        {
-            channel.Clear();
-        }
-
-        _channels.Clear();
-    }
-
-    private void ThrowIfDisposed()
-    {
-        if (_isDisposed)
-        {
-            ThrowContractViolation(new ObjectDisposedException(nameof(EventManager)));
+            _onClearAll.Invoke();
         }
     }
 
-    private void ThrowIfNotMainThread()
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ClearBeforeRuntimeInitialization()
     {
-        if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+        // Domain Reload를 꺼도 이전 Play session의 callback과 handler가 남지 않게 한다.
+        ClearAll();
+    }
+
+    private static class EventStorage<T>
+        where T : struct
+    {
+        public static readonly EventChannel<T> Channel = new EventChannel<T>();
+
+        static EventStorage()
         {
-            ThrowContractViolation(
-                new InvalidOperationException(
-                    "EventManager.Publish는 EventManager를 생성한 Unity 메인 스레드에서 호출해야 합니다."));
+            _onClearAll += Channel.Clear;
         }
     }
 
-    private static void ThrowContractViolation(Exception exception)
+    private static class QueryStorage<TRequest, TResponse>
+        where TRequest : struct
     {
+        public static readonly QueryChannel<TRequest, TResponse> Channel =
+            new QueryChannel<TRequest, TResponse>();
+
+        static QueryStorage()
+        {
+            _onClearAll += Channel.Clear;
+        }
+    }
+
+    private sealed class EventChannel<T> : IEventSubscriber<T>, IEventPublisher<T>
+        where T : struct
+    {
+        private Action<T> _callback;
+
+        public void Subscribe(Action<T> callback)
+        {
+            if (callback == null)
+            {
 #if UNITY_EDITOR
-        Debug.LogException(exception);
+                Debug.LogError("EventManager.Subscribe: callback 매개변수가 null입니다.");
 #endif
-        throw exception;
-    }
+                throw new ArgumentNullException(nameof(callback));
+            }
 
-    private interface IEventChannel
-    {
-        void Clear();
-    }
+            // OnEnable 재진입 같은 동일 callback 재구독은 하나만 유지하고 호출 순서 끝으로 옮긴다.
+            _callback -= callback;
+            _callback += callback;
+        }
 
-    private sealed class EventChannel<T> : IEventChannel where T : struct
-    {
-        private readonly List<Subscription> _subscriptions = new List<Subscription>();
-
-        public IDisposable Subscribe(Action<T> callback)
+        public void Unsubscribe(Action<T> callback)
         {
-            Subscription subscription = new Subscription(this, callback);
-            _subscriptions.Add(subscription);
-            return subscription;
+            _callback -= callback;
+        }
+
+        public void Publish()
+        {
+            Publish(default(T));
         }
 
         public void Publish(T eventData)
         {
-            Subscription[] snapshot = _subscriptions.ToArray();
-            for (int i = 0; i < snapshot.Length; i++)
+#if UNITY_EDITOR
+            Action<T> callback = _callback;
+            if (callback == null)
             {
-                Action<T> callback = snapshot[i].Callback;
+                return;
+            }
 
+            Delegate[] subscribers = callback.GetInvocationList();
+            for (int i = 0; i < subscribers.Length; i++)
+            {
                 try
                 {
-                    callback.Invoke(eventData);
+                    ((Action<T>)subscribers[i]).Invoke(eventData);
                 }
                 catch (Exception exception)
                 {
-                    LogSubscriberException(callback, exception);
+                    Debug.LogException(exception);
                 }
             }
+#else
+            if (_callback != null)
+            {
+                _callback.Invoke(eventData);
+            }
+#endif
         }
 
         public void Clear()
         {
-            for (int i = 0; i < _subscriptions.Count; i++)
+            _callback = null;
+        }
+    }
+
+    private sealed class QueryChannel<TRequest, TResponse> :
+        IProvider<TRequest, TResponse>,
+        IRequester<TRequest, TResponse>
+        where TRequest : struct
+    {
+        private Func<TRequest, TResponse> _handler;
+
+        public void Register(Func<TRequest, TResponse> handler)
+        {
+            if (handler == null)
             {
-                _subscriptions[i].Detach();
+#if UNITY_EDITOR
+                Debug.LogError("EventManager.Register: handler 매개변수가 null입니다.");
+#endif
+                throw new ArgumentNullException(nameof(handler));
             }
 
-            _subscriptions.Clear();
+            if (_handler != null)
+            {
+#if UNITY_EDITOR
+                // Editor에서는 의도하지 않은 중복 등록을 알리되 최신 provider로 교체한다.
+                Debug.LogWarning(
+                    $"[EventManager] Query provider가 이미 등록되어 최신 handler로 교체합니다. " +
+                    $"Request={typeof(TRequest).FullName}, Response={typeof(TResponse).FullName}");
+#endif
+            }
+
+            _handler = handler;
         }
 
-        private void Remove(Subscription subscription)
+        public void Unregister()
         {
-            _subscriptions.Remove(subscription);
+            _handler = null;
         }
 
-        private static void LogSubscriberException(Action<T> callback, Exception exception)
+        public TResponse Send(TRequest request)
         {
-            string targetType = callback.Target == null
-                ? "<static>"
-                : callback.Target.GetType().FullName;
-            string declaringType = callback.Method.DeclaringType == null
-                ? "<unknown>"
-                : callback.Method.DeclaringType.FullName;
-            string message =
-                $"[EventManager] Subscriber exception. Event={typeof(T).FullName}, " +
-                $"Target={targetType}, Method={declaringType}.{callback.Method.Name}";
+            if (_handler == null)
+            {
+                return default(TResponse);
+            }
 
-            Debug.LogException(
-                new InvalidOperationException(
-                    $"{message}\n" +
-                    $"Original={exception.GetType().FullName}: {exception.Message}"));
+            return _handler.Invoke(request);
         }
 
-        private sealed class Subscription : IDisposable
+        public void Clear()
         {
-            private EventChannel<T> _owner;
-
-            public Subscription(EventChannel<T> owner, Action<T> callback)
-            {
-                _owner = owner;
-                Callback = callback;
-            }
-
-            public Action<T> Callback { get; }
-
-            public void Dispose()
-            {
-                EventChannel<T> owner = _owner;
-                if (owner == null)
-                {
-                    return;
-                }
-
-                _owner = null;
-                owner.Remove(this);
-            }
-
-            public void Detach()
-            {
-                _owner = null;
-            }
+            _handler = null;
         }
     }
 }

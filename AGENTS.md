@@ -7,6 +7,9 @@ This file is a condensed, AI-focused subset of `TEAM_ARCHITECTURE_GUIDE.md`'s ma
 
 This `AGENTS.md` applies to the repository root and everything below it. The source of truth for detailed architecture is the in-project [`UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md`](UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md); follow that guide for details not covered here. If a more specific instruction file applies to a nested scope, merge it with this document, and surface any conflict instead of hiding it.
 
+- If a user request conflicts with this guide or leaves room for a materially different interpretation, state the difference before implementation or modification and ask the user which standard to follow.
+- Do not declare a guide exception or proceed with implementation until the user explicitly decides the priority.
+
 ## Main/Subagent Operating Model and Context Isolation
 
 - In sessions where subagents are available, the main agent must act only as manager and controller. There is no exception that allows the main agent to perform investigation, file reading, detailed analysis, implementation, editing, testing, or diff review directly, even for trivial tasks.

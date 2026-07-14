@@ -416,6 +416,54 @@ MonoBehaviour:
   m_ShadowLayerMask: 1
   m_RenderingLayers: 1
   m_ShadowRenderingLayers: 1
+--- !u!1 &620548534
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 620548536}
+  - component: {fileID: 620548535}
+  m_Layer: 0
+  m_Name: GameSceneController
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &620548535
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 620548534}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d4cee896f44a31640a025c2304fa55ad, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::GameSceneController
+  config: {fileID: 11400000, guid: 3296273a037a6ac40acbf97bb2a03604, type: 2}
+  humanPrefab: {fileID: 4557897642118330164, guid: 303a7c17cbf54bd4aa58b274fa7e7b66, type: 3}
+  mainCamera: {fileID: 330585545}
+  cityRoot: {fileID: 5165518116837827667}
+--- !u!4 &620548536
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 620548534}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &765680786
 GameObject:
   m_ObjectHideFlags: 0
@@ -431,7 +479,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &765680787
 Transform:
   m_ObjectHideFlags: 0
@@ -751,6 +799,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1971288236820773770}
+  - component: {fileID: 1971288236820773771}
   m_Layer: 0
   m_Name: Human_Base
   m_TagString: Untagged
@@ -935,6 +984,28 @@ Transform:
   - {fileID: 7424240450100017854}
   m_Father: {fileID: 765680787}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!95 &1971288236820773771
+Animator:
+  serializedVersion: 7
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1157632472153579824}
+  m_Enabled: 1
+  m_Avatar: {fileID: 0}
+  m_Controller: {fileID: 9100000, guid: 5a55af569a376234f88fcef4960c369c, type: 2}
+  m_CullingMode: 1
+  m_UpdateMode: 0
+  m_ApplyRootMotion: 0
+  m_LinearVelocityBlending: 0
+  m_StabilizeFeet: 0
+  m_AnimatePhysics: 0
+  m_WarningMessage: 
+  m_HasTransformHierarchy: 1
+  m_AllowConstantClipSamplingOptimization: 1
+  m_KeepAnimatorStateOnDisable: 0
+  m_WriteDefaultValuesOnDisable: 0
 --- !u!33 &2022118265298142532
 MeshFilter:
   m_ObjectHideFlags: 0
@@ -1196,6 +1267,7 @@ GameObject:
   - component: {fileID: 3633362016603616036}
   - component: {fileID: 2965027687610666505}
   - component: {fileID: 8498642588986487599}
+  - component: {fileID: 8498642588986487600}
   m_Layer: 0
   m_Name: Buildings
   m_TagString: Untagged
@@ -1881,6 +1953,7 @@ GameObject:
   - component: {fileID: 7984605137612753839}
   - component: {fileID: 1149445167174627779}
   - component: {fileID: 7931036426998375538}
+  - component: {fileID: 7984605137612753840}
   m_Layer: 0
   m_Name: Parks
   m_TagString: Untagged
@@ -2258,6 +2331,28 @@ Transform:
   m_Children: []
   m_Father: {fileID: 5165518116837827667}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!64 &7984605137612753840
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6376602867610189987}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 5
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: -1893075592455018004, guid: caf45746402ba4afcb1a61780a7d23c3, type: 3}
 --- !u!4 &7998951903312217982
 Transform:
   m_ObjectHideFlags: 0
@@ -2285,6 +2380,7 @@ GameObject:
   - component: {fileID: 3948527047488120627}
   - component: {fileID: 2031629065169878272}
   - component: {fileID: 5126892209416822035}
+  - component: {fileID: 8023424590906505343}
   m_Layer: 0
   m_Name: Vehicles
   m_TagString: Untagged
@@ -2292,6 +2388,28 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
+--- !u!64 &8023424590906505343
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8023424590906505342}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 5
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: -8969933217412095016, guid: caf45746402ba4afcb1a61780a7d23c3, type: 3}
 --- !u!4 &8053503080140913711
 Transform:
   m_ObjectHideFlags: 0
@@ -2439,6 +2557,28 @@ MeshRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
+--- !u!64 &8498642588986487600
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3229786252271454050}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 5
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: 5285565031188597759, guid: caf45746402ba4afcb1a61780a7d23c3, type: 3}
 --- !u!4 &8625512236774316433
 Transform:
   m_ObjectHideFlags: 0
@@ -2466,6 +2606,7 @@ GameObject:
   - component: {fileID: 1720485334792558245}
   - component: {fileID: 3592119794893209493}
   - component: {fileID: 7173494194371482803}
+  - component: {fileID: 8645233827391278200}
   m_Layer: 0
   m_Name: StreetProps
   m_TagString: Untagged
@@ -2473,6 +2614,28 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
+--- !u!64 &8645233827391278200
+MeshCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8645233827391278199}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 5
+  m_Convex: 0
+  m_CookingOptions: 30
+  m_Mesh: {fileID: -221511313479517520, guid: caf45746402ba4afcb1a61780a7d23c3, type: 3}
 --- !u!4 &8650379967943546633
 Transform:
   m_ObjectHideFlags: 0
@@ -2591,3 +2754,4 @@ SceneRoots:
   - {fileID: 410087041}
   - {fileID: 832575519}
   - {fileID: 144572720}
+  - {fileID: 620548536}

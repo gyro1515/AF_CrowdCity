@@ -1,0 +1,55 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6acf3f8abd7c6424aac6ac148b1cd9ae, type: 3}
+  m_Name: GameConfig
+  m_EditorClassIdentifier: Assembly-CSharp::GameConfigSO
+  matchSeconds: 120
+  rivalCount: 3
+  neutralCount: 150
+  seed: 12345
+  leaderSpeed: 5
+  followerMaxSpeed: 6.5
+  turnRateDegPerSec: 720
+  slotSpacing: 0.6
+  separationRadius: 0.45
+  separationPush: 1.5
+  sim:
+    RecruitRadius: 1.2
+    CombatRadius: 1
+    ConvertPerSecond: 10
+    PairNormalizer: 8
+  aiDecideInterval: 0.4
+  fleeSizeRatio: 1.15
+  huntSizeRatio: 0.7
+  huntMinCount: 15
+  aiVisionRadius: 25
+  wallProbeDistance: 3
+  neutralWanderSpeed: 0.5
+  wanderRepickMinSeconds: 2
+  wanderRepickMaxSeconds: 5
+  camPitchDeg: 55
+  camBaseDistance: 16
+  camDistancePerSqrtCount: 0.8
+  camMaxDistance: 40
+  camFollowSmoothTime: 0.25
+  teamColors:
+  - {r: 0.18, g: 0.525, b: 1, a: 1}
+  - {r: 1, g: 0.255, b: 0.212, a: 1}
+  - {r: 1, g: 0.522, b: 0.106, a: 1}
+  - {r: 0.18, g: 0.8, b: 0.251, a: 1}
+  neutralColor: {r: 1, g: 1, b: 1, a: 1}
+  teamMaterials:
+  - {fileID: 2100000, guid: e1fce97eb940d124eb828eb6ca5d9e45, type: 2}
+  - {fileID: 2100000, guid: 124ffcb606b9a26438fccf02ac0ec4cf, type: 2}
+  - {fileID: 2100000, guid: 967aa70f2e3671c4a8b875f24dd9249f, type: 2}
+  - {fileID: 2100000, guid: 75bb6c75d05748c489fb7d0bbcd05c48, type: 2}
+  - {fileID: 2100000, guid: 66a48ed12aff84a46ba1ecf0006e6adc, type: 2}
