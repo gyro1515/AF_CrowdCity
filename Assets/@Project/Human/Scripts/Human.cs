@@ -32,6 +32,7 @@ public sealed class Human : MonoBehaviour
         {
             // Animator는 활성화 시점에 bind되므로 clone 활성화 이후에 Play해야 유효하다.
             _animator.Play(WalkStateHash, 0, Random.value);
+            _animator.speed = 0f; // 첫 드래그(Playing) 전까지 정지 포즈; 첫 Playing 틱의 SetHeadingAndSpeed가 재개
         }
     }
 
