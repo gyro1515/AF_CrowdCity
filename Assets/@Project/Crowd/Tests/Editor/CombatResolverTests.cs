@@ -384,8 +384,9 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// [LeaderProtection=true] 국소 접촉한 홀로 남은 리더 둘(각 ownLocal=1, enemyLocal=1, 1 대 1)은 strictly 비교라
-    /// 서로 제거되지 않음을 검증한다(보호 ON의 국소 동수 inert 케이스).
+    /// [LeaderProtection=true] 국소 접촉한 홀로 남은 리더 둘(각 ownLocal=1, enemyLocal=1, 1 대 1)은 rule B의 국소
+    /// 임계값(ownLocal<=1 && enemyLocal>=1)을 양쪽 다 충족하지만, 전역 시작 count가 동수(각 1)라 strict > 전역 가드가
+    /// 양쪽 제거자 자격을 막아 서로 제거되지 않음을 검증한다(inert의 원인은 국소 비교가 아니라 전역 동수 가드).
     /// </summary>
     [Test]
     public void BothLoneLeaders_Inert()
@@ -406,8 +407,9 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// [LeaderProtection=true] 홀로 남은 리더는 CombatRadius 안 적 국소 수가 자기(ownLocal=1)보다 strictly 클 때만
-    /// 제거되고, 국소 동수(1 대 1) 이웃에게는 제거되지 않음을 검증한다.
+    /// [LeaderProtection=true] 홀로 남은 리더는 전역 시작 count가 strictly 더 큰 적 팀이 국소로 존재할 때만(rule B:
+    /// ownLocal<=1 && enemyLocal>=1) 제거되고(a), 전역 count가 동수(1 대 1)인 이웃에게는 strict > 전역 가드가 자격을
+    /// 막아 제거되지 않음을(b) 검증한다.
     /// </summary>
     [Test]
     public void LoneLeader_EliminatedOnlyVsStrictlyLarger()
@@ -430,7 +432,7 @@ public sealed class CombatResolverTests
             Assert.AreEqual(1, outcome.Eliminations[0].ByTeam);
         }
 
-        // (b) team1이 반경 안 국소 1명(홀로)이면 제거되지 않는다.
+        // (b) team1도 홀로(전역 count 1)면 team0과 전역 동수라 strict > 전역 가드가 막아 제거되지 않는다(국소는 rule B 임계값 충족).
         {
             AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
@@ -442,7 +444,7 @@ public sealed class CombatResolverTests
             CombatOutcome outcome = new CombatOutcome(Cap);
             resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
 
-            Assert.AreEqual(0, outcome.Eliminations.Count, "국소 동수 이웃은 제거 불가");
+            Assert.AreEqual(0, outcome.Eliminations.Count, "전역 동수면 strict > 전역 가드가 막아 제거 불가");
         }
     }
 
@@ -482,12 +484,13 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// 국소 동수(enemyLocal == ownLocal) 대비: 같은 배치에서 LeaderProtection ON이면 동수는 보호(strict >)되어
-    /// 제거되지 않고, OFF면 동수(>=)에도 제거+전향됨을 대조 검증한다. team1 리더는 반경 안 팔로워가 있어 스스로는
-    /// 국소 열세가 아니게 배치해 제거가 team0 리더 하나로 격리된다.
+    /// [rule B] 호위 없이 홀로 노출된(ownLocal=1) lone leader는 근처에 적이 있고(enemyLocal>=1) 그 적 팀이 전역적으로
+    /// 더 크면 LeaderProtection ON/OFF 모두에서 제거된다. rule B에서 lone leader는 두 모드가 차이가 없고(ON/OFF 차이는
+    /// 호위가 붙은 leader에서만 갈린다 -> <see cref="Leader_ImmuneWhileEscorted_EliminatedWhenExposed"/> 참고).
+    /// team1 리더는 반경 안 팔로워가 있어 스스로는 홀로가 아니게 배치해 제거가 team0 리더 하나로 격리된다.
     /// </summary>
     [Test]
-    public void Leader_LocalParity_EliminatedInModeOff()
+    public void LoneExposedLeader_EliminatedInBothModes()
     {
         AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 홀로 남은 리더(ownLocal=1).
@@ -500,12 +503,17 @@ public sealed class CombatResolverTests
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
         CombatOutcome outcome = new CombatOutcome(Cap);
 
-        // ON: team0 리더 국소 동수(ownLocal=1, enemyLocal[1]=1) -> 보호되어 제거 없음.
+        // ON(rule B): team0 리더는 국소적으로 홀로(ownLocal=1, 호위 0)이고 적이 하나 있으며(enemyLocal[1]=1)
+        // team1 전역(2) > team0 전역(1)이라 -> 노출된 lone leader로 제거+전향된다.
         CombatState stateOn = new CombatState(TeamCount);
         resolver.Resolve(buffer, grid, Default(), 0.1f, stateOn, outcome);
-        Assert.AreEqual(0, outcome.Eliminations.Count, "ON: 국소 동수는 보호되어 제거되지 않는다");
+        Assert.AreEqual(1, outcome.Eliminations.Count, "ON(rule B): 호위 없이 홀로 노출된 lone leader는 제거된다");
+        Assert.AreEqual(0, outcome.Eliminations[0].Team, "제거된 팀은 team0");
+        Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "제거자는 team1");
+        Assert.AreEqual(0, buffer.Id[outcome.Eliminations[0].LeaderAgentIndex]);
+        Assert.IsTrue(ContainsConversion(buffer, outcome, 0, 1), "리더는 team1로 흡수 전향");
 
-        // OFF: 같은 배치에서 국소 동수(>=)면 team0 리더가 제거+전향된다.
+        // OFF: 같은 배치에서 국소 동수(>=)면 team0 리더가 제거+전향된다(rule B에서 lone leader는 ON과 동일한 결과).
         CombatState stateOff = new CombatState(TeamCount);
         resolver.Resolve(buffer, grid, LeaderProtectionOff(), 0.1f, stateOff, outcome);
         Assert.AreEqual(1, outcome.Eliminations.Count, "OFF: 국소 동수(>=)면 제거된다");
@@ -513,6 +521,66 @@ public sealed class CombatResolverTests
         Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "제거자는 team1");
         Assert.AreEqual(0, buffer.Id[outcome.Eliminations[0].LeaderAgentIndex]);
         Assert.IsTrue(ContainsConversion(buffer, outcome, 0, 1), "리더는 team1로 흡수 전향");
+    }
+
+    /// <summary>
+    /// [rule B] LeaderProtection ON에서 leader는 CombatRadius 안에 아군 호위가 하나라도 있으면(ownLocal>=2) 국소적으로
+    /// 수적 열세여도(enemyLocal=3 > ownLocal=2) 면역이다. 이 배치가 rule B를 유일하게 특정한다: 구 규칙("국소 열세/동수
+    /// enemyLocal>=ownLocal면 제거")이라면 3>2로 제거되었을 것이므로, 면역은 오직 rule B(면역은 국소 열세 여부가 아니라
+    /// 호위 유무로 결정 → ownLocal<=1이 아니면 제거 불가)로만 설명된다. 호위(id1)는 적 클러스터(+x) 반대편(-x)에 두어
+    /// 리더 CombatRadius 안(거리 0.9)이면서 모든 적 member의 접촉 반경 밖(최근접 1.4 > 1.0)이라 3단계에서 전향되지 않고
+    /// 4단계 ownLocal에 남는다. 호위가 사라져 홀로 노출되면(ownLocal=1) 같은 상대에게 제거된다.
+    /// </summary>
+    [Test]
+    public void Leader_ImmuneWhileEscorted_EliminatedWhenExposed()
+    {
+        // (i) 호위 있음 + 국소 열세: team0 리더(id0, 원점) + 반대편 호위(id1, 거리 0.9) => ownLocal=2.
+        //     team1(전역 3 > team0 전역 2)이 리더를 국소로 3명 포위(enemyLocal=3, 모두 반경 안) => 국소 3 대 2 열세.
+        //     호위는 적 클러스터(+x) 반대편(-x)이라 가장 가까운 적과도 거리 1.4 > 접촉 반경 1.0 => 3단계 전향 없음 =>
+        //     ownLocal=2 유지 => 리더는 국소 열세여도 면역(rule B: ownLocal<=1이 아니라 제거 불가). 구 규칙이면 3>2로 제거됐을 것.
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, 0, true, V(0.0f, 0.0f));
+            buffer.Add(1, 0, false, V(-0.9f, 0.0f));
+            buffer.Add(10, 1, true, V(0.5f, 0.0f));
+            buffer.Add(11, 1, false, V(0.5f, 0.3f));
+            buffer.Add(12, 1, false, V(0.5f, -0.3f));
+
+            SpatialGrid grid = NewGrid(buffer);
+            CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+            CombatState state = new CombatState(TeamCount);
+            CombatOutcome outcome = new CombatOutcome(Cap);
+
+            resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+            // 호위가 3단계에서 전향되지 않아야 면역 판정이 rule B로만 설명된다(호위가 벗겨지면 4단계에서 홀로 판정됨).
+            Assert.IsFalse(ContainsConversion(buffer, outcome, 1, 1), "호위(id1)는 적 접촉 반경 밖이라 3단계에서 전향되지 않는다");
+            Assert.AreEqual(0, outcome.Conversions.Count, "호위 생존 + 리더 흡수 없음 => 전향 0건");
+            Assert.AreEqual(0, outcome.Eliminations.Count, "호위가 붙은 leader는 국소 3 대 2 열세여도 면역이다(rule B: ownLocal<=1 아님)");
+        }
+
+        // (ii) 같은 배치에서 호위(id1)만 제거: team0 리더가 홀로 노출(ownLocal=1) + 국소 적 3(enemyLocal=3)
+        //      + 전역 가드(team1 3 > team0 1) => 같은 team1에게 제거+흡수된다.
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, 0, true, V(0.0f, 0.0f));
+            buffer.Add(10, 1, true, V(0.5f, 0.0f));
+            buffer.Add(11, 1, false, V(0.5f, 0.3f));
+            buffer.Add(12, 1, false, V(0.5f, -0.3f));
+
+            SpatialGrid grid = NewGrid(buffer);
+            CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+            CombatState state = new CombatState(TeamCount);
+            CombatOutcome outcome = new CombatOutcome(Cap);
+
+            resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+            Assert.AreEqual(1, outcome.Eliminations.Count, "호위가 사라져 홀로 노출된 leader는 같은 상대에게 제거된다");
+            Assert.AreEqual(0, outcome.Eliminations[0].Team, "제거된 팀은 team0");
+            Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "제거자는 team1");
+            Assert.AreEqual(0, buffer.Id[outcome.Eliminations[0].LeaderAgentIndex]);
+            Assert.IsTrue(ContainsConversion(buffer, outcome, 0, 1), "리더는 team1로 흡수 전향");
+        }
     }
 
     /// <summary>

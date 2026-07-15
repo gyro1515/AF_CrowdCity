@@ -28,7 +28,8 @@ public readonly struct CrowdConversion
 }
 
 /// <summary>
-/// leader가 CombatRadius 안에서 국소 수적으로 열세라 더 큰 crowd에게 제거된 사실을 나타내는 결과 항목이다.
+/// leader가 CombatRadius 안에서 아군 호위 없이 홀로 노출되고(보호 ON, rule B) 근처에 적이 있어, 전역적으로 더 큰
+/// crowd에게 제거된 사실을 나타내는 결과 항목이다(보호 OFF는 국소 열세/동수 enemyLocal>=ownLocal 포함).
 /// </summary>
 public readonly struct CrowdElimination
 {
@@ -193,17 +194,20 @@ public sealed class CombatResolver
     ///   밀린 pair의 미달 예산은 소모되지 않고 CombatState에 유지된다. 두 경로 모두 agent 하나는 호출당 최대 한 번만 변환된다.
     /// 4단계: 제거 pass는 시작 팀에 3단계 변환만 겹친 하나의 고정 가상 매핑(_virtualTeam)으로 모든 leader를 국소 판정한다.
     ///   각 leader는 자신을 중심으로 한 CombatRadius 원 안에서 가상 팀별 member 수를 세어, 자기 자신을 포함한 아군 국소
-    ///   수(ownLocal)와 적 팀별 국소 수(enemyLocal)를 비교한다. tuning.LeaderProtection=true(기본)면 enemyLocal>ownLocal인
-    ///   적 팀만, false면 enemyLocal>=ownLocal인 적 팀도 제거자 자격을 가진다. 자격 적 팀 중 국소 수가 가장 많은 팀이
+    ///   수(ownLocal)와 적 팀별 국소 수(enemyLocal)를 본다. tuning.LeaderProtection=true(기본, rule B)면 leader가
+    ///   국소적으로 홀로(ownLocal<=1, CombatRadius 안 아군 호위 0)이고 적이 하나라도 있는(enemyLocal>=1) 경우에만 그 적
+    ///   팀이 제거자 자격을 가진다(호위가 하나라도 붙어 있으면 적이 아무리 많아도 면역). false면 enemyLocal>=ownLocal인
+    ///   적 팀이 제거자 자격을 가진다. 자격 적 팀 중 국소 수가 가장 많은 팀이
     ///   제거자이며 동률은 낮은 팀 id다(정수만 쓰는 전순서 → 스냅샷/삽입 순서 불변, 거리 float 동률 없음). 전역 count가
     ///   아니라 국소 수로 판정하므로 map-separated straggler로 전역 count가 부풀어도 코너에 몰린 leader가 제거된다.
 ///   추가로 전역 가드가 있다: 시작 시점 전역 count가 strictly 더 큰 적 팀만 제거자 자격을 얻는다(3단계 전향 게이트와
 ///   동일한 strict >). 전역적으로 더 작지만 국소로 더 밀집한 crowd가 더 큰 crowd의 leader를 제거하는 것을 막으며,
-///   이 가드는 LeaderProtection ON/OFF 바깥이라 두 모드 모두에 적용된다(국소 우세는 여전히 필요, 전역 동수는 inert).
+///   이 가드는 LeaderProtection ON/OFF 바깥이라 두 모드 모두에 적용된다(국소 조건은 여전히 필요, 전역 동수는 inert).
     ///   이 pass가 방출하는 leader 변환은 _virtualTeam에 되먹이지 않아 같은 호출의 다른 팀 판정에 영향을 주지 않는다
     ///   (순서 의존성 없음). <see cref="CrowdElimination"/>과 함께 CrowdConversion(leaderIndex, killerTeam)을 방출하며
-    ///   buffer의 IsLeader=false 적용은 caller 책임이다. 보호 ON에서 홀로 남은 leader 둘(각 ownLocal=1, enemyLocal=1,
-    ///   1 대 1)은 strictly 비교라 서로 inert다.
+    ///   buffer의 IsLeader=false 적용은 caller 책임이다. 보호 ON(rule B)에서 홀로 남은 leader 둘(각 ownLocal=1,
+    ///   enemyLocal=1, 1 대 1)은 국소 임계값 자체는 양쪽 다 충족하지만 전역 count가 동수(1==1)라 strict > 전역 가드가
+    ///   양쪽 제거자 자격을 막아 서로 inert다.
     /// </remarks>
     public void Resolve(AgentBuffer buffer, SpatialGrid grid, in SimTuning tuning, float dt, CombatState state, CombatOutcome outcome)
     {
@@ -497,16 +501,19 @@ public sealed class CombatResolver
                 int enemyLocal = _localTeamCounts[e];
 
                 // 전역 가드: 시작 시점 전역 count가 strictly 더 큰 적 팀만 이 leader를 제거할 수 있다.
-                // 국소 우세만으로는 부족하다 — 전역적으로 더 작지만 국소로 더 밀집한 crowd가 더 큰 crowd의 leader를
+                // 국소 조건만으로는 부족하다 — 전역적으로 더 작지만 국소로 더 밀집한 crowd가 더 큰 crowd의 leader를
                 // 먹는 것을 막는다. 3단계 member 전향 게이트(_startCounts[w] > _startCounts[l])와 동일하게 strict >라
                 // 전역 동수는 서로 inert다. 이 가드는 LeaderProtection ON/OFF 바깥이라 두 모드 모두에 적용되고,
-                // 토글은 아래 국소 임계값(>, >=)만 제어한다. t는 leader의 시작 팀이라 _startCounts[t]가 그 팀의 전역 count다.
+                // 토글은 아래 국소 판정만 제어한다(ON: 홀로+적 존재, OFF: enemyLocal>=ownLocal). t는 leader의 시작 팀이라 _startCounts[t]가 그 팀의 전역 count다.
                 if (_startCounts[e] <= _startCounts[t])
                 {
                     continue;
                 }
 
-                bool qualifies = leaderProtection ? (enemyLocal > ownLocal) : (enemyLocal >= ownLocal);
+                // rule B: 보호 ON이면 leader가 국소적으로 홀로(ownLocal<=1, CombatRadius 안 아군 호위 0)이고 적이
+                // 하나라도 있을 때(enemyLocal>=1)만 제거자 자격. 호위가 하나라도 붙어 있으면 적이 아무리 많아도 면역이다.
+                // OFF는 기존대로 국소 열세/동수(enemyLocal>=ownLocal)면 자격. 전역 가드는 위에서 두 모드 모두에 적용된다.
+                bool qualifies = leaderProtection ? (ownLocal <= 1 && enemyLocal >= 1) : (enemyLocal >= ownLocal);
                 if (!qualifies)
                 {
                     continue;
