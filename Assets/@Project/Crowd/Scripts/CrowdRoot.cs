@@ -76,6 +76,8 @@ public sealed class CrowdRoot : MonoBehaviour
     private Transform[] _transformByAgent;
     private CharacterController[] _controllerByAgent;
     private Vector2[] _followerVelocity; // 팔로워 조향의 현재 속도 상태(agent index별). 가속 제한 적분에 쓴다.
+    private Vector3[] _visualPrev;       // 렌더 보간용 직전 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
+    private Vector3[] _visualCur;        // 렌더 보간용 최신 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
     private float[] _leaderYawDeg;       // team별 리더의 현재 실제 yaw(도).
     private float[] _wanderHeadingDeg;   // 중립 agent의 배회 heading(도).
     private float[] _wanderTimer;        // 중립 agent의 방향 재선택 잔여 시간(초).
@@ -197,6 +199,8 @@ public sealed class CrowdRoot : MonoBehaviour
         _transformByAgent = new Transform[_agentCapacity];
         _controllerByAgent = new CharacterController[_agentCapacity];
         _followerVelocity = new Vector2[_agentCapacity];
+        _visualPrev = new Vector3[_agentCapacity];
+        _visualCur = new Vector3[_agentCapacity];
         _leaderYawDeg = new float[_teamCount];
         _wanderHeadingDeg = new float[_agentCapacity];
         _wanderTimer = new float[_agentCapacity];
@@ -312,6 +316,7 @@ public sealed class CrowdRoot : MonoBehaviour
             _humanByAgent[index] = leader;
             _transformByAgent[index] = leader.transform;
             _controllerByAgent[index] = controller;
+            _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
             _leaderYawDeg[t] = 0f;
 
             _crowds.Add(new CrowdModel(t, _config.TeamMaterials[t], leader, index));
@@ -345,6 +350,7 @@ public sealed class CrowdRoot : MonoBehaviour
             _humanByAgent[index] = neutral;
             _transformByAgent[index] = neutral.transform;
             _controllerByAgent[index] = AddController(neutral.gameObject);
+            _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
             _wanderHeadingDeg[index] = neutralHeadings[n];
             _wanderTimer[index] = neutralTimers[n];
         }
@@ -390,6 +396,9 @@ public sealed class CrowdRoot : MonoBehaviour
 
         if (_matchState == MatchState.Playing)
         {
+            // 직전 프레임 RenderInterpolate가 덮어쓴 시각 위치를 논리 위치(_visualCur)로 되돌린다.
+            // 이후 모든 transform 읽기/CC.Move/미러링이 항상 논리 위치를 보게 한다(결정성 보장).
+            for (int i = 0; i < _buffer.Count; i++) _transformByAgent[i].position = _visualCur[i];
             UpdateHeadings(dt);                                                          // ②
             MoveLeaders(dt);                                                             // ③
             SteerFollowersAndNeutrals(dt);                                               // ④
@@ -401,6 +410,31 @@ public sealed class CrowdRoot : MonoBehaviour
         }
 
         PublishTickEvents();                                                             // ⑩
+    }
+
+    /// <summary>
+    /// 렌더 프레임마다 논리 위치 prev→cur를 alpha로 보간해 transform.position만 덮어쓴다(시각 전용, 회전 미보간).
+    /// GameplayRoot가 accumulator 루프 종료 후에만 호출한다. 다음 SimTick 시작의 restore가 논리 위치로 되돌리므로
+    /// 커널/미러는 항상 논리 위치만 본다. prev==cur이면 무해하다.
+    /// </summary>
+    public void RenderInterpolate(float alpha)
+    {
+        if (_buffer == null || _transformByAgent == null || _shutdown)
+        {
+            return;
+        }
+
+        // Playing이 아니면 tick이 prev/cur를 더 이상 갱신하지 않아 alpha가 마지막 tick의 prev→cur 구간을 계속 sawtooth해 무리가 진동한다. 논리 위치(_visualCur)로 스냅해 정적으로 고정한다(시각 전용).
+        if (_matchState != MatchState.Playing)
+        {
+            for (int i = 0; i < _buffer.Count; i++) _transformByAgent[i].position = _visualCur[i];
+            return;
+        }
+
+        for (int i = 0; i < _buffer.Count; i++)
+        {
+            _transformByAgent[i].position = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
+        }
     }
 
     /// <summary>
@@ -660,6 +694,8 @@ public sealed class CrowdRoot : MonoBehaviour
                 : Mathf.MoveTowardsAngle(_leaderYawDeg[t], model.HeadingDeg, turnRate * dt);
             _leaderYawDeg[t] = yaw;
 
+            // prev = 이동 전 논리 위치. player 미이동 분기 포함 모든 live 리더에서 캡처(미이동 시 prev==cur).
+            _visualPrev[index] = _transformByAgent[index].position;
             bool moving = t != MatchRules.PlayerTeam || _playerHasHeading;
             if (moving)
             {
@@ -679,6 +715,8 @@ public sealed class CrowdRoot : MonoBehaviour
                 }
             }
 
+            // cur = 이동+clamp 후 논리 위치. 모든 live 리더에서 캡처(미이동 리더는 prev와 동일).
+            _visualCur[index] = _transformByAgent[index].position;
             _humanByAgent[index].SetHeadingAndSpeed(yaw, moving ? 1f : 0f);
         }
     }
@@ -723,6 +761,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 int index = followerIndices[f];
                 Transform followerTransform = _transformByAgent[index];
                 Vector3 current = followerTransform.position;
+                _visualPrev[index] = current; // prev = 이동 전 논리 위치.
                 Vector2 pos = new Vector2(current.x, current.z);
 
                 // (a) 리더 뒤 단일 중심으로의 arrive: 중심에서 멀수록 최대 속력, 가까울수록 0으로 선형 감쇠해
@@ -814,6 +853,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 // 단, 벽에서 밀려나는 depenetration의 역방향 성분이 속도로 굳어 cohesion과 진동(bounce)하지 않도록,
                 // 실제 속도를 명령 방향 기준으로 분해해 접선 성분은 유지(벽 미끄러짐), 전진 성분은 [0, |명령|]로 상한한다(역방향 제거).
                 Vector3 finalPos = followerTransform.position;
+                _visualCur[index] = finalPos; // cur = 이동+clamp 후 논리 위치.
                 Vector2 actualVel = new Vector2(finalPos.x - pos.x, finalPos.z - pos.y) / dt;
                 if (commandedVel.sqrMagnitude > 1e-6f)
                 {
@@ -871,6 +911,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
             float rad = _wanderHeadingDeg[i] * Mathf.Deg2Rad;
             Transform neutralTransform = _transformByAgent[i];
+            _visualPrev[i] = neutralTransform.position; // prev = 이동 전 논리 위치.
             _controllerByAgent[i].Move(new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (wanderSpeed * dt));
 
             Vector3 pos = neutralTransform.position;
@@ -881,6 +922,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 neutralTransform.position = new Vector3(nx, _groundY, nz);
             }
 
+            _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
             _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], (wanderSpeed / leaderSpeed) * _config.NeutralAnimationSpeed);
         }
     }

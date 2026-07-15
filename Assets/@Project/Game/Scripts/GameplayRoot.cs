@@ -176,6 +176,10 @@ public sealed class GameplayRoot : MonoBehaviour
         {
             _accumulator %= FixedStepSeconds;
         }
+
+        // 고정 스텝 사이 잔여 시간을 alpha로 넘겨 유닛을 프레임 단위로 부드럽게 렌더링한다(시각 전용).
+        float alpha = Mathf.Clamp01(_accumulator / FixedStepSeconds);
+        _crowdRoot.RenderInterpolate(alpha);
     }
 
     private void OnDestroy()
