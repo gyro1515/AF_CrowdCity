@@ -20,7 +20,7 @@ public sealed class GameConfigSO : ScriptableObject
     public int RivalCount => rivalCount;
 
     [Tooltip("맵에 처음 배치되는 중립 인원 수. 클수록 초반에 영입할 대상이 많아짐.")]
-    [SerializeField] private int neutralCount = 150;
+    [SerializeField] private int neutralCount = 800;
     /// <summary>초기 중립 인원 수다.</summary>
     public int NeutralCount => neutralCount;
 
@@ -36,7 +36,7 @@ public sealed class GameConfigSO : ScriptableObject
     public float LeaderSpeed => leaderSpeed;
 
     [Tooltip("팔로워 최대 이동 속도(m/s). 리더보다 커야 뒤처진 팔로워가 따라잡음.")]
-    [SerializeField] private float followerMaxSpeed = 6.5f;
+    [SerializeField] private float followerMaxSpeed = 10f;
     /// <summary>팔로워 최대 이동 속도(m/s)다.</summary>
     public float FollowerMaxSpeed => followerMaxSpeed;
 
@@ -51,13 +51,13 @@ public sealed class GameConfigSO : ScriptableObject
     public float SlotSpacing => slotSpacing;
 
     [Tooltip("같은 crowd 팔로워 간 분리 반경(m). 유닛 몸통 지름(0.70)보다 커야 겹침이 풀리기 전에 반발력이 사라지지 않음.")]
-    [SerializeField] private float separationRadius = 0.80f;
+    [SerializeField] private float separationRadius = 2f;
     /// <summary>같은 crowd 팔로워 간 분리 반경(m)이다. 현재는 팔로워 조향에서만 소비되는 팔로워 전용 값이다.
     /// 유닛 몸통 지름(캡슐 반지름 0.35 → 지름 0.70)보다 커야 겹침이 풀리기 전에 선형 반발력이 0이 되지 않는다.</summary>
     public float SeparationRadius => separationRadius;
 
     [Tooltip("팔로워 분리 밀어내기 세기(gain). 클수록 겹친 팔로워를 더 강하게 밀어냄.")]
-    [SerializeField] private float separationPush = 2.0f;
+    [SerializeField] private float separationPush = 3f;
     /// <summary>팔로워 분리 밀어내기 세기(gain)다. separationRadius와 함께 현재 팔로워 조향에서만 쓰이는 팔로워 전용 값이다.</summary>
     public float SeparationPush => separationPush;
 
@@ -83,7 +83,7 @@ public sealed class GameConfigSO : ScriptableObject
     public float FollowerArriveRadiusPerSqrtMember => followerArriveRadiusPerSqrtMember;
 
     [Tooltip("팔로워 속도 변화 상한(m/s²). 출렁거림을 없애는 감쇠 계수. 오버슈트 방지 불변식: >= followerCohesionGain * followerMaxSpeed^2 / followerArriveRadius. 위반 시 OnValidate가 이 하한으로 끌어올린다.")]
-    [SerializeField] private float followerMaxAccel = 20f;
+    [SerializeField] private float followerMaxAccel = 40f;
     /// <summary>팔로워 속도 변화 상한(m/s²)이다. 출렁거림을 없애는 감쇠 계수 역할을 한다.</summary>
     public float FollowerMaxAccel => followerMaxAccel;
 
@@ -94,7 +94,7 @@ public sealed class GameConfigSO : ScriptableObject
 
     [Header("Rules")]
     [Tooltip("영입/전투 규칙에 쓰이는 시뮬레이션 커널 튜닝 값 묶음(각 하위 항목 tooltip 참고).")]
-    [SerializeField] private SimTuning sim = new SimTuning { RecruitRadius = 1.2f, CombatRadius = 1f, ConvertPerSecond = 10f, PairNormalizer = 8, RateLimitConversion = false, LeaderProtection = true };
+    [SerializeField] private SimTuning sim = new SimTuning { RecruitRadius = 1.2f, CombatRadius = 0.5f, ConvertPerSecond = 40f, PairNormalizer = 15, RateLimitConversion = true, LeaderProtection = true };
     /// <summary>영입/전투 규칙에 쓰이는 시뮬레이션 커널 튜닝 값이다.</summary>
     public SimTuning Sim => sim;
 
@@ -144,6 +144,16 @@ public sealed class GameConfigSO : ScriptableObject
     [SerializeField] private float wanderRepickMaxSeconds = 5f;
     /// <summary>중립 배회 방향 재선택 최대 간격(초)이다.</summary>
     public float WanderRepickMaxSeconds => wanderRepickMaxSeconds;
+
+    [Tooltip("중립 캐릭터 애니메이션 재생 속도 배율 (1 = 현재). Human의 최대 1.5로 클램프됨.")]
+    [SerializeField] private float neutralAnimationSpeed = 1.0f;
+    /// <summary>중립 캐릭터 애니메이션 재생 속도 배율이다.</summary>
+    public float NeutralAnimationSpeed => neutralAnimationSpeed;
+
+    [Tooltip("중립 캐릭터 최대 스케일. 스폰 시 1~이 값 사이 랜덤 균일 스케일. CharacterController 충돌 크기도 자동으로 함께 스케일됨.")]
+    [SerializeField] private float neutralMaxScale = 1.3f;
+    /// <summary>중립 캐릭터 최대 스케일이다.</summary>
+    public float NeutralMaxScale => neutralMaxScale;
 
     [Header("Camera")]
     [Tooltip("카메라가 아래를 내려다보는 pitch 각도(도, 10~89로 clamp).")]
@@ -238,6 +248,8 @@ public sealed class GameConfigSO : ScriptableObject
         neutralWanderSpeed = Mathf.Max(0f, neutralWanderSpeed);
         wanderRepickMinSeconds = Mathf.Max(0.1f, wanderRepickMinSeconds);
         wanderRepickMaxSeconds = Mathf.Max(wanderRepickMinSeconds, wanderRepickMaxSeconds);
+        neutralAnimationSpeed = Mathf.Max(0f, neutralAnimationSpeed);
+        neutralMaxScale = Mathf.Max(1f, neutralMaxScale);
 
         camPitchDeg = Mathf.Clamp(camPitchDeg, 10f, 89f);
         camBaseDistance = Mathf.Max(1f, camBaseDistance);
