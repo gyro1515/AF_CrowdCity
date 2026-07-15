@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using TMPro;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 /// <summary>
 /// GameScene을 zero-manual-step 상태로 수렴시키는 editor setup이다.
@@ -102,8 +104,7 @@ public static class GameSceneSetup
         GameConfigSO config = AssetDatabase.LoadAssetAtPath<GameConfigSO>(ConfigPath);
         TMPTextStyleSO crowdCountTextStyle =
             AssetDatabase.LoadAssetAtPath<TMPTextStyleSO>(CrowdCountTextStylePath);
-        GameObject humanPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath);
-        if (config == null || crowdCountTextStyle == null || humanPrefab == null)
+        if (config == null || crowdCountTextStyle == null)
         {
             throw new InvalidOperationException("[GameSceneSetup] controller converge test asset이 없습니다.");
         }
@@ -114,7 +115,6 @@ public static class GameSceneSetup
             scene,
             config,
             crowdCountTextStyle,
-            humanPrefab,
             preflight.MainCamera,
             preflight.City,
             assets.OccludedMaterial,
@@ -140,8 +140,12 @@ public static class GameSceneSetup
     private const string AnimationsFolder = "Assets/@Project/Human/Animations";
     private const string ControllerPath = AnimationsFolder + "/HumanWalk.controller";
     private const string MaterialsFolder = "Assets/@Project/Human/Materials";
-    private const string PrefabsFolder = "Assets/@Project/Human/Prefabs";
-    private const string HumanPrefabPath = PrefabsFolder + "/Human.prefab";
+    // Human prefab은 CrowdRoot가 Resources.Load(HumanResources.HumanPrefab="Human/Human")로 소유한다. 경로가 일치해야 한다.
+    private const string ResourcesHumanFolder = "Assets/@Project/Human/Resources/Human";
+    private const string HumanPrefabPath = ResourcesHumanFolder + "/Human.prefab";
+    // 구 경로(Resources 밖). baking 시 신 경로로 이동하고 잔존 시 정리한다(중복 로드 키 방지).
+    private const string LegacyPrefabsFolder = "Assets/@Project/Human/Prefabs";
+    private const string LegacyHumanPrefabPath = LegacyPrefabsFolder + "/Human.prefab";
     private const string GameFolder = "Assets/@Project/Game";
     private const string ConfigPath = GameFolder + "/GameConfig.asset";
     private const string HudFolder = "Assets/@Project/Hud";
@@ -149,6 +153,38 @@ public static class GameSceneSetup
     private const string WalkName = "HumanWalk";
     private const string UrpLitShaderName = "Universal Render Pipeline/Lit";
     private const string BaseColorProperty = "_BaseColor";
+    // feature root 프리팹(로직 전용: 빈 GameObject + 컴포넌트 1개). 런타임이 Resources.Load로 소유한다.
+    // 경로 세그먼트는 각 피처 폴더명이며, 런타임 상수(GameResources/CrowdResources/HudResources)의 로드 키와 반드시 일치해야 한다.
+    private const string GameResourcesGameFolder = GameFolder + "/Resources/Game";
+    private const string CrowdResourcesFolder = "Assets/@Project/Crowd/Resources/Crowd";
+    private const string HudResourcesFolder = HudFolder + "/Resources/Hud";
+    private const string GameplayRootPrefabPath = GameResourcesGameFolder + "/GameplayRoot.prefab"; // GameResources.GameplayRoot
+    private const string InputRootPrefabPath = GameResourcesGameFolder + "/InputRoot.prefab";       // GameResources.InputRoot
+    private const string CameraRootPrefabPath = GameResourcesGameFolder + "/CameraRoot.prefab";     // GameResources.CameraRoot
+    private const string CrowdRootPrefabPath = CrowdResourcesFolder + "/CrowdRoot.prefab";          // CrowdResources.CrowdRoot
+    private const string HudRootPrefabPath = HudResourcesFolder + "/HudRoot.prefab";                // HudResources.HudRoot
+    private const string CrowdLabelPrefabPath = HudResourcesFolder + "/CrowdLabel.prefab";          // HudResources.CrowdLabel
+    private const string RivalMarkerPrefabPath = HudResourcesFolder + "/RivalMarker.prefab";        // HudResources.RivalMarker
+
+    // ---- HUD uGUI 프리팹 저작 스펙 (pinned) ----
+    // HudRoot.cs의 원래 런타임 BuildCanvas/BuildLeaderboard/CreateLabel/CreateRivalMarker가 쓰던 레이아웃 상수를 그대로 옮긴 것이다.
+    // 이 값들이 어긋나면 프리팹 배치가 코드 시절과 달라지므로 GameSceneValidator의 HUD 구조 검사와 함께 시각 1:1을 지킨다.
+    private const string HudFontResourcePath = "Fonts & Materials/LiberationSans SDF - Fallback"; // HudRoot.FontResourcePath와 일치.
+    private static readonly Vector2 HudReferenceResolution = new Vector2(1080f, 1920f);
+    private const float HudCanvasMatch = 0.5f;
+    private const float HudRowWidth = 260f;
+    private const float HudRowStride = 70f;
+    private const float HudRowHeight = 60f;
+    private const float HudSwatchSize = 44f;
+    private const int HudLabelFontSize = 64;
+    private static readonly Vector2 HudLabelContainerSize = new Vector2(240f, 160f);
+    private const float HudMarkerCountInset = 58f;
+    private static readonly Vector2 HudMarkerSize = new Vector2(112f, 112f);
+    private static readonly Vector2 HudMarkerArrowSize = new Vector2(76f, 76f);
+    private static readonly Vector2 HudMarkerCountSize = new Vector2(112f, 54f);
+    private static readonly Color HudDimColor = new Color(0f, 0f, 0f, 0.72f);
+    private const int HudMaxTeams = 4;
+
     private const string GameAreaName = "GameArea";
     private const string HumanWrapperName = "Human";
     private const string HumanBaseName = "Human_Base";
@@ -231,20 +267,23 @@ public static class GameSceneSetup
         // 5(후행). config에 팀 material 배선.
         WireConfigMaterials(config, teamMaterials, changed, unchanged);
 
+        // 6. feature root 프리팹(GameplayRoot/InputRoot/CameraRoot/CrowdRoot/HudRoot) 저작/수렴.
+        //    로직 전용 asset 생성이라 씬을 변경하지 않으므로 씬 Undo 그룹 밖에서 처리한다.
+        ConvergeFeatureRootPrefabs(changed, unchanged);
+
         int undoGroup = BeginSceneUndo("Setup CrowdCity Game Scene");
         try
         {
             bool sceneChanged = false;
             sceneChanged |= ConvergeHumanAnimator(preflight.HumanBase, animatorController, changed, unchanged);
 
-            // 4b. 완전히 구성된 씬 템플릿을 prefab asset으로 저장하고 씬 템플릿을 비활성화한다.
-            GameObject humanPrefab = ConvergeHumanPrefab(preflight.HumanWrapper, ref sceneChanged, changed);
+            // 4b. 완전히 구성된 씬 템플릿을 Resources/Human 하위 prefab asset으로 저장하고(Human.cs/CC baking 포함) 씬 템플릿을 비활성화한다.
+            ConvergeHumanPrefab(preflight.HumanWrapper, ref sceneChanged, changed);
 
             sceneChanged |= ConvergeSceneController(
                 scene,
                 config,
                 crowdCountTextStyle,
-                humanPrefab,
                 preflight.MainCamera,
                 preflight.City,
                 buildingAssets.OccludedMaterial,
@@ -480,7 +519,7 @@ public static class GameSceneSetup
     {
         string[] fieldNames =
         {
-            "config", "crowdCountTextStyle", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+            "config", "crowdCountTextStyle", "mainCamera", "cityRoot", "buildingOccludedMaterial",
         };
         SerializedObject serialized = new SerializedObject(controller);
         for (int i = 0; i < fieldNames.Length; i++)
@@ -497,7 +536,7 @@ public static class GameSceneSetup
     {
         string[] fieldNames =
         {
-            "config", "crowdCountTextStyle", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+            "config", "crowdCountTextStyle", "mainCamera", "cityRoot", "buildingOccludedMaterial",
         };
         Type controllerType = typeof(GameSceneController);
         const System.Reflection.BindingFlags flags =
@@ -1012,14 +1051,28 @@ public static class GameSceneSetup
 
     // ---- 4b. Human prefab ----
 
-    // 구성이 끝난 씬 템플릿(GameArea/Human)을 prefab asset으로 저장하고 씬 템플릿을 비활성화한다.
-    // prefab은 매번 같은 경로에 덮어써 수렴시킨다(idempotent). 저장된 prefab은 active 상태여야
-    // 런타임 clone이 즉시 활성화되므로 저장 직전에 active를 보장한다.
-    private static GameObject ConvergeHumanPrefab(Transform humanWrapper, ref bool sceneChanged, List<string> changed)
+    // ---- Human prefab root 컴포넌트 baking 스펙 (pinned) ----
+    // 리더/팔로워/중립 전원이 enabled CharacterController로 물리충돌을 받는다(사용자 명시 의도). 아래 값은
+    // GameSceneValidator의 CC 스펙 검사값과 반드시 일치해야 한다(런타임 수리 금지 — baking + Editor 검증만).
+    private const float ControllerRadius = 0.35f;
+    private const float ControllerHeight = 1.8f;
+    private const float ControllerCenterY = 0.9f;
+    private const float ControllerSkinWidth = 0.08f;
+
+    // 구성이 끝난 씬 템플릿(GameArea/Human)을 Resources/Human 하위 prefab asset으로 저장하고 씬 템플릿을 비활성화한다.
+    // 저장 직전에 (a)Human 컴포넌트와 (b)pinned 스펙 CharacterController(enabled)를 template root에 baking해
+    // 런타임 clone이 AddComponent 없이 곧바로 쓰도록 한다. prefab은 매번 같은 경로에 덮어써 수렴시킨다(idempotent).
+    private static void ConvergeHumanPrefab(Transform humanWrapper, ref bool sceneChanged, List<string> changed)
     {
-        EnsureFolder(PrefabsFolder);
+        EnsureFolder(ResourcesHumanFolder);
 
         GameObject templateGo = humanWrapper.gameObject;
+
+        // 런타임 AddComponent 제거의 사전조건: Human + CharacterController(pinned)를 template root에 baking한다.
+        if (EnsureHumanRootComponents(templateGo, true))
+        {
+            sceneChanged = true;
+        }
 
         // prefab은 active 상태로 저장한다(런타임 clone이 즉시 활성).
         bool wasActive = templateGo.activeSelf;
@@ -1048,8 +1101,642 @@ public static class GameSceneSetup
             sceneChanged = true;
         }
 
-        changed.Add("Human.prefab 저장/갱신 + 씬 템플릿 비활성화");
-        return prefab;
+        // 구 경로(Resources 밖) 잔존 자산을 정리해 Resources 중복 로드 키/유령 자산을 막는다.
+        DeleteLegacyHumanPrefabIfPresent(changed);
+
+        changed.Add("Human.prefab 저장/갱신(Resources/Human) + Human.cs/CharacterController baking + 씬 템플릿 비활성화");
+    }
+
+    /// <summary>
+    /// Phase 1 전용: Human.prefab을 Resources/Human 하위로 이전하고 root에 Human.cs + enabled CharacterController(pinned 스펙)를
+    /// baking한다. City/씬/Config 수렴 없이 prefab asset만 직접 갱신하므로 batchmode에서 독립 실행할 수 있다.
+    /// 구 경로 prefab이 있으면 guid를 보존해 이동한 뒤 컴포넌트를 baking하고, 구 경로 잔존물을 정리한다. idempotent.
+    /// </summary>
+    [MenuItem("AF/CrowdCity/Bake Human Prefab (Resources + CC and Human)")]
+    public static void BakeHumanPrefab()
+    {
+        EnsureFolder(ResourcesHumanFolder);
+
+        // 1. 소스 확정: 신 경로에 없고 구 경로에 있으면 guid를 보존해 이동한다.
+        if (AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath) == null)
+        {
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(LegacyHumanPrefabPath) == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] Human prefab을 구/신 경로 어디에서도 찾지 못했습니다: {LegacyHumanPrefabPath} / {HumanPrefabPath}");
+            }
+
+            string moveError = AssetDatabase.MoveAsset(LegacyHumanPrefabPath, HumanPrefabPath);
+            if (!string.IsNullOrEmpty(moveError))
+            {
+                throw new InvalidOperationException($"[GameSceneSetup] Human prefab 이동 실패: {moveError}");
+            }
+        }
+
+        // 2. 신 경로 prefab root에 컴포넌트를 baking한다(변경이 있을 때만 저장).
+        GameObject root = PrefabUtility.LoadPrefabContents(HumanPrefabPath);
+        try
+        {
+            if (EnsureHumanRootComponents(root, false))
+            {
+                PrefabUtility.SaveAsPrefabAsset(root, HumanPrefabPath);
+            }
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(root);
+        }
+
+        // 3. 구 경로 잔존물 정리(중복 로드 키 방지).
+        List<string> changed = new List<string>(1);
+        DeleteLegacyHumanPrefabIfPresent(changed);
+
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+
+        // 4. 결과 확인(실패 시 예외로 명확히 알린다).
+        GameObject verify = AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath);
+        Human humanComponent = verify != null ? verify.GetComponent<Human>() : null;
+        CharacterController cc = verify != null ? verify.GetComponent<CharacterController>() : null;
+        if (verify == null || humanComponent == null || cc == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] baking 검증 실패: prefab={verify != null}, Human={humanComponent != null}, CC={cc != null}");
+        }
+
+        Debug.Log(
+            $"[BakeHumanPrefab] PASS at {HumanPrefabPath} — Human=1, CharacterController(enabled={cc.enabled}, " +
+            $"radius={cc.radius}, height={cc.height}, center={cc.center}, skinWidth={cc.skinWidth}). " +
+            $"legacy cleaned={changed.Count > 0}");
+    }
+
+    /// <summary>
+    /// batch mode 진입점. <see cref="BakeHumanPrefab"/>를 실행하고 성공 시 exit 0, 예외 시 로그 후 exit 1로 종료한다.
+    /// </summary>
+    public static void BakeHumanPrefabBatch()
+    {
+        try
+        {
+            BakeHumanPrefab();
+            EditorApplication.Exit(0);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            EditorApplication.Exit(1);
+        }
+    }
+
+    // prefab/씬 템플릿 root에 Human 컴포넌트와 pinned 스펙 CharacterController(enabled)를 보장한다.
+    // 이미 목표 상태면 아무것도 바꾸지 않는다(idempotent). 무언가 바꿨으면 true.
+    // useUndo=true면 씬 편집으로 간주해 Undo 그룹에 등록한다(Apply 롤백과 정합). prefab contents 편집엔 false.
+    private static bool EnsureHumanRootComponents(GameObject root, bool useUndo)
+    {
+        bool changed = false;
+
+        if (root.GetComponent<Human>() == null)
+        {
+            if (useUndo)
+            {
+                Undo.AddComponent<Human>(root);
+            }
+            else
+            {
+                root.AddComponent<Human>();
+            }
+
+            changed = true;
+        }
+
+        CharacterController controller = root.GetComponent<CharacterController>();
+        if (controller == null)
+        {
+            controller = useUndo
+                ? Undo.AddComponent<CharacterController>(root)
+                : root.AddComponent<CharacterController>();
+            changed = true;
+        }
+
+        if (useUndo)
+        {
+            Undo.RecordObject(controller, "Configure Human CharacterController");
+        }
+
+        changed |= ConfigureController(controller);
+        return changed;
+    }
+
+    // CharacterController 스펙을 pinned 값으로 수렴한다(enabled 포함). 바뀐 게 있으면 true. 저작 시점에만 호출한다.
+    private static bool ConfigureController(CharacterController controller)
+    {
+        bool changed = false;
+
+        if (!controller.enabled)
+        {
+            controller.enabled = true;
+            changed = true;
+        }
+
+        if (!Mathf.Approximately(controller.radius, ControllerRadius))
+        {
+            controller.radius = ControllerRadius;
+            changed = true;
+        }
+
+        if (!Mathf.Approximately(controller.height, ControllerHeight))
+        {
+            controller.height = ControllerHeight;
+            changed = true;
+        }
+
+        Vector3 center = new Vector3(0f, ControllerCenterY, 0f);
+        if (controller.center != center)
+        {
+            controller.center = center;
+            changed = true;
+        }
+
+        if (!Mathf.Approximately(controller.skinWidth, ControllerSkinWidth))
+        {
+            controller.skinWidth = ControllerSkinWidth;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static void DeleteLegacyHumanPrefabIfPresent(List<string> changed)
+    {
+        if (AssetDatabase.LoadAssetAtPath<GameObject>(LegacyHumanPrefabPath) == null)
+        {
+            return;
+        }
+
+        if (AssetDatabase.DeleteAsset(LegacyHumanPrefabPath))
+        {
+            changed.Add("구 Human.prefab(Prefabs/) 삭제");
+        }
+    }
+
+    // ---- 4c. feature root 프리팹 (로직 전용: 빈 GameObject + 컴포넌트 1개) ----
+
+    // GameplayRoot/InputRoot/CameraRoot/CrowdRoot는 로직 전용(빈 GO + 컴포넌트 1개) 프리팹으로 load-or-create 수렴한다.
+    // 런타임(GameSceneController/GameplayRoot)이 Resources.Load + Instantiate + Init(deps)로 조립한다.
+    // HudRoot는 Canvas/CanvasScaler + 정적 uGUI 트리(타이머·순위표·시작힌트·결과오버레이)를 사전 저작해야 하므로
+    // 로직 전용 수렴이 아니라 전용 저작 경로(ConvergeHudPrefabs)를 쓰고 동적 라벨/마커 템플릿 프리팹도 함께 수렴한다.
+    private static void ConvergeFeatureRootPrefabs(List<string> changed, List<string> unchanged)
+    {
+        ConvergeLogicRootPrefab<GameplayRoot>(GameResourcesGameFolder, GameplayRootPrefabPath, "GameplayRoot", changed, unchanged);
+        ConvergeLogicRootPrefab<InputRoot>(GameResourcesGameFolder, InputRootPrefabPath, "InputRoot", changed, unchanged);
+        ConvergeLogicRootPrefab<CameraRoot>(GameResourcesGameFolder, CameraRootPrefabPath, "CameraRoot", changed, unchanged);
+        ConvergeLogicRootPrefab<CrowdRoot>(CrowdResourcesFolder, CrowdRootPrefabPath, "CrowdRoot", changed, unchanged);
+        ConvergeHudPrefabs(changed, unchanged);
+    }
+
+    // HUD 프리팹 3종(HudRoot Canvas 트리 + CrowdLabel/RivalMarker 동적 템플릿)을 load-or-create 수렴한다.
+    // HudRoot.cs가 Resources.Load(HudResources.*)로 소유하는 자산이며, 저작 레이아웃은 HudRoot.cs의 옛 Build* 상수를 1:1로 옮긴 것이다.
+    private static void ConvergeHudPrefabs(List<string> changed, List<string> unchanged)
+    {
+        EnsureFolder(HudResourcesFolder);
+
+        TMP_FontAsset font = Resources.Load<TMP_FontAsset>(HudFontResourcePath);
+        if (font == null)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] HUD TMP 폰트 에셋을 찾지 못했습니다: Resources/" + HudFontResourcePath);
+        }
+
+        ConvergeHudRootPrefab(font, changed, unchanged);
+        ConvergeCrowdLabelPrefab(font, changed, unchanged);
+        ConvergeRivalMarkerPrefab(font, changed, unchanged);
+    }
+
+    // HudRoot.prefab: root(RectTransform + Canvas ScreenSpaceOverlay + CanvasScaler 1080x1920 match 0.5 + HudRoot) 아래
+    // 정적 uGUI 트리(리더라벨 레이어/타이머/순위표 4행/마커 레이어/시작힌트/결과오버레이)를 저작하고 HudRoot 뷰 참조를 배선한다.
+    // 이미 Canvas가 저작된 프리팹이면 건드리지 않는다(idempotent).
+    private static void ConvergeHudRootPrefab(TMP_FontAsset font, List<string> changed, List<string> unchanged)
+    {
+        GameObject existing = AssetDatabase.LoadAssetAtPath<GameObject>(HudRootPrefabPath);
+        if (existing != null && existing.GetComponent<HudRoot>() != null && existing.GetComponent<Canvas>() != null)
+        {
+            unchanged.Add("HUD 프리팹: HudRoot (Canvas 저작 완료)");
+            return;
+        }
+
+        GameObject root = new GameObject("HudRoot", typeof(RectTransform));
+        try
+        {
+            Canvas canvas = root.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+            CanvasScaler scaler = root.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = HudReferenceResolution;
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = HudCanvasMatch;
+
+            HudRoot hud = root.AddComponent<HudRoot>();
+
+            Transform canvasTransform = root.transform;
+
+            // 자식 순서 = 옛 BuildCanvas 순서(그리기 순서 보존): LeaderLabels -> Timer -> Leaderboard -> RivalMarkers -> StartHint -> ResultOverlay.
+            RectTransform leaderLabelLayer = CreateHudLayer(canvasTransform, "LeaderLabels");
+
+            TextMeshProUGUI timer = CreateHudText(
+                canvasTransform, font, "Timer", 72, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+            SetHudRect(timer.rectTransform,
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -36f), new Vector2(500f, 100f));
+
+            GameObject[] rowGos;
+            Image[] rowSwatches;
+            TextMeshProUGUI[] rowCounts;
+            BuildHudLeaderboard(canvasTransform, font, out rowGos, out rowSwatches, out rowCounts);
+
+            RectTransform markerLayer = CreateHudLayer(canvasTransform, "RivalMarkers");
+
+            TextMeshProUGUI hint = CreateHudText(
+                canvasTransform, font, "StartHint", 56, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+            hint.text = "DRAG TO START";
+            SetHudRect(hint.rectTransform,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -360f), new Vector2(900f, 90f));
+
+            GameObject resultOverlayGo;
+            TextMeshProUGUI resultTitle;
+            TextMeshProUGUI resultStandings;
+            BuildHudResultOverlay(canvasTransform, font, out resultOverlayGo, out resultTitle, out resultStandings);
+
+            // 뷰 참조 배선(자기 자식 뷰 참조 — SO 소비자 불변성과 무관). 필드명이 어긋나면 SetHudRef가 예외를 던진다.
+            SerializedObject serialized = new SerializedObject(hud);
+            SetHudRef(serialized, "_timerText", timer);
+            SetHudRef(serialized, "_hintGo", hint.gameObject);
+            SetHudRef(serialized, "_resultOverlayGo", resultOverlayGo);
+            SetHudRef(serialized, "_resultTitleText", resultTitle);
+            SetHudRef(serialized, "_resultStandingsText", resultStandings);
+            SetHudRef(serialized, "_leaderLabelLayerRect", leaderLabelLayer);
+            SetHudRef(serialized, "_markerLayerRect", markerLayer);
+            SetHudRefArray(serialized, "_rowGos", rowGos);
+            SetHudRefArray(serialized, "_rowSwatches", rowSwatches);
+            SetHudRefArray(serialized, "_rowCounts", rowCounts);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            GameObject saved = PrefabUtility.SaveAsPrefabAsset(root, HudRootPrefabPath);
+            if (saved == null)
+            {
+                throw new InvalidOperationException("[GameSceneSetup] HudRoot 프리팹 저장에 실패했습니다: " + HudRootPrefabPath);
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(root);
+        }
+
+        changed.Add("HUD 프리팹 저작/갱신: HudRoot (Canvas+정적 uGUI)");
+    }
+
+    // CrowdLabel.prefab: 리더 머리 위 라벨 템플릿. root TMP(Bold/Bottom/richText, fontSize 64, container 240x160)만 저작하고
+    // 팀 아웃라인 material과 텍스트는 HudRoot.CreateLabel이 런타임 주입한다.
+    private static void ConvergeCrowdLabelPrefab(TMP_FontAsset font, List<string> changed, List<string> unchanged)
+    {
+        GameObject existing = AssetDatabase.LoadAssetAtPath<GameObject>(CrowdLabelPrefabPath);
+        if (existing != null && existing.GetComponent<TextMeshProUGUI>() != null)
+        {
+            unchanged.Add("HUD 프리팹: CrowdLabel");
+            return;
+        }
+
+        GameObject go = new GameObject("CrowdLabel", typeof(RectTransform));
+        try
+        {
+            SetHudRect((RectTransform)go.transform,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), Vector2.zero, HudLabelContainerSize);
+
+            TextMeshProUGUI label = go.AddComponent<TextMeshProUGUI>();
+            label.font = font;
+            label.fontSize = HudLabelFontSize;
+            label.fontStyle = FontStyles.Bold;
+            label.alignment = TextAlignmentOptions.Bottom;
+            label.richText = true;
+            label.color = Color.white;
+            label.raycastTarget = false;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Overflow;
+            label.text = "1";
+
+            GameObject saved = PrefabUtility.SaveAsPrefabAsset(go, CrowdLabelPrefabPath);
+            if (saved == null)
+            {
+                throw new InvalidOperationException("[GameSceneSetup] CrowdLabel 프리팹 저장에 실패했습니다: " + CrowdLabelPrefabPath);
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(go);
+        }
+
+        changed.Add("HUD 프리팹 저작/갱신: CrowdLabel");
+    }
+
+    // RivalMarker.prefab: 화면 밖 방향/인원 마커 템플릿. root(RectTransform 112x112) + Arrow(▲ 76x76) + Count(112x54, y -58)를 저작하고
+    // 팀 색(화살표)과 카운트는 HudRoot.CreateRivalMarker/UpdateRivalMarkers가 런타임 주입한다.
+    private static void ConvergeRivalMarkerPrefab(TMP_FontAsset font, List<string> changed, List<string> unchanged)
+    {
+        GameObject existing = AssetDatabase.LoadAssetAtPath<GameObject>(RivalMarkerPrefabPath);
+        if (existing != null
+            && existing.GetComponent<RectTransform>() != null
+            && existing.transform.Find("Arrow") != null
+            && existing.transform.Find("Count") != null)
+        {
+            unchanged.Add("HUD 프리팹: RivalMarker");
+            return;
+        }
+
+        GameObject markerGo = new GameObject("RivalMarker", typeof(RectTransform));
+        try
+        {
+            SetHudRect((RectTransform)markerGo.transform,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, HudMarkerSize);
+
+            TextMeshProUGUI arrow = CreateHudText(
+                markerGo.transform, font, "Arrow", 72, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+            arrow.text = "▲";
+            SetHudRect(arrow.rectTransform,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, HudMarkerArrowSize);
+
+            TextMeshProUGUI count = CreateHudText(
+                markerGo.transform, font, "Count", 42, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+            count.text = "1";
+            SetHudRect(count.rectTransform,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.down * HudMarkerCountInset, HudMarkerCountSize);
+
+            GameObject saved = PrefabUtility.SaveAsPrefabAsset(markerGo, RivalMarkerPrefabPath);
+            if (saved == null)
+            {
+                throw new InvalidOperationException("[GameSceneSetup] RivalMarker 프리팹 저장에 실패했습니다: " + RivalMarkerPrefabPath);
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(markerGo);
+        }
+
+        changed.Add("HUD 프리팹 저작/갱신: RivalMarker");
+    }
+
+    // 로직 전용 root 프리팹 하나를 수렴한다. 이미 컴포넌트 T가 부착된 prefab이 있으면 건드리지 않고, 없거나 손상되면
+    // 임시 GameObject(빈 GO + T)를 만들어 SaveAsPrefabAsset으로 덮어쓴 뒤 임시 GO를 즉시 DestroyImmediate한다.
+    private static void ConvergeLogicRootPrefab<T>(
+        string folder, string prefabPath, string rootName, List<string> changed, List<string> unchanged)
+        where T : Component
+    {
+        EnsureFolder(folder);
+
+        GameObject existing = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        if (existing != null && existing.GetComponent<T>() != null)
+        {
+            unchanged.Add($"feature root 프리팹: {rootName}");
+            return;
+        }
+
+        GameObject temp = new GameObject(rootName);
+        try
+        {
+            temp.AddComponent<T>();
+            GameObject saved = PrefabUtility.SaveAsPrefabAsset(temp, prefabPath);
+            if (saved == null)
+            {
+                throw new InvalidOperationException($"[GameSceneSetup] feature root 프리팹 저장에 실패했습니다: {prefabPath}");
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(temp);
+        }
+
+        changed.Add($"feature root 프리팹 저장/갱신: {rootName}");
+    }
+
+    /// <summary>
+    /// Phase 2 전용: feature root 프리팹 5종(GameplayRoot/InputRoot/CameraRoot/CrowdRoot/HudRoot)을 각 피처 Resources 하위로
+    /// load-or-create 수렴한다. City/씬/Config 수렴 없이 prefab asset만 갱신하므로 batchmode에서 독립 실행할 수 있다. idempotent.
+    /// </summary>
+    [MenuItem("AF/CrowdCity/Bake Feature Root Prefabs (Resources)")]
+    public static void BakeFeatureRootPrefabs()
+    {
+        List<string> changed = new List<string>(8);
+        List<string> unchanged = new List<string>(8);
+        ConvergeFeatureRootPrefabs(changed, unchanged);
+
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+
+        // 결과 확인(실패 시 예외로 명확히 알린다). 각 prefab에 해당 컴포넌트가 부착됐는지 검사한다.
+        VerifyLogicRootPrefab<GameplayRoot>(GameplayRootPrefabPath);
+        VerifyLogicRootPrefab<InputRoot>(InputRootPrefabPath);
+        VerifyLogicRootPrefab<CameraRoot>(CameraRootPrefabPath);
+        VerifyLogicRootPrefab<CrowdRoot>(CrowdRootPrefabPath);
+        VerifyLogicRootPrefab<HudRoot>(HudRootPrefabPath);
+
+        Debug.Log(
+            "[BakeFeatureRootPrefabs] PASS — GameplayRoot/InputRoot/CameraRoot/CrowdRoot/HudRoot 프리팹 저작 완료. " +
+            BuildSummary(changed, unchanged));
+    }
+
+    /// <summary>
+    /// batch mode 진입점. <see cref="BakeFeatureRootPrefabs"/>를 실행하고 성공 시 exit 0, 예외 시 로그 후 exit 1로 종료한다.
+    /// </summary>
+    public static void BakeFeatureRootPrefabsBatch()
+    {
+        try
+        {
+            BakeFeatureRootPrefabs();
+            EditorApplication.Exit(0);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            EditorApplication.Exit(1);
+        }
+    }
+
+    private static void VerifyLogicRootPrefab<T>(string prefabPath)
+        where T : Component
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        if (prefab == null || prefab.GetComponent<T>() == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] feature root 프리팹 baking 검증 실패: path={prefabPath}, prefab={prefab != null}, {typeof(T).Name}={(prefab != null && prefab.GetComponent<T>() != null)}");
+        }
+    }
+
+    // ---- HUD uGUI 저작 헬퍼 (옛 HudRoot.BuildCanvas/CreateText/SetRect의 1:1 이식) ----
+
+    // full-stretch RectTransform 레이어(리더 라벨/마커 컨테이너). 옛 BuildLeaderLabelLayer/BuildMarkerLayer와 동일.
+    private static RectTransform CreateHudLayer(Transform parent, string name)
+    {
+        GameObject go = new GameObject(name, typeof(RectTransform));
+        go.transform.SetParent(parent, false);
+
+        RectTransform rect = (RectTransform)go.transform;
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+        return rect;
+    }
+
+    // 옛 HudRoot.CreateText와 동일한 TMP 속성(폰트/크기/정렬/색/스타일 + raycast off, NoWrap, Overflow)을 저작한다.
+    private static TextMeshProUGUI CreateHudText(
+        Transform parent,
+        TMP_FontAsset font,
+        string name,
+        int fontSize,
+        TextAlignmentOptions alignment,
+        Color color,
+        FontStyles style)
+    {
+        GameObject go = new GameObject(name, typeof(RectTransform));
+        go.transform.SetParent(parent, false);
+
+        TextMeshProUGUI text = go.AddComponent<TextMeshProUGUI>();
+        text.font = font;
+        text.fontSize = fontSize;
+        text.alignment = alignment;
+        text.color = color;
+        text.fontStyle = style;
+        text.raycastTarget = false;
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+        text.overflowMode = TextOverflowModes.Overflow;
+        return text;
+    }
+
+    // 옛 HudRoot.SetRect와 동일(anchorMin=anchorMax=anchor, pivot, anchoredPosition, sizeDelta).
+    private static void SetHudRect(RectTransform rect, Vector2 anchor, Vector2 pivot, Vector2 anchoredPosition, Vector2 size)
+    {
+        rect.anchorMin = anchor;
+        rect.anchorMax = anchor;
+        rect.pivot = pivot;
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = size;
+    }
+
+    // 옛 HudRoot.BuildLeaderboard와 동일: 우상단 컨테이너 아래 Row0..3(각 Swatch Image + Count TMP).
+    private static void BuildHudLeaderboard(
+        Transform canvasTransform,
+        TMP_FontAsset font,
+        out GameObject[] rowGos,
+        out Image[] rowSwatches,
+        out TextMeshProUGUI[] rowCounts)
+    {
+        GameObject leaderboardGo = new GameObject("Leaderboard", typeof(RectTransform));
+        leaderboardGo.transform.SetParent(canvasTransform, false);
+        SetHudRect((RectTransform)leaderboardGo.transform,
+            new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-30f, -30f),
+            new Vector2(HudRowWidth, HudRowStride * HudMaxTeams));
+
+        rowGos = new GameObject[HudMaxTeams];
+        rowSwatches = new Image[HudMaxTeams];
+        rowCounts = new TextMeshProUGUI[HudMaxTeams];
+
+        for (int i = 0; i < HudMaxTeams; i++)
+        {
+            GameObject rowGo = new GameObject("Row" + i, typeof(RectTransform));
+            rowGo.transform.SetParent(leaderboardGo.transform, false);
+            SetHudRect((RectTransform)rowGo.transform,
+                new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(0f, -i * HudRowStride),
+                new Vector2(HudRowWidth, HudRowHeight));
+
+            GameObject swatchGo = new GameObject("Swatch", typeof(RectTransform));
+            swatchGo.transform.SetParent(rowGo.transform, false);
+            Image swatch = swatchGo.AddComponent<Image>();
+            swatch.raycastTarget = false;
+            SetHudRect((RectTransform)swatchGo.transform,
+                new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0f),
+                new Vector2(HudSwatchSize, HudSwatchSize));
+
+            TextMeshProUGUI countText = CreateHudText(
+                rowGo.transform, font, "Count", 44, TextAlignmentOptions.Right, Color.white, FontStyles.Bold);
+            RectTransform countRect = countText.rectTransform;
+            countRect.anchorMin = new Vector2(0f, 0f);
+            countRect.anchorMax = new Vector2(1f, 1f);
+            countRect.offsetMin = new Vector2(HudSwatchSize + 12f, 0f);
+            countRect.offsetMax = new Vector2(0f, 0f);
+            countText.text = "-";
+
+            rowGos[i] = rowGo;
+            rowSwatches[i] = swatch;
+            rowCounts[i] = countText;
+        }
+    }
+
+    // 옛 HudRoot.BuildResultOverlay와 동일: dim Image(full stretch) + Title/Standings/RestartHint TMP. 기본 비활성.
+    private static void BuildHudResultOverlay(
+        Transform canvasTransform,
+        TMP_FontAsset font,
+        out GameObject resultOverlayGo,
+        out TextMeshProUGUI resultTitle,
+        out TextMeshProUGUI resultStandings)
+    {
+        resultOverlayGo = new GameObject("ResultOverlay", typeof(RectTransform));
+        resultOverlayGo.transform.SetParent(canvasTransform, false);
+
+        Image dim = resultOverlayGo.AddComponent<Image>();
+        dim.color = HudDimColor;
+        dim.raycastTarget = false;
+
+        RectTransform overlayRect = (RectTransform)resultOverlayGo.transform;
+        overlayRect.anchorMin = Vector2.zero;
+        overlayRect.anchorMax = Vector2.one;
+        overlayRect.offsetMin = Vector2.zero;
+        overlayRect.offsetMax = Vector2.zero;
+
+        Transform overlayTransform = resultOverlayGo.transform;
+
+        resultTitle = CreateHudText(
+            overlayTransform, font, "Title", 120, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+        SetHudRect(resultTitle.rectTransform,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 420f), new Vector2(900f, 160f));
+
+        resultStandings = CreateHudText(
+            overlayTransform, font, "Standings", 56, TextAlignmentOptions.Center, Color.white, FontStyles.Normal);
+        SetHudRect(resultStandings.rectTransform,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 40f), new Vector2(900f, 520f));
+
+        TextMeshProUGUI restart = CreateHudText(
+            overlayTransform, font, "RestartHint", 48, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+        restart.text = "R / TAP TO RESTART";
+        SetHudRect(restart.rectTransform,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -420f), new Vector2(900f, 90f));
+
+        resultOverlayGo.SetActive(false);
+    }
+
+    private static void SetHudRef(SerializedObject serialized, string propertyName, UnityEngine.Object value)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] HudRoot에서 직렬화 필드 '{propertyName}'을(를) 찾지 못했습니다.");
+        }
+
+        property.objectReferenceValue = value;
+    }
+
+    private static void SetHudRefArray(SerializedObject serialized, string propertyName, UnityEngine.Object[] values)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] HudRoot에서 직렬화 배열 필드 '{propertyName}'을(를) 찾지 못했습니다.");
+        }
+
+        property.arraySize = values.Length;
+        for (int i = 0; i < values.Length; i++)
+        {
+            property.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+        }
     }
 
     // ---- 6. GameSceneController ----
@@ -1058,7 +1745,6 @@ public static class GameSceneSetup
         Scene scene,
         GameConfigSO config,
         TMPTextStyleSO crowdCountTextStyle,
-        GameObject humanPrefab,
         Camera mainCamera,
         Transform city,
         Material buildingOccludedMaterial,
@@ -1087,7 +1773,6 @@ public static class GameSceneSetup
         SerializedObject serialized = new SerializedObject(controller);
         changedHere |= SetObjectReference(serialized, "config", config);
         changedHere |= SetObjectReference(serialized, "crowdCountTextStyle", crowdCountTextStyle);
-        changedHere |= SetObjectReference(serialized, "humanPrefab", humanPrefab);
         changedHere |= SetObjectReference(serialized, "mainCamera", mainCamera);
         changedHere |= SetObjectReference(serialized, "cityRoot", city);
         changedHere |= SetObjectReference(serialized, "buildingOccludedMaterial", buildingOccludedMaterial);

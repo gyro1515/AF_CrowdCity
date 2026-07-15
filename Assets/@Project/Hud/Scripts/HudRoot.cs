@@ -46,24 +46,14 @@ public sealed class HudRoot : MonoBehaviour
     private const float DimAlpha = 0.35f;
     private const string FontResourcePath = "Fonts & Materials/LiberationSans SDF - Fallback";
 
-    // 순위표 layout(1080x1920 기준 해상도 좌표).
-    private const float RowWidth = 260f;
-    private const float RowStride = 70f;
-    private const float RowHeight = 60f;
-    private const float SwatchSize = 44f;
-
-    // Overlay 리더 라벨: CanvasScaler의 1080x1920 기준 좌표에서 읽히는 고정 크기다.
-    private const int LabelFontSize = 64;
+    // Overlay 리더 라벨이 리더 머리 위로 떠서 투영될 월드 오프셋이다(프리팹 저작 대상 아님 — 런타임 투영 전용).
     private static readonly Vector3 LabelOffset = new Vector3(0f, 2.2f, 0f);
-    private static readonly Vector2 LabelContainerSize = new Vector2(240f, 160f);
 
     // 화면 밖 마커: CanvasScaler의 로컬 좌표 기준. safe area를 다시 inset해 화면 비율과 notch에서도 잘리지 않게 한다.
+    // (마커/라벨의 크기·폰트·색 등 정적 레이아웃은 프리팹에 저작되고, 아래 값은 런타임 edge clamp/카운트 위치 계산에만 쓰인다.)
     private const float MarkerEdgePadding = 60f;
     private const float MarkerCountInset = 58f;
     private const float MarkerDirectionEpsilon = 0.0001f;
-    private static readonly Vector2 MarkerSize = new Vector2(112f, 112f);
-    private static readonly Vector2 MarkerArrowSize = new Vector2(76f, 76f);
-    private static readonly Vector2 MarkerCountSize = new Vector2(112f, 54f);
 
     private static readonly Color WinTitleColor = new Color(1f, 0.84f, 0.3f);
     private static readonly Color LoseTitleColor = new Color(1f, 0.35f, 0.33f);
@@ -74,18 +64,23 @@ public sealed class HudRoot : MonoBehaviour
     private Camera _worldCamera;
     private TMP_FontAsset _fontAsset;
 
-    private GameObject _canvasRoot;
-    private TextMeshProUGUI _timerText;
-    private GameObject _hintGo;
-    private GameObject _resultOverlayGo;
-    private TextMeshProUGUI _resultTitleText;
-    private TextMeshProUGUI _resultStandingsText;
-    private RectTransform _leaderLabelLayerRect;
-    private RectTransform _markerLayerRect;
+    // 아래 참조들은 HudRoot 프리팹에 사전 저작된 정적 uGUI 트리(Canvas는 이 컴포넌트가 붙은 프리팹 root 자신)를 가리킨다.
+    // 프리팹 인스펙터/Editor 저작(GameSceneSetup)에서 배선되는 자기 자식 뷰 참조이므로 SO 소비자 불변성과 무관하다.
+    [SerializeField] private TextMeshProUGUI _timerText;
+    [SerializeField] private GameObject _hintGo;
+    [SerializeField] private GameObject _resultOverlayGo;
+    [SerializeField] private TextMeshProUGUI _resultTitleText;
+    [SerializeField] private TextMeshProUGUI _resultStandingsText;
+    [SerializeField] private RectTransform _leaderLabelLayerRect;
+    [SerializeField] private RectTransform _markerLayerRect;
+    [SerializeField] private GameObject[] _rowGos;
+    [SerializeField] private Image[] _rowSwatches;
+    [SerializeField] private TextMeshProUGUI[] _rowCounts;
 
-    private readonly GameObject[] _rowGos = new GameObject[MaxTeams];
-    private readonly Image[] _rowSwatches = new Image[MaxTeams];
-    private readonly TextMeshProUGUI[] _rowCounts = new TextMeshProUGUI[MaxTeams];
+    // 동적 라벨/마커 템플릿 프리팹(개수가 팀 수에 따라 가변이라 정적화 불가). 런타임 Resources.Load + Instantiate로 복제한다.
+    private GameObject _crowdLabelPrefab;
+    private GameObject _rivalMarkerPrefab;
+
     private readonly int[] _rowTeam = new int[MaxTeams];
     private readonly int[] _rowCount = new int[MaxTeams];
     private readonly bool[] _rowEliminated = new bool[MaxTeams];
@@ -139,15 +134,36 @@ public sealed class HudRoot : MonoBehaviour
                 "[HudRoot] TMP font asset을 찾을 수 없습니다: Resources/" + FontResourcePath);
         }
 
+        GameObject crowdLabelPrefab = Resources.Load<GameObject>(HudResources.CrowdLabel);
+        if (crowdLabelPrefab == null)
+        {
+            throw new InvalidOperationException(
+                "[HudRoot] CrowdLabel 프리팹을 찾을 수 없습니다: Resources/" + HudResources.CrowdLabel);
+        }
+
+        GameObject rivalMarkerPrefab = Resources.Load<GameObject>(HudResources.RivalMarker);
+        if (rivalMarkerPrefab == null)
+        {
+            throw new InvalidOperationException(
+                "[HudRoot] RivalMarker 프리팹을 찾을 수 없습니다: Resources/" + HudResources.RivalMarker);
+        }
+
         _initialized = true;
         _session = session;
         _config = config;
         _crowdCountTextStyle = crowdCountTextStyle;
         _worldCamera = worldCamera;
         _fontAsset = fontAsset;
+        _crowdLabelPrefab = crowdLabelPrefab;
+        _rivalMarkerPrefab = rivalMarkerPrefab;
         CreateLabelMaterials();
 
-        BuildCanvas();
+        // 정적 uGUI 트리는 프리팹에 저작돼 있고 참조는 직렬화로 주입된다. 과거 BuildLeaderboard가 하던
+        // "행별 첫 갱신 강제"만 런타임 상태로 남겨 재현한다(RefreshLeaderboard가 int.MinValue를 보면 반드시 갱신한다).
+        for (int i = 0; i < MaxTeams; i++)
+        {
+            _rowTeam[i] = int.MinValue;
+        }
 
         _onCountChanged = OnCrowdCountChanged;
         _onEliminated = OnCrowdEliminated;
@@ -259,18 +275,16 @@ public sealed class HudRoot : MonoBehaviour
 
         DestroyLabelMaterials();
 
-        if (_canvasRoot != null)
-        {
-            Destroy(_canvasRoot);
-            _canvasRoot = null;
-        }
-
+        // Canvas와 정적 uGUI 트리는 이 컴포넌트가 붙은 프리팹 root 자신이므로 별도 파괴 대상이 없다.
+        // 정상 경로에서는 GameplayRoot.Shutdown이 곧바로 HudRoot GameObject를 파괴하고, OnDestroy가 최종 안전망이다.
         _leaderLabelLayerRect = null;
         _markerLayerRect = null;
         _worldCamera = null;
         _config = null;
         _crowdCountTextStyle = null;
         _fontAsset = null;
+        _crowdLabelPrefab = null;
+        _rivalMarkerPrefab = null;
     }
 
     private void Update()
@@ -486,173 +500,6 @@ public sealed class HudRoot : MonoBehaviour
         _resultOverlayGo.SetActive(true);
     }
 
-    private void BuildCanvas()
-    {
-        _canvasRoot = new GameObject("HudCanvas");
-        _canvasRoot.transform.SetParent(transform, false);
-
-        Canvas canvas = _canvasRoot.AddComponent<Canvas>();
-        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-
-        CanvasScaler scaler = _canvasRoot.AddComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1080f, 1920f);
-        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-        scaler.matchWidthOrHeight = 0.5f;
-
-        Transform canvasTransform = _canvasRoot.transform;
-
-        // 월드 추적 라벨은 고정 HUD보다 먼저 그려 타이머/순위표/결과창을 가리지 않는다.
-        BuildLeaderLabelLayer(canvasTransform);
-
-        // 타이머: 상단 중앙, "M:SS".
-        _timerText = CreateText(canvasTransform, "Timer", 72, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
-        SetRect((RectTransform)_timerText.transform,
-            new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -36f), new Vector2(500f, 100f));
-
-        BuildLeaderboard(canvasTransform);
-        BuildMarkerLayer(canvasTransform);
-
-        // 시작 힌트: Ready에서만 보인다.
-        TextMeshProUGUI hintText = CreateText(
-            canvasTransform, "StartHint", 56, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
-        hintText.text = "DRAG TO START";
-        SetRect((RectTransform)hintText.transform,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -360f), new Vector2(900f, 90f));
-        _hintGo = hintText.gameObject;
-
-        BuildResultOverlay(canvasTransform);
-    }
-
-    private void BuildLeaderLabelLayer(Transform canvasTransform)
-    {
-        GameObject layerGo = new GameObject("LeaderLabels", typeof(RectTransform));
-        layerGo.transform.SetParent(canvasTransform, false);
-
-        _leaderLabelLayerRect = (RectTransform)layerGo.transform;
-        _leaderLabelLayerRect.anchorMin = Vector2.zero;
-        _leaderLabelLayerRect.anchorMax = Vector2.one;
-        _leaderLabelLayerRect.offsetMin = Vector2.zero;
-        _leaderLabelLayerRect.offsetMax = Vector2.zero;
-    }
-
-    private void BuildMarkerLayer(Transform canvasTransform)
-    {
-        GameObject layerGo = new GameObject("RivalMarkers", typeof(RectTransform));
-        layerGo.transform.SetParent(canvasTransform, false);
-
-        _markerLayerRect = (RectTransform)layerGo.transform;
-        _markerLayerRect.anchorMin = Vector2.zero;
-        _markerLayerRect.anchorMax = Vector2.one;
-        _markerLayerRect.offsetMin = Vector2.zero;
-        _markerLayerRect.offsetMax = Vector2.zero;
-    }
-
-    private void BuildLeaderboard(Transform canvasTransform)
-    {
-        GameObject leaderboardGo = new GameObject("Leaderboard", typeof(RectTransform));
-        leaderboardGo.transform.SetParent(canvasTransform, false);
-        SetRect((RectTransform)leaderboardGo.transform,
-            new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-30f, -30f), new Vector2(RowWidth, RowStride * MaxTeams));
-
-        for (int i = 0; i < MaxTeams; i++)
-        {
-            GameObject rowGo = new GameObject("Row" + i, typeof(RectTransform));
-            rowGo.transform.SetParent(leaderboardGo.transform, false);
-            SetRect((RectTransform)rowGo.transform,
-                new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(0f, -i * RowStride), new Vector2(RowWidth, RowHeight));
-
-            GameObject swatchGo = new GameObject("Swatch", typeof(RectTransform));
-            swatchGo.transform.SetParent(rowGo.transform, false);
-            Image swatch = swatchGo.AddComponent<Image>();
-            swatch.raycastTarget = false;
-            SetRect((RectTransform)swatchGo.transform,
-                new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0f), new Vector2(SwatchSize, SwatchSize));
-
-            TextMeshProUGUI countText = CreateText(
-                rowGo.transform, "Count", 44, TextAlignmentOptions.Right, Color.white, FontStyles.Bold);
-            RectTransform countRect = (RectTransform)countText.transform;
-            countRect.anchorMin = new Vector2(0f, 0f);
-            countRect.anchorMax = new Vector2(1f, 1f);
-            countRect.offsetMin = new Vector2(SwatchSize + 12f, 0f);
-            countRect.offsetMax = new Vector2(0f, 0f);
-            countText.text = "-";
-
-            _rowGos[i] = rowGo;
-            _rowSwatches[i] = swatch;
-            _rowCounts[i] = countText;
-            _rowTeam[i] = int.MinValue; // 첫 갱신을 강제한다.
-        }
-    }
-
-    private void BuildResultOverlay(Transform canvasTransform)
-    {
-        _resultOverlayGo = new GameObject("ResultOverlay", typeof(RectTransform));
-        _resultOverlayGo.transform.SetParent(canvasTransform, false);
-
-        Image dim = _resultOverlayGo.AddComponent<Image>();
-        dim.color = new Color(0f, 0f, 0f, 0.72f);
-        dim.raycastTarget = false;
-
-        RectTransform overlayRect = (RectTransform)_resultOverlayGo.transform;
-        overlayRect.anchorMin = Vector2.zero;
-        overlayRect.anchorMax = Vector2.one;
-        overlayRect.offsetMin = Vector2.zero;
-        overlayRect.offsetMax = Vector2.zero;
-
-        Transform overlayTransform = _resultOverlayGo.transform;
-
-        _resultTitleText = CreateText(
-            overlayTransform, "Title", 120, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
-        SetRect((RectTransform)_resultTitleText.transform,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 420f), new Vector2(900f, 160f));
-
-        _resultStandingsText = CreateText(
-            overlayTransform, "Standings", 56, TextAlignmentOptions.Center, Color.white, FontStyles.Normal);
-        SetRect((RectTransform)_resultStandingsText.transform,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 40f), new Vector2(900f, 520f));
-
-        TextMeshProUGUI restartText = CreateText(
-            overlayTransform, "RestartHint", 48, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
-        restartText.text = "R / TAP TO RESTART";
-        SetRect((RectTransform)restartText.transform,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -420f), new Vector2(900f, 90f));
-
-        _resultOverlayGo.SetActive(false);
-    }
-
-    private TextMeshProUGUI CreateText(
-        Transform parent,
-        string name,
-        int fontSize,
-        TextAlignmentOptions alignment,
-        Color color,
-        FontStyles style)
-    {
-        GameObject go = new GameObject(name, typeof(RectTransform));
-        go.transform.SetParent(parent, false);
-
-        TextMeshProUGUI text = go.AddComponent<TextMeshProUGUI>();
-        text.font = _fontAsset;
-        text.fontSize = fontSize;
-        text.alignment = alignment;
-        text.color = color;
-        text.fontStyle = style;
-        text.raycastTarget = false;
-        text.textWrappingMode = TextWrappingModes.NoWrap;
-        text.overflowMode = TextOverflowModes.Overflow;
-        return text;
-    }
-
-    private static void SetRect(RectTransform rect, Vector2 anchor, Vector2 pivot, Vector2 anchoredPosition, Vector2 size)
-    {
-        rect.anchorMin = anchor;
-        rect.anchorMax = anchor;
-        rect.pivot = pivot;
-        rect.anchoredPosition = anchoredPosition;
-        rect.sizeDelta = size;
-    }
-
     private void UpdateLeaderLabels()
     {
         if (_worldCamera == null || _leaderLabelLayerRect == null)
@@ -756,25 +603,19 @@ public sealed class HudRoot : MonoBehaviour
 
         DestroyRivalMarker(teamId);
 
-        GameObject markerGo = new GameObject("RivalMarker_" + teamId, typeof(RectTransform));
-        markerGo.transform.SetParent(_markerLayerRect, false);
+        // 정적 레이아웃(RectTransform 크기·폰트·정렬·화살표 글리프·카운트 초기 위치)은 RivalMarker 프리팹에 저작돼 있고,
+        // 런타임에는 팀 색(화살표)과 카운트 텍스트만 주입한다. new GameObject+AddComponent 조립을 대체한다.
+        GameObject markerGo = Instantiate(_rivalMarkerPrefab, _markerLayerRect, false);
+        markerGo.name = "RivalMarker_" + teamId;
 
-        RectTransform markerRect = (RectTransform)markerGo.transform;
-        SetRect(markerRect,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, MarkerSize);
+        TextMeshProUGUI arrow = FindMarkerText(markerGo, "Arrow");
+        // 폰트를 먼저 지정한다(TMP는 font 지정 시 material을 폰트 기본값으로 되돌리므로 색 지정보다 앞선다).
+        arrow.font = _fontAsset;
+        arrow.color = GetTeamColor(teamId);
 
-        TextMeshProUGUI arrow = CreateText(
-            markerRect, "Arrow", 72, TextAlignmentOptions.Center, GetTeamColor(teamId), FontStyles.Bold);
-        arrow.text = "\u25B2";
-        RectTransform arrowRect = (RectTransform)arrow.transform;
-        SetRect(arrowRect,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, MarkerArrowSize);
-
-        TextMeshProUGUI count = CreateText(
-            markerRect, "Count", 42, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+        TextMeshProUGUI count = FindMarkerText(markerGo, "Count");
+        count.font = _fontAsset;
         count.text = "1";
-        SetRect((RectTransform)count.transform,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.down * MarkerCountInset, MarkerCountSize);
 
         _markerGos[teamId] = markerGo;
         _markerArrows[teamId] = arrow;
@@ -782,6 +623,25 @@ public sealed class HudRoot : MonoBehaviour
 
         // LateUpdate가 첫 위치를 계산하기 전에 중앙에서 한 frame 보이지 않게 한다.
         markerGo.SetActive(false);
+    }
+
+    private static TextMeshProUGUI FindMarkerText(GameObject markerGo, string childName)
+    {
+        Transform child = markerGo.transform.Find(childName);
+        if (child == null)
+        {
+            throw new InvalidOperationException(
+                "[HudRoot] RivalMarker prefab에 '" + childName + "' 자식이 없습니다.");
+        }
+
+        TextMeshProUGUI text = child.GetComponent<TextMeshProUGUI>();
+        if (text == null)
+        {
+            throw new InvalidOperationException(
+                "[HudRoot] RivalMarker prefab의 '" + childName + "'에 TextMeshProUGUI가 없습니다.");
+        }
+
+        return text;
     }
 
     private void UpdateRivalMarkers()
@@ -932,24 +792,20 @@ public sealed class HudRoot : MonoBehaviour
 
     private void CreateLabel(int teamId, Transform leader)
     {
-        GameObject go = new GameObject("CrowdLabel_" + teamId, typeof(RectTransform));
-        go.transform.SetParent(_leaderLabelLayerRect, false);
+        // 정적 레이아웃(container RectTransform·폰트·크기·정렬·richText 등)은 CrowdLabel 프리팹에 저작돼 있고,
+        // 런타임에는 팀 아웃라인 material과 텍스트만 주입한다. new GameObject+AddComponent 조립을 대체한다.
+        GameObject go = Instantiate(_crowdLabelPrefab, _leaderLabelLayerRect, false);
+        go.name = "CrowdLabel_" + teamId;
 
-        RectTransform labelTransform = (RectTransform)go.transform;
-        SetRect(labelTransform,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0f), Vector2.zero, LabelContainerSize);
+        TextMeshProUGUI label = go.GetComponent<TextMeshProUGUI>();
+        if (label == null)
+        {
+            throw new InvalidOperationException("[HudRoot] CrowdLabel 프리팹 root에 TextMeshProUGUI가 없습니다.");
+        }
 
-        TextMeshProUGUI label = go.AddComponent<TextMeshProUGUI>();
+        // 폰트를 먼저 지정한 뒤 팀 material을 지정한다(TMP는 font 지정 시 material을 폰트 기본값으로 되돌린다).
         label.font = _fontAsset;
         label.fontSharedMaterial = _labelMaterials[teamId];
-        label.fontSize = LabelFontSize;
-        label.fontStyle = FontStyles.Bold;
-        label.alignment = TextAlignmentOptions.Bottom;
-        label.richText = true;
-        label.color = Color.white;
-        label.raycastTarget = false;
-        label.textWrappingMode = TextWrappingModes.NoWrap;
-        label.overflowMode = TextOverflowModes.Overflow;
 
         _labels[teamId] = label;
         _labelLeaders[teamId] = leader;

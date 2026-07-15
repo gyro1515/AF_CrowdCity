@@ -20,60 +20,12 @@ This `CLAUDE.md` applies to the repository root and everything below it. The sou
 
 ## Behavioral Guidelines to Reduce Common LLM Coding Mistakes
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+Merge with project-specific instructions. Tradeoff: these bias toward caution over speed; for trivial tasks, use judgment. They are working when diffs carry fewer unnecessary changes, there are fewer overcomplication rewrites, and clarifying questions come before implementation rather than after mistakes.
 
-Tradeoff: These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-1. Think Before Coding
-Don't assume. Don't hide confusion. Surface tradeoffs.
-
-Before implementing:
-
-State your assumptions explicitly. If uncertain, ask.
-If multiple interpretations exist, present them - don't pick silently.
-If a simpler approach exists, say so. Push back when warranted.
-If something is unclear, stop. Name what's confusing. Ask.
-2. Simplicity First
-Minimum code that solves the problem. Nothing speculative.
-
-No features beyond what was asked.
-No abstractions for single-use code.
-No "flexibility" or "configurability" that wasn't requested.
-No error handling for impossible scenarios.
-If you write 200 lines and it could be 50, rewrite it.
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-3. Surgical Changes
-Touch only what you must. Clean up only your own mess.
-
-When editing existing code:
-
-Don't "improve" adjacent code, comments, or formatting.
-Don't refactor things that aren't broken.
-Match existing style, even if you'd do it differently.
-If you notice unrelated dead code, mention it - don't delete it.
-When your changes create orphans:
-
-Remove imports/variables/functions that YOUR changes made unused.
-Don't remove pre-existing dead code unless asked.
-The test: Every changed line should trace directly to the user's request.
-
-4. Goal-Driven Execution
-Define success criteria. Loop until verified.
-
-Transform tasks into verifiable goals:
-
-"Add validation" → "Write tests for invalid inputs, then make them pass"
-"Fix the bug" → "Write a test that reproduces it, then make it pass"
-"Refactor X" → "Ensure tests pass before and after"
-For multi-step tasks, state a brief plan:
-
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
-These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+1. **Think before coding.** State assumptions explicitly; if uncertain, ask. If multiple interpretations exist, present them — don't pick silently. If a simpler approach exists, say so. If something is unclear, stop, name it, and ask.
+2. **Simplicity first — minimum code that solves the problem, nothing speculative.** No features beyond what was asked, no abstractions for single-use code, no unrequested "flexibility"/"configurability", **No error handling for impossible scenarios**. If 200 lines could be 50, rewrite it. If a senior engineer would call it overcomplicated, simplify.
+3. **Surgical changes — touch only what you must; clean up only your own mess.** Don't "improve" adjacent code/comments/formatting or refactor things that aren't broken; match existing style. Remove only the imports/variables/functions your changes made unused; mention pre-existing dead code, don't delete it. Every changed line should trace directly to the request.
+4. **Goal-driven execution — define success criteria, then loop until verified.** Turn tasks into verifiable goals ("add validation" → "write tests for invalid inputs, then make them pass"; "fix the bug" → "write a reproducing test, then make it pass"; "refactor X" → "tests pass before and after"). For multi-step tasks, state a brief plan with a verify check per step.
 
 ### Project-Specific Safety Precedence
 
@@ -309,6 +261,17 @@ OnSpawn    -> OnDespawn
 - Other features must not reference `Feature.Runtime`; when necessary, they may reference `Feature.Contracts` only.
 - Use `Shared.Contracts` only for ownerless common contracts.
 - Do not move arbitrary types into Shared to resolve circular references.
+
+## 11.5 Prefab Construction Rules
+
+These rules cover how runtime object trees are constructed and loaded. They add only the construction/loading perspective on top of §2 (Ownership), §4 (Communication), §8 (Subscription), and §10 (Resources); do not duplicate those rules.
+
+- **Minimize scene placement.** A scene holds only the bootstrap (`GameSceneController`) and designated environment objects (Main Camera, `GameArea/City`, and inactive authoring templates such as `GameArea/Human`). Every other feature/spawn-target tree is created at runtime from prefabs.
+- **Script-preattached prefabs.** Author features and spawn targets as prefabs with their scripts already attached. Do not `AddComponent<FeatureScript>` on a clone, and do not assemble a feature tree at runtime with `new GameObject() + AddComponent` — this includes uGUI (HUD Canvas, labels, markers).
+- **The ownership/assembly chain IS the (documentary) mediator.** Creation and assembly flow only along `SceneController → GameplayRoot → FeatureRoot → spawn target`. A parent Instantiates a child prefab, then injects dependencies synchronously exactly once via `Init(deps)`; siblings are bound at the parent root. This tree serves the mediator role — **do not add a separate Mediator/central-hub class.** A child never references its parent or `SceneController` directly (consistent with §2).
+- **Dynamic load & paths.** Load prefabs with `Resources.Load<T>("<featureSegment>/<assetName>")`. To avoid collisions in the merged Resources namespace, put a feature segment in the path, and keep the path string in a feature-owned constant holder (no global warehouse). Enforce duplicate relative paths with an Editor validator. Promote to Addressables only when large/remote/independently-releasable assets require it (do not introduce it before then — §0.2).
+- **Init-only lifecycle & injection.** Author prefabs active. `Awake`/`OnEnable` must be dependency-free (no reading injected dependencies, no parent/sibling/other-feature references, no external publish, no manager/bus/tick registration); the first external publish is a separate owner-driven step after wiring completes. `Init` runs synchronously exactly once; on failure the owner destroys the clone it just created and cancels its registration.
+- **Baked physics & determinism exception.** Baked colliders/`CharacterController` are live the instant they are Instantiated, so place no physics step or overlap query between Instantiate and Init (all spawn-placement checks run before Instantiate). Bake determinism-pinned specs (e.g. CC radius/height/center/skinWidth) into the prefab, but verify the values only with an Editor validator (constant match) — never repair them at runtime. The pure-C# simulation kernel (`Crowd/Core`) is exempt from prefab rules.
 
 ## 12. Security / Live Operations Rules
 

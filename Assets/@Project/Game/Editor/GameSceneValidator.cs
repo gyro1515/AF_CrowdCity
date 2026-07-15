@@ -1,8 +1,10 @@
 using System.Collections.Generic;
+using TMPro;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 /// <summary>
 /// GameScene이 셋업(GameSceneSetup) 이후 플레이 가능한 상태인지 검증하는 Editor 전용 검증기다.
@@ -13,11 +15,27 @@ public static class GameSceneValidator
 {
     private const string ConfigAssetPath = "Assets/@Project/Game/GameConfig.asset";
     private const string CrowdCountTextStyleAssetPath = "Assets/@Project/Hud/CrowdCountTextStyle.asset";
-    private const string HumanPrefabPath = "Assets/@Project/Human/Prefabs/Human.prefab";
+    // 런타임은 CrowdRoot가 Resources.Load("Human/Human")로 이 prefab을 소유한다. 경로가 일치해야 한다.
+    private const string HumanPrefabPath = "Assets/@Project/Human/Resources/Human/Human.prefab";
+    // HUD 프리팹 3종. HudRoot.cs가 Resources.Load(HudResources.*)로 소유하며 GameSceneSetup.ConvergeHudPrefabs가 저작한다.
+    private const string HudRootPrefabPath = "Assets/@Project/Hud/Resources/Hud/HudRoot.prefab";
+    private const string CrowdLabelPrefabPath = "Assets/@Project/Hud/Resources/Hud/CrowdLabel.prefab";
+    private const string RivalMarkerPrefabPath = "Assets/@Project/Hud/Resources/Hud/RivalMarker.prefab";
+    private static readonly Vector2 HudReferenceResolution = new Vector2(1080f, 1920f);
+    private const float HudCanvasMatch = 0.5f;
+    private const int HudMaxTeams = 4;
     private const string UrpLitShaderName = "Universal Render Pipeline/Lit";
     private const string BaseColorProperty = "_BaseColor";
     private const float ColorTolerance = 0.004f; // 약 1/255 — float 직렬화 오차 허용치.
     private const int MaxUnresolvedPathExamples = 5;
+
+    // Human prefab root에 baking된 CharacterController의 pinned 스펙. GameSceneSetup의 baking 값과 반드시 일치해야 한다.
+    // 리더/팔로워/중립 전원이 enabled CC로 물리충돌을 받는다(사용자 명시 의도).
+    private const float ControllerRadius = 0.35f;
+    private const float ControllerHeight = 1.8f;
+    private const float ControllerCenterY = 0.9f;
+    private const float ControllerSkinWidth = 0.08f;
+    private const float ControllerSpecTolerance = 0.001f;
 
     private static readonly string[] ColliderRequiredChildren = { "Buildings", "StreetProps", "Vehicles", "Parks" };
     private static readonly string[] ColliderForbiddenChildren = { "Ground", "RoadMarks" };
@@ -44,10 +62,17 @@ public static class GameSceneValidator
 
         ValidateController(failures);
         ValidateHumanPrefab(failures);
+        ValidateHudPrefabs(failures);
         ValidateGeneratedBuildings(failures);
         ValidateCityColliders(failures);
         ValidateCrowdCountTextStyleAsset(failures);
         ValidateConfigAsset(failures);
+
+        // 병합 Resources 네임스페이스의 중복 로드 키 검증을 파이프라인 게이트에 포함한다(상세는 [ResPathValidator] 로그).
+        if (!ResourcePathValidator.Validate())
+        {
+            failures.Add("Resources 중복 로드 키 존재([ResPathValidator] 로그 참조)");
+        }
 
         if (failures.Count == 0)
         {
@@ -89,16 +114,11 @@ public static class GameSceneValidator
         SerializedObject serialized = new SerializedObject(controller);
         Object configRef = GetObjectReference(serialized, "config", failures);
         Object crowdCountTextStyleRef = GetObjectReference(serialized, "crowdCountTextStyle", failures);
-        Object prefabRef = GetObjectReference(serialized, "humanPrefab", failures);
         GetObjectReference(serialized, "mainCamera", failures);
         Object cityRef = GetObjectReference(serialized, "cityRoot", failures);
         Object occludedMaterialRef = GetObjectReference(serialized, "buildingOccludedMaterial", failures);
 
-        GameObject prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath);
-        if (prefabRef != null && prefabAsset != null && prefabRef != prefabAsset)
-        {
-            failures.Add($"GameSceneController.humanPrefab이 {HumanPrefabPath} 에셋이 아님");
-        }
+        // humanPrefab 직렬화 주입 체인은 제거됐다(CrowdRoot가 Resources.Load로 자기 스폰 대상을 소유). 여기서 참조 검사하지 않는다.
 
         Transform sceneCity = FindSceneTransform("GameArea", "City");
         if (cityRef != null && sceneCity != null && cityRef != sceneCity)
@@ -175,6 +195,39 @@ public static class GameSceneValidator
         {
             failures.Add($"Human prefab이 없음({HumanPrefabPath})");
             return;
+        }
+
+        // prefab root에 Human 컴포넌트가 baking되어 있어야 한다(런타임 AddComponent 제거의 전제).
+        if (prefab.GetComponent<Human>() == null)
+        {
+            failures.Add("Human.prefab root에 Human 컴포넌트가 baking되어 있지 않음");
+        }
+
+        // prefab root에 enabled CharacterController가 pinned 스펙으로 baking되어 있어야 한다(리더/팔로워/중립 전원 물리충돌 = 사용자 의도).
+        CharacterController controller = prefab.GetComponent<CharacterController>();
+        if (controller == null)
+        {
+            failures.Add("Human.prefab root에 CharacterController가 baking되어 있지 않음");
+        }
+        else
+        {
+            if (!controller.enabled)
+            {
+                failures.Add("Human.prefab CharacterController가 enabled=false임(전원 물리충돌 규약 위반)");
+            }
+
+            if (!Mathf.Approximately(controller.radius, ControllerRadius) ||
+                !Mathf.Approximately(controller.height, ControllerHeight) ||
+                Mathf.Abs(controller.center.x) > ControllerSpecTolerance ||
+                Mathf.Abs(controller.center.y - ControllerCenterY) > ControllerSpecTolerance ||
+                Mathf.Abs(controller.center.z) > ControllerSpecTolerance ||
+                !Mathf.Approximately(controller.skinWidth, ControllerSkinWidth))
+            {
+                failures.Add(
+                    $"Human.prefab CharacterController 스펙 불일치(radius={controller.radius}, height={controller.height}, " +
+                    $"center={controller.center}, skinWidth={controller.skinWidth}; " +
+                    $"기대 r={ControllerRadius}, h={ControllerHeight}, c=(0,{ControllerCenterY},0), skin={ControllerSkinWidth})");
+            }
         }
 
         Transform humanBase = prefab.transform.Find("Human_Base");
@@ -317,6 +370,171 @@ public static class GameSceneValidator
             {
                 failures.Add($"City/{childName}에 MeshCollider가 있으면 안 됨({colliderCount}개 발견)");
             }
+        }
+    }
+
+    // HUD 프리팹 3종(GameSceneSetup.ConvergeHudPrefabs 저작)의 구조·배선을 읽기 전용으로 검증한다.
+    // HudRoot: Canvas 트리(ScreenSpaceOverlay + CanvasScaler 1080x1920 match 0.5) + HudRoot 뷰 참조 전부 배선 + ResultOverlay 비활성.
+    // CrowdLabel/RivalMarker: 동적 템플릿의 최소 구조(root TMP / Arrow·Count TMP 자식).
+    private static void ValidateHudPrefabs(List<string> failures)
+    {
+        GameObject hudRootPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(HudRootPrefabPath);
+        if (hudRootPrefab == null)
+        {
+            failures.Add($"HudRoot 프리팹이 없음: {HudRootPrefabPath}");
+        }
+        else
+        {
+            HudRoot hud = hudRootPrefab.GetComponent<HudRoot>();
+            if (hud == null)
+            {
+                failures.Add("HudRoot 프리팹 root에 HudRoot 컴포넌트가 없음");
+            }
+
+            Canvas canvas = hudRootPrefab.GetComponent<Canvas>();
+            if (canvas == null)
+            {
+                failures.Add("HudRoot 프리팹 root에 Canvas가 없음");
+            }
+            else if (canvas.renderMode != RenderMode.ScreenSpaceOverlay)
+            {
+                failures.Add($"HudRoot Canvas renderMode가 ScreenSpaceOverlay가 아님({canvas.renderMode})");
+            }
+
+            CanvasScaler scaler = hudRootPrefab.GetComponent<CanvasScaler>();
+            if (scaler == null)
+            {
+                failures.Add("HudRoot 프리팹 root에 CanvasScaler가 없음");
+            }
+            else
+            {
+                if (scaler.uiScaleMode != CanvasScaler.ScaleMode.ScaleWithScreenSize)
+                {
+                    failures.Add("HudRoot CanvasScaler uiScaleMode가 ScaleWithScreenSize가 아님");
+                }
+
+                if (scaler.referenceResolution != HudReferenceResolution)
+                {
+                    failures.Add($"HudRoot CanvasScaler referenceResolution가 {HudReferenceResolution}이(가) 아님({scaler.referenceResolution})");
+                }
+
+                if (!Mathf.Approximately(scaler.matchWidthOrHeight, HudCanvasMatch))
+                {
+                    failures.Add($"HudRoot CanvasScaler matchWidthOrHeight가 {HudCanvasMatch}이(가) 아님({scaler.matchWidthOrHeight})");
+                }
+            }
+
+            if (hud != null)
+            {
+                SerializedObject serialized = new SerializedObject(hud);
+                RequireHudRef(serialized, "_timerText", failures);
+                RequireHudRef(serialized, "_hintGo", failures);
+                RequireHudRef(serialized, "_resultOverlayGo", failures);
+                RequireHudRef(serialized, "_resultTitleText", failures);
+                RequireHudRef(serialized, "_resultStandingsText", failures);
+                RequireHudRef(serialized, "_leaderLabelLayerRect", failures);
+                RequireHudRef(serialized, "_markerLayerRect", failures);
+                RequireHudRefArray(serialized, "_rowGos", HudMaxTeams, failures);
+                RequireHudRefArray(serialized, "_rowSwatches", HudMaxTeams, failures);
+                RequireHudRefArray(serialized, "_rowCounts", HudMaxTeams, failures);
+            }
+
+            Transform resultOverlay = hudRootPrefab.transform.Find("ResultOverlay");
+            if (resultOverlay == null)
+            {
+                failures.Add("HudRoot 프리팹에 ResultOverlay 자식이 없음");
+            }
+            else if (resultOverlay.gameObject.activeSelf)
+            {
+                failures.Add("HudRoot ResultOverlay가 기본 활성 상태(비활성으로 저작돼야 함)");
+            }
+        }
+
+        GameObject crowdLabelPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(CrowdLabelPrefabPath);
+        if (crowdLabelPrefab == null)
+        {
+            failures.Add($"CrowdLabel 프리팹이 없음: {CrowdLabelPrefabPath}");
+        }
+        else if (crowdLabelPrefab.GetComponent<TextMeshProUGUI>() == null)
+        {
+            failures.Add("CrowdLabel 프리팹 root에 TextMeshProUGUI가 없음");
+        }
+
+        GameObject rivalMarkerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(RivalMarkerPrefabPath);
+        if (rivalMarkerPrefab == null)
+        {
+            failures.Add($"RivalMarker 프리팹이 없음: {RivalMarkerPrefabPath}");
+        }
+        else
+        {
+            if (rivalMarkerPrefab.GetComponent<RectTransform>() == null)
+            {
+                failures.Add("RivalMarker 프리팹 root에 RectTransform이 없음");
+            }
+
+            RequireMarkerChildText(rivalMarkerPrefab, "Arrow", failures);
+            RequireMarkerChildText(rivalMarkerPrefab, "Count", failures);
+        }
+    }
+
+    private static void RequireHudRef(SerializedObject serialized, string propertyName, List<string> failures)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            failures.Add($"HudRoot 직렬화 필드 '{propertyName}'을(를) 찾지 못함");
+            return;
+        }
+
+        if (property.objectReferenceValue == null)
+        {
+            failures.Add($"HudRoot 직렬화 필드 '{propertyName}'이(가) 프리팹에서 미배선(null)");
+        }
+    }
+
+    private static void RequireHudRefArray(
+        SerializedObject serialized, string propertyName, int expectedLength, List<string> failures)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            failures.Add($"HudRoot 직렬화 배열 필드 '{propertyName}'을(를) 찾지 못함");
+            return;
+        }
+
+        if (!property.isArray)
+        {
+            failures.Add($"HudRoot 직렬화 필드 '{propertyName}'이(가) 배열이 아님");
+            return;
+        }
+
+        if (property.arraySize != expectedLength)
+        {
+            failures.Add($"HudRoot 직렬화 배열 '{propertyName}' 길이가 {expectedLength}이(가) 아님({property.arraySize})");
+            return;
+        }
+
+        for (int i = 0; i < expectedLength; i++)
+        {
+            if (property.GetArrayElementAtIndex(i).objectReferenceValue == null)
+            {
+                failures.Add($"HudRoot 직렬화 배열 '{propertyName}'[{i}]이(가) 미배선(null)");
+            }
+        }
+    }
+
+    private static void RequireMarkerChildText(GameObject markerPrefab, string childName, List<string> failures)
+    {
+        Transform child = markerPrefab.transform.Find(childName);
+        if (child == null)
+        {
+            failures.Add($"RivalMarker 프리팹에 '{childName}' 자식이 없음");
+            return;
+        }
+
+        if (child.GetComponent<TextMeshProUGUI>() == null)
+        {
+            failures.Add($"RivalMarker 프리팹 '{childName}'에 TextMeshProUGUI가 없음");
         }
     }
 

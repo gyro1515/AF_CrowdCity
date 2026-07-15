@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -10,7 +11,6 @@ public sealed class GameSceneController : MonoBehaviour
     // Editor setup(GameSceneSetup)이 SerializedObject로 이름 기반 배선하므로 필드 이름을 바꾸지 않는다.
     [SerializeField] private GameConfigSO config;
     [SerializeField] private TMPTextStyleSO crowdCountTextStyle;
-    [SerializeField] private GameObject humanPrefab;    // Assets/@Project/Human/Prefabs/Human.prefab (editor setup이 구성된 씬 템플릿에서 생성)
     [SerializeField] private Camera mainCamera;
     [SerializeField] private Transform cityRoot;        // GameArea/City
     [SerializeField] private Material buildingOccludedMaterial; // City_Occluded.mat (editor setup이 생성/배선)
@@ -44,12 +44,6 @@ public sealed class GameSceneController : MonoBehaviour
             valid = false;
         }
 
-        if (humanPrefab == null)
-        {
-            Debug.LogError("[GameSceneController] humanPrefab 참조가 비어 있습니다.", this);
-            valid = false;
-        }
-
         if (mainCamera == null)
         {
             Debug.LogError("[GameSceneController] mainCamera 참조가 비어 있습니다.", this);
@@ -79,11 +73,41 @@ public sealed class GameSceneController : MonoBehaviour
     {
         _session = new GameSession(config);
 
-        GameObject gameplayRootGo = new GameObject("GameplayRoot");
-        gameplayRootGo.transform.SetParent(transform, false);
-        _gameplayRoot = gameplayRootGo.AddComponent<GameplayRoot>();
-        _gameplayRoot.Initialize(
-            _session, config, crowdCountTextStyle, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial);
+        // GameplayRoot는 스크립트 사전부착 프리팹을 Resources.Load + Instantiate로 생성한다(소유권/조립 체인의 시작).
+        // 프리팹은 active로 저작돼 있고 GameplayRoot.Awake/OnEnable은 의존성-free이므로, 배선(Initialize) 이전 활성 상태가 안전하다.
+        GameObject prefab = Resources.Load<GameObject>(GameResources.GameplayRoot);
+        if (prefab == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneController] GameplayRoot 프리팹을 Resources에서 로드하지 못했습니다: '{GameResources.GameplayRoot}'. " +
+                "GameSceneSetup으로 feature root 프리팹을 baking하세요.");
+        }
+
+        GameObject gameplayRootGo = Instantiate(prefab, transform, false);
+        gameplayRootGo.name = "GameplayRoot";
+        _gameplayRoot = gameplayRootGo.GetComponent<GameplayRoot>();
+        if (_gameplayRoot == null)
+        {
+            // 방금 만든 clone을 파괴하고 실패한다(부분 생성 상태로 씬에 남지 않게).
+            Destroy(gameplayRootGo);
+            throw new InvalidOperationException(
+                $"[GameSceneController] GameplayRoot 프리팹 '{GameResources.GameplayRoot}' 루트에 GameplayRoot 컴포넌트가 없습니다.");
+        }
+
+        try
+        {
+            _gameplayRoot.Initialize(
+                _session, config, crowdCountTextStyle, mainCamera, cityRoot, buildingOccludedMaterial);
+        }
+        catch
+        {
+            // Initialize가 예외를 던지면 방금 만든 GameplayRoot clone을 파괴하고 다시 던진다.
+            // GameplayRoot.Initialize는 실패 시 자기 child root를 이미 역순 정리하고 나오므로 여기서는 root clone만 파괴한다.
+            Destroy(gameplayRootGo);
+            _gameplayRoot = null;
+            throw;
+        }
+
         _gameplayRoot.ReloadRequested += OnReloadRequested;
     }
 

@@ -41,7 +41,6 @@ public sealed class GameplayRoot : MonoBehaviour
         GameSession session,
         GameConfigSO config,
         TMPTextStyleSO crowdCountTextStyle,
-        GameObject humanPrefab,
         Camera mainCamera,
         Transform cityRoot,
         Material buildingOccludedMaterial)
@@ -55,32 +54,45 @@ public sealed class GameplayRoot : MonoBehaviour
         _initialized = true;
         _session = session;
 
-        // ① child root GameObject 4개를 먼저 전부 생성한다.
-        _inputRoot = CreateChildRoot<InputRoot>("InputRoot");
-        _crowdRoot = CreateChildRoot<CrowdRoot>("CrowdRoot");
-        _cameraRoot = CreateChildRoot<CameraRoot>("CameraRoot");
-        _hudRoot = CreateChildRoot<HudRoot>("HudRoot");
+        try
+        {
+            // ① child root 4개를 스크립트 사전부착 프리팹에서 먼저 전부 Instantiate한다(Resources.Load + Instantiate).
+            //    생성 순서는 여기 고정돼 있어 Unity script 실행 순서에 의존하지 않는다. 각 프리팹은 active로 저작돼 있고
+            //    Awake/OnEnable이 의존성-free이므로 아래 Initialize(주입) 이전 활성 상태가 안전하다(첫 발행은 SpawnInitial까지 지연).
+            _inputRoot = LoadRoot<InputRoot>(GameResources.InputRoot, "InputRoot");
+            _crowdRoot = LoadRoot<CrowdRoot>(CrowdResources.CrowdRoot, "CrowdRoot");
+            _cameraRoot = LoadRoot<CameraRoot>(GameResources.CameraRoot, "CameraRoot");
+            _hudRoot = LoadRoot<HudRoot>(HudResources.HudRoot, "HudRoot");
 
-        // ② 각 root를 고정된 순서로 초기화한다. bus 구독은 전부 여기서 등록된다.
-        _inputRoot.Initialize(config);
-        _crowdRoot.Initialize(config, humanPrefab, cityRoot);
-        _cameraRoot.Initialize(mainCamera, config, cityRoot, buildingOccludedMaterial);
-        _hudRoot.Initialize(_session, config, crowdCountTextStyle, mainCamera);
+            // ② 각 root를 고정된 순서로 초기화한다. bus 구독은 전부 여기서 등록된다.
+            _inputRoot.Initialize(config);
+            _crowdRoot.Initialize(config, cityRoot);
+            _cameraRoot.Initialize(mainCamera, config, cityRoot, buildingOccludedMaterial);
+            _hudRoot.Initialize(_session, config, crowdCountTextStyle, mainCamera);
 
-        // ③ session의 bus 구독을 등록한다.
-        _session.Initialize();
+            // ③ session의 bus 구독을 등록한다.
+            _session.Initialize();
 
-        // ④ C# event binding (child -> parent 알림).
-        _inputRoot.FirstDrag += OnFirstDrag;
-        _inputRoot.RestartTapped += OnRestartTapped;
-        _session.StateChanged += OnSessionStateChanged;
+            // ④ C# event binding (child -> parent 알림).
+            _inputRoot.FirstDrag += OnFirstDrag;
+            _inputRoot.RestartTapped += OnRestartTapped;
+            _session.StateChanged += OnSessionStateChanged;
 
-        // ⑤ 첫 스폰. 모든 구독자가 이미 듣고 있는 상태에서 첫 coalesced count 발행이 일어난다.
-        _crowdRoot.SpawnInitial();
+            // ⑤ 첫 스폰. 모든 구독자가 이미 듣고 있는 상태에서 첫 coalesced count 발행이 일어난다.
+            _crowdRoot.SpawnInitial();
 
-        // ⑥ presentation binding.
-        _cameraRoot.SetTarget(_crowdRoot.PlayerLeaderTransform);
-        _hudRoot.BindLeaderLabels(BuildLeaderLabelBindings());
+            // ⑥ presentation binding.
+            _cameraRoot.SetTarget(_crowdRoot.PlayerLeaderTransform);
+            _hudRoot.BindLeaderLabels(BuildLeaderLabelBindings());
+        }
+        catch
+        {
+            // 부분 생성/구독 롤백: 소유자(GameplayRoot)의 기존 teardown을 그대로 호출해
+            // 등록한 C# binding 해제와 생성한 child root clone 역순 파괴(Hud→Camera→Crowd→Input)를 함께 수행하고 다시 던진다.
+            // (LoadRoot는 자기 실패 clone을 이미 파괴하고, 각 child root의 Shutdown은 미초기화/중복 호출에도 안전하다.)
+            Shutdown();
+            throw;
+        }
     }
 
     /// <summary>
@@ -220,12 +232,31 @@ public sealed class GameplayRoot : MonoBehaviour
         }
     }
 
-    private T CreateChildRoot<T>(string rootName)
+    // child root 프리팹을 Resources.Load + Instantiate로 생성하고 이 root 아래에 붙인다.
+    // 프리팹은 로직 전용(빈 GameObject + 컴포넌트 1개)이라 baked 참조가 없고, 주입은 호출부의 Init(deps)로만 이뤄진다.
+    // 프리팹/컴포넌트 취득 실패 시 방금 만든 clone을 파괴하고 명확히 예외를 던진다(버퍼/상태에 부분 등록되지 않음).
+    private T LoadRoot<T>(string resourcePath, string rootName)
         where T : Component
     {
-        GameObject rootObject = new GameObject(rootName);
-        rootObject.transform.SetParent(transform, false);
-        return rootObject.AddComponent<T>();
+        GameObject prefab = Resources.Load<GameObject>(resourcePath);
+        if (prefab == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameplayRoot] feature root 프리팹을 Resources에서 로드하지 못했습니다: '{resourcePath}'. " +
+                "GameSceneSetup으로 feature root 프리팹을 baking하세요.");
+        }
+
+        GameObject rootObject = Instantiate(prefab, transform, false);
+        rootObject.name = rootName;
+        T component = rootObject.GetComponent<T>();
+        if (component == null)
+        {
+            Destroy(rootObject);
+            throw new InvalidOperationException(
+                $"[GameplayRoot] feature root 프리팹 '{resourcePath}' 루트에 {typeof(T).Name} 컴포넌트가 없습니다.");
+        }
+
+        return component;
     }
 
     private List<CrowdLabelBinding> BuildLeaderLabelBindings()

@@ -10,7 +10,7 @@ Voodoo "Crowd City"(`io.voodoo.crowdcity`) MVP 클론을 `Assets/@Project/Scenes
 
 - Unity 6000.3.9f1, URP 17.3.0, Input System 1.18.0 전용, Linear color space, Android 우선.
 - 결정론 시뮬레이션: 고정 스텝(0.02s, 프레임당 최대 4스텝), 스냅샷-순수 전투 해석.
-- 씬 오브젝트는 프리팹으로 생성(Human.prefab). 게임 루프에 Destroy가 없어 오브젝트 풀링은 도입하지 않음(요청 조건대로).
+- 씬 오브젝트/기능 루트는 스크립트 사전부착 프리팹을 `Resources.Load`+`Instantiate`+`Init`로 생성(Human + feature root 4종 + HUD 3종). 게임 루프에 Destroy가 없어 오브젝트 풀링은 도입하지 않음(요청 조건대로).
 
 ## 2. 아키텍처 요약 (CLAUDE.md 준수)
 
@@ -25,7 +25,7 @@ Voodoo "Crowd City"(`io.voodoo.crowdcity`) MVP 클론을 `Assets/@Project/Scenes
 ## 3. 완료된 작업
 
 - [x] 결정론 커널 + 크라우드/게임/HUD 피처 + 에디터 셋업/검증 스크립트 전체 구현.
-- [x] 프리팹 기반 생성(`GameSceneSetup`이 씬 템플릿에서 `Human.prefab` 생성, `GameSceneController.humanPrefab` 배선).
+- [x] 프리팹 기반 생성: `GameSceneSetup`이 씬 템플릿에서 `Human.prefab`을 `Resources/Human` 하위로 baking(root에 `Human.cs`+enabled `CharacterController`)하고, feature root(GameplayRoot/InputRoot/CameraRoot/CrowdRoot) + HUD(HudRoot/CrowdLabel/RivalMarker) 프리팹을 각 피처 `Resources/` 하위로 수렴. 런타임은 `Resources.Load`+`Instantiate`+`Init`로 조립하며, `GameSceneController.humanPrefab` 필드는 제거됨(CrowdRoot가 `Resources.Load(HumanResources.HumanPrefab="Human/Human")`로 스폰 대상을 직접 소유).
 - [x] `GameConfigSO` SO 불변성: 모든 값 `[SerializeField] private` + get-only 프로퍼티,
       배열은 캐시된 `ReadOnlyCollection<T>`로 노출(다운캐스트 변조 불가).
 - [x] EventManager는 static 버전을 정본으로 유지(사용자 결정: "static 유지, 현 상태 그대로"). 편집 금지 인프라.

@@ -25,12 +25,6 @@ public sealed class CrowdRoot : MonoBehaviour
     private const float WanderRayDistance = 1.5f;           // 중립 배회 방향 검사 raycast 거리.
     private const int WanderRepickTries = 8;                // 배회 방향 재선택 시 최대 후보 수.
 
-    // ---- 리더 CharacterController 스펙 (pinned) ----
-    private const float ControllerRadius = 0.35f;
-    private const float ControllerHeight = 1.8f;
-    private const float ControllerCenterY = 0.9f;
-    private const float ControllerSkinWidth = 0.08f;
-
     // 모든 Human(리더/팔로워/중립)이 올라가는 전용 물리 레이어 이름. 유닛끼리 CC 충돌을 끄는 데 쓴다.
     private const string UnitLayerName = "Unit";
 
@@ -129,7 +123,7 @@ public sealed class CrowdRoot : MonoBehaviour
     /// </summary>
     /// <exception cref="ArgumentNullException">필수 참조가 null이면 발생한다.</exception>
     /// <exception cref="InvalidOperationException">cityRoot 아래에 "Ground" 자식 또는 그 renderer가 없으면 발생한다.</exception>
-    public void Initialize(GameConfigSO config, GameObject humanPrefab, Transform cityRoot)
+    public void Initialize(GameConfigSO config, Transform cityRoot)
     {
         if (_initialized || _shutdown)
         {
@@ -156,18 +150,22 @@ public sealed class CrowdRoot : MonoBehaviour
             throw new ArgumentNullException(nameof(config));
         }
 
-        if (humanPrefab == null)
-        {
-            throw new ArgumentNullException(nameof(humanPrefab));
-        }
-
         if (cityRoot == null)
         {
             throw new ArgumentNullException(nameof(cityRoot));
         }
 
         _config = config;
-        _humanPrefab = humanPrefab;
+
+        // CrowdRoot가 자기 스폰 대상을 소유한다. 상위(GameplayRoot/GameSceneController)의 humanPrefab 주입 체인은 제거됐다.
+        _humanPrefab = Resources.Load<GameObject>(HumanResources.HumanPrefab);
+        if (_humanPrefab == null)
+        {
+            throw new InvalidOperationException(
+                $"[CrowdRoot] Human prefab을 Resources에서 로드하지 못했습니다: '{HumanResources.HumanPrefab}'. " +
+                "GameSceneSetup으로 prefab을 Resources/Human 하위에 baking하세요.");
+        }
+
         _tuning = config.Sim;
         _tuning.MaxScale = _config.NeutralMaxScale; // kernel이 스케일 인지 질의를 worst-case pair까지 넓힐 수 있게 최대 스케일을 알린다.
 
@@ -306,9 +304,19 @@ public sealed class CrowdRoot : MonoBehaviour
         {
             Vector3 spot = leaderSpots[t];
             Human leader = SpawnClone(spot, "Human_Leader_" + t);
-            leader.Init(_config.TeamMaterials[t], true);
 
-            CharacterController controller = AddController(leader.gameObject);
+            // Init/CC 취득은 buffer 등록(_buffer.Add) 이전에 끝낸다. 실패 시 미등록 clone을 파괴하고 다시 던진다.
+            CharacterController controller;
+            try
+            {
+                leader.Init(_config.TeamMaterials[t], true);
+                controller = GetBakedController(leader);
+            }
+            catch
+            {
+                Destroy(leader.gameObject);
+                throw;
+            }
 
             int index = _buffer.Add(nextId, t, true, new Vector2(spot.x, spot.z));
             nextId++;
@@ -332,15 +340,29 @@ public sealed class CrowdRoot : MonoBehaviour
         {
             Vector3 spot = neutralSpots[n];
             Human neutral = SpawnClone(spot, "Human_Neutral_" + n);
-            neutral.Init(neutralMaterial, false);
 
-            // 결정적 해시 기반 split 분포로 스케일을 준다: baselineChance 확률로 정확히 1.0, 나머지는 1.1~neutralMaxScale
-            // 큰 버킷에서 0.1 단위로 균일 양자화해 뽑아 큰 개체를 희소화한다(ComputeNeutralScale 참고).
-            // 시뮬레이션 RNG(_rng)를 소비하지 않아 배회/시뮬레이션 draw 순서가 그대로 유지된다. 발/피벗이 바닥에 있어
-            // 스케일이 접지를 보존하고, CharacterController 충돌 캡슐도 lossyScale로 함께 스케일되므로 상수를 따로 스케일하지 않는다.
-            // 이 단일 원천이 localScale과 buffer.Scale에 모두 흘러간다.
-            float scale = ComputeNeutralScale(_config.Seed, nextId);
-            neutral.transform.localScale = Vector3.one * scale;
+            // Init/스케일/CC 취득은 buffer 등록(_buffer.Add) 이전에 끝낸다. 실패 시 미등록 clone을 파괴하고 다시 던진다.
+            float scale;
+            CharacterController controller;
+            try
+            {
+                neutral.Init(neutralMaterial, false);
+
+                // 결정적 해시 기반 split 분포로 스케일을 준다: baselineChance 확률로 정확히 1.0, 나머지는 1.1~neutralMaxScale
+                // 큰 버킷에서 0.1 단위로 균일 양자화해 뽑아 큰 개체를 희소화한다(ComputeNeutralScale 참고).
+                // 시뮬레이션 RNG(_rng)를 소비하지 않아 배회/시뮬레이션 draw 순서가 그대로 유지된다. 발/피벗이 바닥에 있어
+                // 스케일이 접지를 보존하고, CharacterController 충돌 캡슐도 lossyScale로 함께 스케일되므로 상수를 따로 스케일하지 않는다.
+                // 이 단일 원천이 localScale과 buffer.Scale에 모두 흘러간다.
+                scale = ComputeNeutralScale(_config.Seed, nextId);
+                neutral.transform.localScale = Vector3.one * scale;
+
+                controller = GetBakedController(neutral);
+            }
+            catch
+            {
+                Destroy(neutral.gameObject);
+                throw;
+            }
 
             // scale을 buffer의 단일 진실 원천에 기록한다(kernel의 스케일 인지 접촉/영입/분리가 buffer.Scale을 읽는다).
             // 영입/팀 변경으로도 스케일은 불변이라 이후 갱신 없음.
@@ -349,7 +371,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
             _humanByAgent[index] = neutral;
             _transformByAgent[index] = neutral.transform;
-            _controllerByAgent[index] = AddController(neutral.gameObject);
+            _controllerByAgent[index] = controller;
             _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
             _wanderHeadingDeg[index] = neutralHeadings[n];
             _wanderTimer[index] = neutralTimers[n];
@@ -570,7 +592,7 @@ public sealed class CrowdRoot : MonoBehaviour
         return desired;
     }
 
-    // prefab asset을 복제하고 활성화한 뒤 Human component를 보장해 반환한다.
+    // prefab clone을 생성/활성화하고 baking된 Human component를 반환한다(없으면 명확히 실패). 런타임 AddComponent는 하지 않는다.
     private Human SpawnClone(Vector3 pos, string cloneName)
     {
         GameObject clone = Instantiate(_humanPrefab, pos, Quaternion.identity, transform);
@@ -584,20 +606,28 @@ public sealed class CrowdRoot : MonoBehaviour
         Human human = clone.GetComponent<Human>();
         if (human == null)
         {
-            human = clone.AddComponent<Human>();
+            // buffer 등록 전 미등록 clone이므로 여기서 파괴하고 실패한다(결정론 buffer/배열에 잔존시키지 않음).
+            Destroy(clone);
+            throw new InvalidOperationException(
+                $"[CrowdRoot] Human prefab '{_humanPrefab.name}' 루트에 Human 컴포넌트가 baking되어 있지 않습니다. " +
+                "GameSceneSetup으로 prefab을 수렴시키세요.");
         }
 
         return human;
     }
 
-    // pinned 스펙의 CharacterController를 붙여 반환한다. 리더/팔로워/중립 모두 같은 스펙을 쓴다.
-    private static CharacterController AddController(GameObject go)
+    // 공유 프리팹에 baking된 CharacterController(enabled)를 취득한다. 리더/팔로워/중립 전원이 같은 CC 스펙을 쓴다.
+    // 런타임 스펙 수리는 하지 않는다(스펙 상수 일치는 Editor 검증기가 강제). baking되어 있지 않으면 명확히 실패한다.
+    private static CharacterController GetBakedController(Human human)
     {
-        CharacterController controller = go.AddComponent<CharacterController>();
-        controller.radius = ControllerRadius;
-        controller.height = ControllerHeight;
-        controller.center = new Vector3(0f, ControllerCenterY, 0f);
-        controller.skinWidth = ControllerSkinWidth;
+        CharacterController controller = human.GetComponent<CharacterController>();
+        if (controller == null)
+        {
+            throw new InvalidOperationException(
+                "[CrowdRoot] Human prefab 루트에 CharacterController가 baking되어 있지 않습니다. " +
+                "GameSceneSetup으로 prefab을 수렴시키세요.");
+        }
+
         return controller;
     }
 
