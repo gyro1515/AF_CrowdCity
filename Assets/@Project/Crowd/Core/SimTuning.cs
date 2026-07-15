@@ -20,6 +20,12 @@ public struct SimTuning
     public float CombatRadius;
 
     /// <summary>
+    /// 리더가 국소적으로 홀로인지(주변 아군 호위 유무)를 판정하는 반경(m)이다. CombatRadius(전투/적 접촉)와 독립이다. 기본값 0.7.
+    /// </summary>
+    [UnityEngine.Tooltip("리더가 혼자인지(주변 아군 호위 유무) 판정하는 반경. CombatRadius(전투/적 접촉)와 별개.")]
+    public float LeaderAloneRadius;
+
+    /// <summary>
     /// 접촉이 최대일 때 큰 crowd가 작은 crowd에서 초당 전향시키는 member 수이다. 기본값 10.
     /// </summary>
     [UnityEngine.Tooltip("접촉이 최대일 때 큰 crowd가 작은 crowd에서 초당 전향시키는 member 수. 기본값 10.")]
@@ -46,6 +52,6 @@ public struct SimTuning
     /// <summary>리더 제거를 국소 수적 판정으로 게이트하는 리더 보호 토글이다. 기본값 true(리더 보호 ON).</summary>
     // source of truth는 GameConfigSO/asset(config.Sim)이다. bare default(SimTuning)은 false를 주지만,
     // 프로덕션은 항상 config.Sim으로 이 struct를 전달받으므로 실제 기본값(true)은 asset이 결정한다.
-    [UnityEngine.Tooltip("리더 보호 토글. ON(true)=리더는 CombatRadius 안에서 국소 수적으로 열세(적 국소 수 > 아군 국소 수)일 때만 제거(map-separated straggler로 전역 count가 부풀어도 코너에 몰린 리더는 제거됨). OFF(false)=국소 동수(>=)에도 리더가 접촉 변환·제거됨.")]
+    [UnityEngine.Tooltip("리더 보호 토글. ON(true)=리더는 국소 수적으로 열세(CombatRadius 안 적 국소 수 > LeaderAloneRadius 안 아군 국소 수)일 때만 제거(map-separated straggler로 전역 count가 부풀어도 코너에 몰린 리더는 제거됨). OFF(false)=국소 동수(>=)에도 리더가 접촉 변환·제거됨.")]
     public bool LeaderProtection;
 }

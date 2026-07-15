@@ -27,11 +27,26 @@ public sealed class CombatResolverTests
         SimTuning tuning;
         tuning.RecruitRadius = 1.2f;
         tuning.CombatRadius = 1.0f;
+        // LeaderAloneRadius를 CombatRadius와 동일하게 두어 기존 테스트는 split 이전과 byte-identical하게 동작한다.
+        tuning.LeaderAloneRadius = 1.0f;
         tuning.ConvertPerSecond = 10f;
         tuning.PairNormalizer = 8;
         tuning.MaxScale = 2f;
         tuning.RateLimitConversion = false;
         tuning.LeaderProtection = true;
+        return tuning;
+    }
+
+    // LeaderAloneRadius split 검증용: 아군 호위 판정 반경만 CombatRadius(1.0)보다 넓게(2.0) 켠다. 적 접촉 반경은 그대로 CombatRadius.
+    // MaxScale=1로 낮춘다: 4단계 질의가 넓혀지지 않았다면(구 CombatRadius*Max(1,MaxScale)=1.0) 거리 1.5 호위를 애초에 모으지
+    // 못해 ownLocal=1로 리더가 제거된다. 질의 확대(Max(CombatRadius,LeaderAloneRadius)*Max(1,MaxScale)=2.0)가 있어야 호위가
+    // 잡혀 면역이므로 이 테스트는 질의 확대 라인을 되돌리면 실패한다.
+    // (Default의 MaxScale=2였다면 구 질의도 1.0*2=2.0이라 확대 여부와 무관하게 호위를 모아 테스트가 무력했다.)
+    private static SimTuning WideLeaderAlone()
+    {
+        SimTuning tuning = Default();
+        tuning.LeaderAloneRadius = 2.0f;
+        tuning.MaxScale = 1f;
         return tuning;
     }
 
@@ -1023,6 +1038,84 @@ public sealed class CombatResolverTests
 
         Assert.AreEqual(0, outcome.Conversions.Count, "스케일 1 유닛은 base radius(1.0) 밖 1.1 거리 적을 접촉하지 못한다");
         Assert.AreEqual(0, outcome.Eliminations.Count);
+    }
+
+    /// <summary>
+    /// [LeaderAloneRadius split] 아군 호위 판정 반경(LeaderAloneRadius)이 적 접촉 반경(CombatRadius)과 독립임을 증명한다.
+    /// (i-a) CombatRadius(1.0) 밖·LeaderAloneRadius(2.0) 안 거리 1.5의 아군 호위는 넓힌 LeaderAloneRadius에서 ownLocal에
+    /// 집계되어 리더가 홀로가 아니게 되므로 면역이다. (i-b) 같은 배치에서 LeaderAloneRadius==CombatRadius(1.0)면 그 호위는
+    /// 집계되지 않아 리더가 홀로(ownLocal=1)로 판정되어 제거된다 -> split이 결과를 가른다. (ii) 같은 거리 1.5의 "적"은
+    /// LeaderAloneRadius를 넓혀도 enemyLocal에 집계되지 않는다(적은 여전히 CombatRadius) -> LeaderAloneRadius 확대가 적
+    /// 탐지 범위를 넓히지 않음을 확인한다.
+    /// </summary>
+    [Test]
+    public void LeaderAloneRadius_Split_EscortRangeIndependentFromEnemyContactRange()
+    {
+        // (i-a) 넓힌 LeaderAloneRadius(2.0): 아군 호위(거리 1.5)가 ownLocal에 잡혀 리더 면역.
+        //   호위(id1)는 적 클러스터(+x) 반대편(-x)에 두어 적 접촉 반경(CombatRadius) 밖 -> 3단계에서 전향되지 않고 ownLocal에 남는다.
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, 0, true, V(0.0f, 0.0f));    // team0 리더(원점).
+            buffer.Add(1, 0, false, V(-1.5f, 0.0f));  // 아군 호위: 거리 1.5 (CombatRadius 1.0 < 1.5 <= LeaderAloneRadius 2.0).
+            // team1(전역 3 > team0 전역 2): 리더 CombatRadius 안 국소 3명(+x쪽).
+            buffer.Add(10, 1, true, V(0.5f, 0.0f));
+            buffer.Add(11, 1, false, V(0.5f, 0.3f));
+            buffer.Add(12, 1, false, V(0.5f, -0.3f));
+
+            SpatialGrid grid = NewGrid(buffer);
+            CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+            CombatState state = new CombatState(TeamCount);
+            CombatOutcome outcome = new CombatOutcome(Cap);
+
+            resolver.Resolve(buffer, grid, WideLeaderAlone(), 0.1f, state, outcome);
+
+            Assert.IsFalse(ContainsConversion(buffer, outcome, 1, 1), "호위(id1)는 적 접촉 반경 밖이라 3단계에서 전향되지 않는다");
+            Assert.AreEqual(0, outcome.Eliminations.Count,
+                "거리 1.5 아군 호위가 넓힌 LeaderAloneRadius(2.0) 안에 잡혀 ownLocal=2 -> 리더 면역");
+        }
+
+        // (i-b) 동일 배치에서 LeaderAloneRadius==CombatRadius(1.0): 거리 1.5 호위는 집계되지 않아 리더 홀로(ownLocal=1) -> 제거.
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, 0, true, V(0.0f, 0.0f));
+            buffer.Add(1, 0, false, V(-1.5f, 0.0f));
+            buffer.Add(10, 1, true, V(0.5f, 0.0f));
+            buffer.Add(11, 1, false, V(0.5f, 0.3f));
+            buffer.Add(12, 1, false, V(0.5f, -0.3f));
+
+            SpatialGrid grid = NewGrid(buffer);
+            CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+            CombatState state = new CombatState(TeamCount);
+            CombatOutcome outcome = new CombatOutcome(Cap);
+
+            resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+            Assert.AreEqual(1, outcome.Eliminations.Count,
+                "LeaderAloneRadius==CombatRadius면 거리 1.5 호위가 집계되지 않아 리더가 홀로로 제거된다(split이 결과를 가른다)");
+            Assert.AreEqual(0, outcome.Eliminations[0].Team, "제거된 팀은 team0");
+            Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "제거자는 team1");
+        }
+
+        // (ii) 넓힌 LeaderAloneRadius(2.0)여도 거리 1.5의 "적"은 enemyLocal에 집계되지 않는다(적은 여전히 CombatRadius).
+        //   리더는 홀로(ownLocal=1)이고 전역 가드도 통과(team1 3 > team0 1)하지만 유일한 적이 CombatRadius 밖이라 제거되지 않는다.
+        //   적 탐지가 LeaderAloneRadius로 잘못 넓혀졌다면 이 리더는 제거되었을 것이다.
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, 0, true, V(0.0f, 0.0f));     // team0 리더(홀로, 호위 없음).
+            buffer.Add(10, 1, true, V(1.5f, 0.0f));    // 적(거리 1.5): CombatRadius 1.0 밖, LeaderAloneRadius 2.0 안.
+            buffer.Add(11, 1, false, V(50.0f, 50.0f)); // team1 전역 count 채우기(원거리, 국소 무관).
+            buffer.Add(12, 1, false, V(51.0f, 50.0f));
+
+            SpatialGrid grid = NewGrid(buffer);
+            CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+            CombatState state = new CombatState(TeamCount);
+            CombatOutcome outcome = new CombatOutcome(Cap);
+
+            resolver.Resolve(buffer, grid, WideLeaderAlone(), 0.1f, state, outcome);
+
+            Assert.AreEqual(0, outcome.Eliminations.Count,
+                "거리 1.5 적은 LeaderAloneRadius를 넓혀도 enemyLocal에 집계되지 않는다(적은 CombatRadius 유지) -> 리더 제거 안 됨");
+        }
     }
 
     // ---- helpers ----

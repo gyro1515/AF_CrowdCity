@@ -99,7 +99,7 @@ public sealed class GameConfigSO : ScriptableObject
 
     [Header("Rules")]
     [Tooltip("영입/전투 규칙에 쓰이는 시뮬레이션 커널 튜닝 값 묶음(각 하위 항목 tooltip 참고).")]
-    [SerializeField] private SimTuning sim = new SimTuning { RecruitRadius = 1.2f, CombatRadius = 0.5f, ConvertPerSecond = 40f, PairNormalizer = 15, RateLimitConversion = true, LeaderProtection = true };
+    [SerializeField] private SimTuning sim = new SimTuning { RecruitRadius = 1.2f, CombatRadius = 0.5f, LeaderAloneRadius = 0.7f, ConvertPerSecond = 40f, PairNormalizer = 15, RateLimitConversion = true, LeaderProtection = true };
     /// <summary>영입/전투 규칙에 쓰이는 시뮬레이션 커널 튜닝 값이다.</summary>
     public SimTuning Sim => sim;
 
@@ -246,6 +246,7 @@ public sealed class GameConfigSO : ScriptableObject
 
         sim.RecruitRadius = Mathf.Max(0.01f, sim.RecruitRadius);
         sim.CombatRadius = Mathf.Max(0.01f, sim.CombatRadius);
+        sim.LeaderAloneRadius = Mathf.Max(0.01f, sim.LeaderAloneRadius);
         sim.ConvertPerSecond = Mathf.Max(0f, sim.ConvertPerSecond);
         sim.PairNormalizer = Mathf.Max(1, sim.PairNormalizer);
 

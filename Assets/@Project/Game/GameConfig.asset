@@ -32,6 +32,7 @@ MonoBehaviour:
   sim:
     RecruitRadius: 0.7
     CombatRadius: 0.7
+    LeaderAloneRadius: 25
     ConvertPerSecond: 40
     PairNormalizer: 15
     RateLimitConversion: 1
@@ -46,7 +47,7 @@ MonoBehaviour:
   neutralWanderSpeed: 0.5
   wanderRepickMinSeconds: 2
   wanderRepickMaxSeconds: 5
-  neutralAnimationSpeed: 5
+  neutralAnimationSpeed: 0.5
   neutralMaxScale: 1.5
   neutralBaselineScaleChance: 0.5
   camPitchDeg: 55

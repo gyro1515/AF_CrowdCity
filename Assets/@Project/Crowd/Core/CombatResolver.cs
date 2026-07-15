@@ -28,7 +28,7 @@ public readonly struct CrowdConversion
 }
 
 /// <summary>
-/// leader가 CombatRadius 안에서 아군 호위 없이 홀로 노출되고(보호 ON, rule B) 근처에 적이 있어, 전역적으로 더 큰
+/// leader가 LeaderAloneRadius 안에 아군 호위 없이 홀로 노출되고(보호 ON, rule B) CombatRadius 안에 적이 있어, 전역적으로 더 큰
 /// crowd에게 제거된 사실을 나타내는 결과 항목이다(보호 OFF는 국소 열세/동수 enemyLocal>=ownLocal 포함).
 /// </summary>
 public readonly struct CrowdElimination
@@ -151,7 +151,7 @@ public sealed class CombatResolver
     // 시작 팀에 3단계 변환만 겹친 고정 가상 매핑. 4단계 제거 판정 전용.
     private readonly int[] _virtualTeam;
 
-    // 4단계에서 leader 하나의 CombatRadius 안 가상 팀별 member 수를 세는 국소 tally scratch(leader마다 재사용).
+    // 4단계에서 leader 하나 주변 가상 팀별 member 수를 세는 국소 tally scratch(아군은 LeaderAloneRadius, 적은 CombatRadius, leader마다 재사용).
     private readonly int[] _localTeamCounts;
 
     // pair별 victim 정렬용 scratch.
@@ -193,9 +193,10 @@ public sealed class CombatResolver
     ///   true면 2단계 누적 예산 상한 min((int)accumulators, victim 수)만큼만 방출하고 그 방출분만 누적값을 소모하며,
     ///   밀린 pair의 미달 예산은 소모되지 않고 CombatState에 유지된다. 두 경로 모두 agent 하나는 호출당 최대 한 번만 변환된다.
     /// 4단계: 제거 pass는 시작 팀에 3단계 변환만 겹친 하나의 고정 가상 매핑(_virtualTeam)으로 모든 leader를 국소 판정한다.
-    ///   각 leader는 자신을 중심으로 한 CombatRadius 원 안에서 가상 팀별 member 수를 세어, 자기 자신을 포함한 아군 국소
-    ///   수(ownLocal)와 적 팀별 국소 수(enemyLocal)를 본다. tuning.LeaderProtection=true(기본, rule B)면 leader가
-    ///   국소적으로 홀로(ownLocal<=1, CombatRadius 안 아군 호위 0)이고 적이 하나라도 있는(enemyLocal>=1) 경우에만 그 적
+    ///   각 leader는 자신을 중심으로 국소 tally를 팀별 반경으로 나눠 센다: 아군(호위)은 LeaderAloneRadius 안, 적은
+    ///   CombatRadius 안에서 가상 팀별 member 수를 세어, 자기 자신을 포함한 아군 국소 수(ownLocal, LeaderAloneRadius 기준)와
+    ///   적 팀별 국소 수(enemyLocal, CombatRadius 기준)를 본다. tuning.LeaderProtection=true(기본, rule B)면 leader가
+    ///   국소적으로 홀로(ownLocal<=1, LeaderAloneRadius 안 아군 호위 0)이고 적이 하나라도 있는(enemyLocal>=1) 경우에만 그 적
     ///   팀이 제거자 자격을 가진다(호위가 하나라도 붙어 있으면 적이 아무리 많아도 면역). false면 enemyLocal>=ownLocal인
     ///   적 팀이 제거자 자격을 가진다. 자격 적 팀 중 국소 수가 가장 많은 팀이
     ///   제거자이며 동률은 낮은 팀 id다(정수만 쓰는 전순서 → 스냅샷/삽입 순서 불변, 거리 float 동률 없음). 전역 count가
@@ -221,9 +222,13 @@ public sealed class CombatResolver
         Vector2[] positions = buffer.Pos;
         float[] scales = buffer.Scale;
         float radius = tuning.CombatRadius;
+        // 리더가 혼자인지(주변 아군 호위 유무) 판정하는 반경. CombatRadius와 별개로 튜닝되며 4단계에서만 아군 tally에 쓰인다.
+        float leaderAloneRadius = tuning.LeaderAloneRadius;
         // 스케일 인지: worst-case pair(둘 다 최대 스케일)까지 이웃이 잡히도록 질의 반경을 넓힌다.
         // MaxScale이 0(bare default)이면 1로 가드해 질의를 축소하지 않는다. 실제 접촉 판정은 아래 pair별 반경으로 건다.
         float queryRadius = radius * Mathf.Max(1f, tuning.MaxScale);
+        // 4단계 리더 판정은 적(CombatRadius)과 아군 호위(LeaderAloneRadius) 두 반경 중 큰 쪽까지 후보를 모아야 하므로 질의를 넓힌다.
+        float leaderQueryRadius = Mathf.Max(radius, leaderAloneRadius) * Mathf.Max(1f, tuning.MaxScale);
         bool leaderProtection = tuning.LeaderProtection;
         float[] accumulators = state.Accumulators;
 
@@ -447,7 +452,7 @@ public sealed class CombatResolver
             }
 
             Vector2 leaderPos = positions[a];
-            grid.QueryCircle(leaderPos, queryRadius, _queryResults);
+            grid.QueryCircle(leaderPos, leaderQueryRadius, _queryResults);
 
             for (int k = 0; k < teamCount; k++)
             {
@@ -473,8 +478,10 @@ public sealed class CombatResolver
                 float dx = leaderPos.x - positions[j].x;
                 float dy = leaderPos.y - positions[j].y;
                 float distSq = dx * dx + dy * dy;
-                // 스케일 인지 국소 판정: 리더 a(스케일 1)와 이웃 j의 스케일 평균으로 pair별 반경을 정한다(둘 다 1.0이면 radius와 동일).
-                float pairR = radius * 0.5f * (scales[a] + scales[j]);
+                // 팀별로 판정 반경을 나눈다: 아군(t, 잠재 호위)은 LeaderAloneRadius, 적은 CombatRadius로 pair별 반경을 정한다.
+                // 스케일 인지: 리더 a와 이웃 j의 스케일 평균을 곱한다(둘 다 1.0이면 선택 반경과 동일).
+                float chosenRadius = (teamJ == t) ? leaderAloneRadius : radius;
+                float pairR = chosenRadius * 0.5f * (scales[a] + scales[j]);
                 if (distSq > pairR * pairR)
                 {
                     continue;
@@ -483,7 +490,7 @@ public sealed class CombatResolver
                 _localTeamCounts[teamJ]++;
             }
 
-            // ownLocal은 leader 자신을 포함한 CombatRadius 안 아군 수다. QueryCircle의 self-inclusion 여부와 무관하게
+            // ownLocal은 leader 자신을 포함한 LeaderAloneRadius 안 아군 수다. QueryCircle의 self-inclusion 여부와 무관하게
             // 리더를 명시적으로 1로 세고(위 tally에서 리더 index는 건너뛰어 중복을 막았다) 국소 아군 수를 더한다.
             int ownLocal = _localTeamCounts[t] + 1;
 
@@ -510,7 +517,7 @@ public sealed class CombatResolver
                     continue;
                 }
 
-                // rule B: 보호 ON이면 leader가 국소적으로 홀로(ownLocal<=1, CombatRadius 안 아군 호위 0)이고 적이
+                // rule B: 보호 ON이면 leader가 국소적으로 홀로(ownLocal<=1, LeaderAloneRadius 안 아군 호위 0)이고 적이
                 // 하나라도 있을 때(enemyLocal>=1)만 제거자 자격. 호위가 하나라도 붙어 있으면 적이 아무리 많아도 면역이다.
                 // OFF는 기존대로 국소 열세/동수(enemyLocal>=ownLocal)면 자격. 전역 가드는 위에서 두 모드 모두에 적용된다.
                 bool qualifies = leaderProtection ? (ownLocal <= 1 && enemyLocal >= 1) : (enemyLocal >= ownLocal);
