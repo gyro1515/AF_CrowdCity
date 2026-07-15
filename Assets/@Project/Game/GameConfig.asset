@@ -19,21 +19,23 @@ MonoBehaviour:
   leaderSpeed: 5
   followerMaxSpeed: 10
   turnRateDegPerSec: 720
-  slotSpacing: 0.6
+  slotSpacing: 1
   separationRadius: 2
   separationPush: 3
   groundY: 0.5
-  followerCohesionGain: 1
-  followerArriveRadius: 4.5
-  followerArriveRadiusPerSqrtMember: 0.6
+  followerCohesionGain: 0.8
+  followerArriveRadius: 2
+  followerArriveRadiusPerSqrtMember: 1
   followerMaxAccel: 40
-  followerTrailingOffset: 1
+  followerTrailingOffset: 0.4
+  followerBlockedDamping: 0
   sim:
-    RecruitRadius: 1.2
-    CombatRadius: 0.5
+    RecruitRadius: 0.7
+    CombatRadius: 0.7
     ConvertPerSecond: 40
     PairNormalizer: 15
     RateLimitConversion: 1
+    MaxScale: 0
     LeaderProtection: 1
   aiDecideInterval: 0.4
   fleeSizeRatio: 1.15
@@ -44,6 +46,9 @@ MonoBehaviour:
   neutralWanderSpeed: 0.5
   wanderRepickMinSeconds: 2
   wanderRepickMaxSeconds: 5
+  neutralAnimationSpeed: 5
+  neutralMaxScale: 1.5
+  neutralBaselineScaleChance: 0.5
   camPitchDeg: 55
   camBaseDistance: 16
   camDistancePerSqrtCount: 0.8
