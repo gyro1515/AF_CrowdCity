@@ -727,7 +727,6 @@ public sealed class CrowdRoot : MonoBehaviour
         float sepRadius = _config.SeparationRadius;
         float sepPush = _config.SeparationPush;
         float maxSpeed = _config.FollowerMaxSpeed;
-        float leaderSpeed = _config.LeaderSpeed;
         float cohesionGain = _config.FollowerCohesionGain;
         float arriveRadius = _config.FollowerArriveRadius;
         float maxAccel = _config.FollowerMaxAccel;
@@ -884,11 +883,11 @@ public sealed class CrowdRoot : MonoBehaviour
                 if (speed > 0.001f)
                 {
                     human.SetHeadingAndSpeed(
-                        Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, speed / leaderSpeed);
+                        Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
                 }
                 else
                 {
-                    human.SetHeadingAndSpeed(followerTransform.eulerAngles.y, 0f);
+                    human.SetHeadingAndSpeed(followerTransform.eulerAngles.y, 1f);
                 }
             }
         }
@@ -923,7 +922,7 @@ public sealed class CrowdRoot : MonoBehaviour
             }
 
             _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
-            _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], (wanderSpeed / leaderSpeed) * _config.NeutralAnimationSpeed);
+            _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
         }
     }
 
