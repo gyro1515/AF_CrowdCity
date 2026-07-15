@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.UI;
@@ -33,16 +34,18 @@ public readonly struct CrowdLabelBinding
 
 /// <summary>
 /// Hud feature의 root다. 런타임 uGUI Canvas(타이머, 순위표, 시작 힌트, 결과 오버레이)와
-/// 리더 머리 위 월드 라벨(TextMesh), 화면 밖 라이벌 방향 마커를 생성해 소유한다.
+/// 리더 머리 위 TMP 월드 라벨, 화면 밖 라이벌 방향/인원 마커를 생성해 소유한다.
 /// EventSystem과 Button은 만들지 않는다.
 /// bus 구독과 <see cref="IGameSessionReadOnly.StateChanged"/> 연결은 Initialize에서 등록하고
 /// Shutdown에서 해제한다. 모든 handler는 UI 상태 갱신만 수행하며 절대 던지지 않는다
 /// (플레이어 빌드의 bus dispatch는 예외 격리가 없다).
 /// </summary>
+[DefaultExecutionOrder(100)]
 public sealed class HudRoot : MonoBehaviour
 {
     private const int MaxTeams = 4;
     private const float DimAlpha = 0.35f;
+    private const string FontResourcePath = "Fonts & Materials/LiberationSans SDF - Fallback";
 
     // 순위표 layout(1080x1920 기준 해상도 좌표).
     private const float RowWidth = 260f;
@@ -50,10 +53,11 @@ public sealed class HudRoot : MonoBehaviour
     private const float RowHeight = 60f;
     private const float SwatchSize = 44f;
 
-    // 월드 라벨: fontSize * characterSize * 0.1 ≈ 글자 높이 1.6m — 카메라 거리 16~40m에서 읽히는 크기다.
+    // 월드 라벨: fontSize * localScale * 0.1 ≈ 글자 높이 1.6m — 카메라 거리 16~40m에서 읽히는 크기다.
     private const int LabelFontSize = 64;
-    private const float LabelCharacterSize = 0.25f;
+    private const float LabelWorldScale = 0.25f;
     private static readonly Vector3 LabelOffset = new Vector3(0f, 2.2f, 0f);
+    private static readonly Vector2 LabelContainerSize = new Vector2(24f, 16f);
 
     // 화면 밖 마커: CanvasScaler의 로컬 좌표 기준. safe area를 다시 inset해 화면 비율과 notch에서도 잘리지 않게 한다.
     private const float MarkerEdgePadding = 60f;
@@ -68,31 +72,33 @@ public sealed class HudRoot : MonoBehaviour
 
     private IGameSessionReadOnly _session;
     private GameConfigSO _config;
+    private TMPTextStyleSO _crowdCountTextStyle;
     private Camera _worldCamera;
-    private Font _font;
+    private TMP_FontAsset _fontAsset;
 
     private GameObject _canvasRoot;
-    private Text _timerText;
+    private TextMeshProUGUI _timerText;
     private GameObject _hintGo;
     private GameObject _resultOverlayGo;
-    private Text _resultTitleText;
-    private Text _resultStandingsText;
+    private TextMeshProUGUI _resultTitleText;
+    private TextMeshProUGUI _resultStandingsText;
     private RectTransform _markerLayerRect;
 
     private readonly GameObject[] _rowGos = new GameObject[MaxTeams];
     private readonly Image[] _rowSwatches = new Image[MaxTeams];
-    private readonly Text[] _rowCounts = new Text[MaxTeams];
+    private readonly TextMeshProUGUI[] _rowCounts = new TextMeshProUGUI[MaxTeams];
     private readonly int[] _rowTeam = new int[MaxTeams];
     private readonly int[] _rowCount = new int[MaxTeams];
     private readonly bool[] _rowEliminated = new bool[MaxTeams];
 
-    private readonly TextMesh[] _labels = new TextMesh[MaxTeams];
+    private readonly TextMeshPro[] _labels = new TextMeshPro[MaxTeams];
+    private readonly Material[] _labelMaterials = new Material[MaxTeams];
     private readonly Transform[] _labelTransforms = new Transform[MaxTeams];
     private readonly Transform[] _labelLeaders = new Transform[MaxTeams];
 
     private readonly GameObject[] _markerGos = new GameObject[MaxTeams];
-    private readonly Text[] _markerArrows = new Text[MaxTeams];
-    private readonly Text[] _markerCounts = new Text[MaxTeams];
+    private readonly TextMeshProUGUI[] _markerArrows = new TextMeshProUGUI[MaxTeams];
+    private readonly TextMeshProUGUI[] _markerCounts = new TextMeshProUGUI[MaxTeams];
 
     private readonly List<CrowdStanding> _standings = new List<CrowdStanding>(MaxTeams);
     private readonly StringBuilder _stringBuilder = new StringBuilder(128);
@@ -112,18 +118,36 @@ public sealed class HudRoot : MonoBehaviour
     /// 두 bus 이벤트와 <paramref name="session"/>.StateChanged를 구독한다. 중복 초기화는 무시한다.
     /// GameplayRoot의 pinned 초기화 순서에 따라 session.Initialize()와 SpawnInitial()보다 먼저 호출된다.
     /// </summary>
-    public void Initialize(IGameSessionReadOnly session, GameConfigSO config, Camera worldCamera)
+    public void Initialize(
+        IGameSessionReadOnly session,
+        GameConfigSO config,
+        TMPTextStyleSO crowdCountTextStyle,
+        Camera worldCamera)
     {
         if (_initialized || _isShutdown)
         {
             return;
         }
 
+        if (crowdCountTextStyle == null)
+        {
+            throw new ArgumentNullException(nameof(crowdCountTextStyle));
+        }
+
+        TMP_FontAsset fontAsset = Resources.Load<TMP_FontAsset>(FontResourcePath);
+        if (fontAsset == null)
+        {
+            throw new InvalidOperationException(
+                "[HudRoot] TMP font asset을 찾을 수 없습니다: Resources/" + FontResourcePath);
+        }
+
         _initialized = true;
         _session = session;
         _config = config;
+        _crowdCountTextStyle = crowdCountTextStyle;
         _worldCamera = worldCamera;
-        _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        _fontAsset = fontAsset;
+        CreateLabelMaterials();
 
         BuildCanvas();
 
@@ -140,7 +164,7 @@ public sealed class HudRoot : MonoBehaviour
     }
 
     /// <summary>
-    /// 각 리더 머리 위(+2.2m)에 월드 라벨(TextMesh)을 생성하고, 라이벌(1..3)은
+    /// 각 리더 머리 위(+2.2m)에 TMP 월드 라벨을 생성하고, 라이벌(1..3)은
     /// 화면 밖 방향/인원 마커도 Canvas 아래에 생성한다. 두 표시는 <see cref="CrowdCountChangedEvent"/>에서
     /// 같이 갱신되고 <see cref="CrowdEliminatedEvent"/>에서 파괴된다. 재바인딩은 기존 표시를 먼저 정리한다.
     /// </summary>
@@ -235,6 +259,8 @@ public sealed class HudRoot : MonoBehaviour
             DestroyCrowdVisuals(team);
         }
 
+        DestroyLabelMaterials();
+
         if (_canvasRoot != null)
         {
             Destroy(_canvasRoot);
@@ -244,7 +270,8 @@ public sealed class HudRoot : MonoBehaviour
         _markerLayerRect = null;
         _worldCamera = null;
         _config = null;
-        _font = null;
+        _crowdCountTextStyle = null;
+        _fontAsset = null;
     }
 
     private void Update()
@@ -277,12 +304,13 @@ public sealed class HudRoot : MonoBehaviour
             return;
         }
 
-        bool hasCamera = _worldCamera != null;
-        Quaternion billboard = hasCamera ? _worldCamera.transform.rotation : Quaternion.identity;
+        Camera worldCamera = _worldCamera;
+        bool hasCamera = worldCamera != null;
+        Quaternion billboardRotation = hasCamera ? worldCamera.transform.rotation : Quaternion.identity;
 
         for (int team = 0; team < MaxTeams; team++)
         {
-            TextMesh label = _labels[team];
+            TextMeshPro label = _labels[team];
             if (label == null)
             {
                 continue;
@@ -291,16 +319,20 @@ public sealed class HudRoot : MonoBehaviour
             Transform leader = _labelLeaders[team];
             if (leader == null)
             {
-                // 리더가 외부에서 파괴됐으면(정상 흐름에서는 elimination 이벤트가 먼저 온다) HUD 표시도 정리한다.
+                // 정상 흐름에서는 elimination 이벤트가 먼저 오지만 외부 파괴에도 표시가 남지 않게 한다.
                 DestroyCrowdVisuals(team);
                 continue;
             }
 
             Transform labelTransform = _labelTransforms[team];
-            labelTransform.position = leader.position + LabelOffset;
+            Vector3 labelPosition = leader.position + LabelOffset;
             if (hasCamera)
             {
-                labelTransform.rotation = billboard;
+                labelTransform.SetPositionAndRotation(labelPosition, billboardRotation);
+            }
+            else
+            {
+                labelTransform.position = labelPosition;
             }
         }
 
@@ -503,7 +535,7 @@ public sealed class HudRoot : MonoBehaviour
         Transform canvasTransform = _canvasRoot.transform;
 
         // 타이머: 상단 중앙, "M:SS".
-        _timerText = CreateText(canvasTransform, "Timer", 72, TextAnchor.MiddleCenter, Color.white, FontStyle.Bold);
+        _timerText = CreateText(canvasTransform, "Timer", 72, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
         SetRect((RectTransform)_timerText.transform,
             new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -36f), new Vector2(500f, 100f));
 
@@ -511,7 +543,8 @@ public sealed class HudRoot : MonoBehaviour
         BuildMarkerLayer(canvasTransform);
 
         // 시작 힌트: Ready에서만 보인다.
-        Text hintText = CreateText(canvasTransform, "StartHint", 56, TextAnchor.MiddleCenter, Color.white, FontStyle.Bold);
+        TextMeshProUGUI hintText = CreateText(
+            canvasTransform, "StartHint", 56, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
         hintText.text = "DRAG TO START";
         SetRect((RectTransform)hintText.transform,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -360f), new Vector2(900f, 90f));
@@ -553,7 +586,8 @@ public sealed class HudRoot : MonoBehaviour
             SetRect((RectTransform)swatchGo.transform,
                 new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0f), new Vector2(SwatchSize, SwatchSize));
 
-            Text countText = CreateText(rowGo.transform, "Count", 44, TextAnchor.MiddleRight, Color.white, FontStyle.Bold);
+            TextMeshProUGUI countText = CreateText(
+                rowGo.transform, "Count", 44, TextAlignmentOptions.Right, Color.white, FontStyles.Bold);
             RectTransform countRect = (RectTransform)countText.transform;
             countRect.anchorMin = new Vector2(0f, 0f);
             countRect.anchorMax = new Vector2(1f, 1f);
@@ -585,15 +619,18 @@ public sealed class HudRoot : MonoBehaviour
 
         Transform overlayTransform = _resultOverlayGo.transform;
 
-        _resultTitleText = CreateText(overlayTransform, "Title", 120, TextAnchor.MiddleCenter, Color.white, FontStyle.Bold);
+        _resultTitleText = CreateText(
+            overlayTransform, "Title", 120, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
         SetRect((RectTransform)_resultTitleText.transform,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 420f), new Vector2(900f, 160f));
 
-        _resultStandingsText = CreateText(overlayTransform, "Standings", 56, TextAnchor.MiddleCenter, Color.white, FontStyle.Normal);
+        _resultStandingsText = CreateText(
+            overlayTransform, "Standings", 56, TextAlignmentOptions.Center, Color.white, FontStyles.Normal);
         SetRect((RectTransform)_resultStandingsText.transform,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 40f), new Vector2(900f, 520f));
 
-        Text restartText = CreateText(overlayTransform, "RestartHint", 48, TextAnchor.MiddleCenter, Color.white, FontStyle.Bold);
+        TextMeshProUGUI restartText = CreateText(
+            overlayTransform, "RestartHint", 48, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
         restartText.text = "R / TAP TO RESTART";
         SetRect((RectTransform)restartText.transform,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, -420f), new Vector2(900f, 90f));
@@ -601,20 +638,26 @@ public sealed class HudRoot : MonoBehaviour
         _resultOverlayGo.SetActive(false);
     }
 
-    private Text CreateText(Transform parent, string name, int fontSize, TextAnchor alignment, Color color, FontStyle style)
+    private TextMeshProUGUI CreateText(
+        Transform parent,
+        string name,
+        int fontSize,
+        TextAlignmentOptions alignment,
+        Color color,
+        FontStyles style)
     {
         GameObject go = new GameObject(name, typeof(RectTransform));
         go.transform.SetParent(parent, false);
 
-        Text text = go.AddComponent<Text>();
-        text.font = _font;
+        TextMeshProUGUI text = go.AddComponent<TextMeshProUGUI>();
+        text.font = _fontAsset;
         text.fontSize = fontSize;
         text.alignment = alignment;
         text.color = color;
         text.fontStyle = style;
         text.raycastTarget = false;
-        text.horizontalOverflow = HorizontalWrapMode.Overflow;
-        text.verticalOverflow = VerticalWrapMode.Overflow;
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+        text.overflowMode = TextOverflowModes.Overflow;
         return text;
     }
 
@@ -629,7 +672,9 @@ public sealed class HudRoot : MonoBehaviour
 
     private void CreateRivalMarker(int teamId)
     {
-        if (teamId <= MatchRules.PlayerTeam || teamId >= MaxTeams || _markerLayerRect == null)
+        if (teamId <= MatchRules.PlayerTeam
+            || teamId >= MaxTeams
+            || _markerLayerRect == null)
         {
             return;
         }
@@ -643,13 +688,15 @@ public sealed class HudRoot : MonoBehaviour
         SetRect(markerRect,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, MarkerSize);
 
-        Text arrow = CreateText(markerRect, "Arrow", 72, TextAnchor.MiddleCenter, GetTeamColor(teamId), FontStyle.Bold);
+        TextMeshProUGUI arrow = CreateText(
+            markerRect, "Arrow", 72, TextAlignmentOptions.Center, GetTeamColor(teamId), FontStyles.Bold);
         arrow.text = "\u25B2";
         RectTransform arrowRect = (RectTransform)arrow.transform;
         SetRect(arrowRect,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, MarkerArrowSize);
 
-        Text count = CreateText(markerRect, "Count", 42, TextAnchor.MiddleCenter, Color.white, FontStyle.Bold);
+        TextMeshProUGUI count = CreateText(
+            markerRect, "Count", 42, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
         count.text = "1";
         SetRect((RectTransform)count.transform,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.down * MarkerCountInset, MarkerCountSize);
@@ -695,8 +742,8 @@ public sealed class HudRoot : MonoBehaviour
         for (int team = MatchRules.PlayerTeam + 1; team < MaxTeams; team++)
         {
             GameObject markerGo = _markerGos[team];
-            Text markerArrow = _markerArrows[team];
-            Text markerCount = _markerCounts[team];
+            TextMeshProUGUI markerArrow = _markerArrows[team];
+            TextMeshProUGUI markerCount = _markerCounts[team];
             Transform leader = _labelLeaders[team];
             if (markerGo == null || markerArrow == null || markerCount == null || leader == null)
             {
@@ -791,14 +838,9 @@ public sealed class HudRoot : MonoBehaviour
     private void SetCrowdCount(int teamId, int memberCount)
     {
         string value = memberCount.ToString();
+        SetLabelText(teamId, value);
 
-        TextMesh label = _labels[teamId];
-        if (label != null)
-        {
-            label.text = value;
-        }
-
-        Text markerCount = _markerCounts[teamId];
+        TextMeshProUGUI markerCount = _markerCounts[teamId];
         if (markerCount != null)
         {
             markerCount.text = value;
@@ -807,42 +849,98 @@ public sealed class HudRoot : MonoBehaviour
 
     private void CreateLabel(int teamId, Transform leader)
     {
-        GameObject go = new GameObject("CrowdLabel_" + teamId);
+        GameObject go = new GameObject("CrowdLabel_" + teamId, typeof(RectTransform));
         go.transform.SetParent(transform, false);
 
-        TextMesh label = go.AddComponent<TextMesh>();
-        label.font = _font;
-        label.fontSize = LabelFontSize;
-        label.characterSize = LabelCharacterSize;
-        label.anchor = TextAnchor.LowerCenter;
-        label.alignment = TextAlignment.Center;
-        label.color = GetTeamColor(teamId);
-        label.text = "1";
-
-        MeshRenderer meshRenderer = go.GetComponent<MeshRenderer>();
-        if (_font != null)
-        {
-            meshRenderer.sharedMaterial = _font.material;
-        }
-
-        meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
-        meshRenderer.receiveShadows = false;
-
-        Transform labelTransform = go.transform;
+        RectTransform labelTransform = (RectTransform)go.transform;
+        labelTransform.pivot = new Vector2(0.5f, 0f);
+        labelTransform.sizeDelta = LabelContainerSize;
+        labelTransform.localScale = Vector3.one * LabelWorldScale;
         labelTransform.position = leader.position + LabelOffset;
         if (_worldCamera != null)
         {
             labelTransform.rotation = _worldCamera.transform.rotation;
         }
 
+        TextMeshPro label = go.AddComponent<TextMeshPro>();
+        label.font = _fontAsset;
+        label.fontSharedMaterial = _labelMaterials[teamId];
+        label.fontSize = LabelFontSize;
+        label.fontStyle = FontStyles.Bold;
+        label.alignment = TextAlignmentOptions.Bottom;
+        label.richText = true;
+        label.color = Color.white;
+        label.raycastTarget = false;
+        label.textWrappingMode = TextWrappingModes.NoWrap;
+        label.overflowMode = TextOverflowModes.Overflow;
+
+        MeshRenderer meshRenderer = label.GetComponent<MeshRenderer>();
+        meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        meshRenderer.receiveShadows = false;
+        meshRenderer.sortingOrder = 1;
+
         _labels[teamId] = label;
         _labelTransforms[teamId] = labelTransform;
         _labelLeaders[teamId] = leader;
+
+        SetLabelText(teamId, "1");
+    }
+
+    private void CreateLabelMaterials()
+    {
+        for (int team = 0; team < MaxTeams; team++)
+        {
+            Material material = new Material(_fontAsset.material)
+            {
+                name = "CrowdLabelMaterial_Team" + team,
+                hideFlags = HideFlags.DontSave
+            };
+
+            material.EnableKeyword(ShaderUtilities.Keyword_Outline);
+            material.SetColor(ShaderUtilities.ID_FaceColor, _crowdCountTextStyle.FaceColor);
+            material.SetColor(ShaderUtilities.ID_OutlineColor, GetTeamColor(team));
+            material.SetFloat(ShaderUtilities.ID_OutlineWidth, _crowdCountTextStyle.OutlineWidth);
+            _labelMaterials[team] = material;
+        }
+    }
+
+    private void DestroyLabelMaterials()
+    {
+        for (int team = 0; team < MaxTeams; team++)
+        {
+            Material material = _labelMaterials[team];
+            _labelMaterials[team] = null;
+
+            if (material != null)
+            {
+                Destroy(material);
+            }
+        }
+    }
+
+    private void SetLabelText(int teamId, string value)
+    {
+        TextMeshPro label = _labels[teamId];
+        if (label != null)
+        {
+            label.text = GetLabelText(teamId, value);
+        }
+    }
+
+    private string GetLabelText(int teamId, string value)
+    {
+        if (teamId != MatchRules.PlayerTeam)
+        {
+            return value;
+        }
+
+        string arrowColor = ColorUtility.ToHtmlStringRGBA(GetTeamColor(teamId));
+        return value + "\n<color=#" + arrowColor + ">▼</color>";
     }
 
     private void DestroyLabel(int teamId)
     {
-        TextMesh label = _labels[teamId];
+        TextMeshPro label = _labels[teamId];
         _labels[teamId] = null;
         _labelTransforms[teamId] = null;
         _labelLeaders[teamId] = null;

@@ -100,8 +100,10 @@ public static class GameSceneSetup
         CityBuildingsGenerator.ValidateFullyConvergedScene(preflight.Buildings, assets);
 
         GameConfigSO config = AssetDatabase.LoadAssetAtPath<GameConfigSO>(ConfigPath);
+        TMPTextStyleSO crowdCountTextStyle =
+            AssetDatabase.LoadAssetAtPath<TMPTextStyleSO>(CrowdCountTextStylePath);
         GameObject humanPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath);
-        if (config == null || humanPrefab == null)
+        if (config == null || crowdCountTextStyle == null || humanPrefab == null)
         {
             throw new InvalidOperationException("[GameSceneSetup] controller converge test asset이 없습니다.");
         }
@@ -111,6 +113,7 @@ public static class GameSceneSetup
         ConvergeSceneController(
             scene,
             config,
+            crowdCountTextStyle,
             humanPrefab,
             preflight.MainCamera,
             preflight.City,
@@ -141,6 +144,8 @@ public static class GameSceneSetup
     private const string HumanPrefabPath = PrefabsFolder + "/Human.prefab";
     private const string GameFolder = "Assets/@Project/Game";
     private const string ConfigPath = GameFolder + "/GameConfig.asset";
+    private const string HudFolder = "Assets/@Project/Hud";
+    private const string CrowdCountTextStylePath = HudFolder + "/CrowdCountTextStyle.asset";
     private const string WalkName = "HumanWalk";
     private const string UrpLitShaderName = "Universal Render Pipeline/Lit";
     private const string BaseColorProperty = "_BaseColor";
@@ -218,6 +223,7 @@ public static class GameSceneSetup
 
         // 5(선행). material 색상의 원본이 되는 config를 먼저 확보한다.
         GameConfigSO config = LoadOrCreateConfig(changed, unchanged);
+        TMPTextStyleSO crowdCountTextStyle = LoadOrCreateCrowdCountTextStyle(changed, unchanged);
 
         // 3. FBX 원본 material 검증 + 팀 material 5종 수렴.
         Material[] teamMaterials = ConvergeTeamMaterials(config, changed, unchanged);
@@ -237,6 +243,7 @@ public static class GameSceneSetup
             sceneChanged |= ConvergeSceneController(
                 scene,
                 config,
+                crowdCountTextStyle,
                 humanPrefab,
                 preflight.MainCamera,
                 preflight.City,
@@ -414,6 +421,7 @@ public static class GameSceneSetup
         }
 
         ValidateAssetPathType<GameConfigSO>(ConfigPath);
+        ValidateAssetPathType<TMPTextStyleSO>(CrowdCountTextStylePath);
         ValidateAssetPathType<GameObject>(HumanPrefabPath);
         for (int i = 0; i < TeamMaterialFileNames.Length; i++)
         {
@@ -472,7 +480,7 @@ public static class GameSceneSetup
     {
         string[] fieldNames =
         {
-            "config", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+            "config", "crowdCountTextStyle", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
         };
         SerializedObject serialized = new SerializedObject(controller);
         for (int i = 0; i < fieldNames.Length; i++)
@@ -489,7 +497,7 @@ public static class GameSceneSetup
     {
         string[] fieldNames =
         {
-            "config", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+            "config", "crowdCountTextStyle", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
         };
         Type controllerType = typeof(GameSceneController);
         const System.Reflection.BindingFlags flags =
@@ -833,6 +841,23 @@ public static class GameSceneSetup
         return config;
     }
 
+    private static TMPTextStyleSO LoadOrCreateCrowdCountTextStyle(
+        List<string> changed, List<string> unchanged)
+    {
+        TMPTextStyleSO style = AssetDatabase.LoadAssetAtPath<TMPTextStyleSO>(CrowdCountTextStylePath);
+        if (style != null)
+        {
+            unchanged.Add("CrowdCountTextStyle.asset");
+            return style;
+        }
+
+        EnsureFolder(HudFolder);
+        style = ScriptableObject.CreateInstance<TMPTextStyleSO>();
+        AssetDatabase.CreateAsset(style, CrowdCountTextStylePath);
+        changed.Add("CrowdCountTextStyle.asset 생성(기본값)");
+        return style;
+    }
+
     private static void WireConfigMaterials(
         GameConfigSO config, Material[] teamMaterials, List<string> changed, List<string> unchanged)
     {
@@ -1032,6 +1057,7 @@ public static class GameSceneSetup
     private static bool ConvergeSceneController(
         Scene scene,
         GameConfigSO config,
+        TMPTextStyleSO crowdCountTextStyle,
         GameObject humanPrefab,
         Camera mainCamera,
         Transform city,
@@ -1060,6 +1086,7 @@ public static class GameSceneSetup
         // 필드 이름 기반 배선. 이름이 어긋나면(계약 위반) SetObjectReference가 예외를 던진다.
         SerializedObject serialized = new SerializedObject(controller);
         changedHere |= SetObjectReference(serialized, "config", config);
+        changedHere |= SetObjectReference(serialized, "crowdCountTextStyle", crowdCountTextStyle);
         changedHere |= SetObjectReference(serialized, "humanPrefab", humanPrefab);
         changedHere |= SetObjectReference(serialized, "mainCamera", mainCamera);
         changedHere |= SetObjectReference(serialized, "cityRoot", city);

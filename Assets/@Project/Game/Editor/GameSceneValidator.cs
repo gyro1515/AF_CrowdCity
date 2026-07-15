@@ -12,6 +12,7 @@ using UnityEngine.SceneManagement;
 public static class GameSceneValidator
 {
     private const string ConfigAssetPath = "Assets/@Project/Game/GameConfig.asset";
+    private const string CrowdCountTextStyleAssetPath = "Assets/@Project/Hud/CrowdCountTextStyle.asset";
     private const string HumanPrefabPath = "Assets/@Project/Human/Prefabs/Human.prefab";
     private const string UrpLitShaderName = "Universal Render Pipeline/Lit";
     private const string BaseColorProperty = "_BaseColor";
@@ -32,7 +33,7 @@ public static class GameSceneValidator
 
     /// <summary>
     /// 열린 씬과 GameConfig 에셋을 검증한다.
-    /// 검사 항목: GameSceneController 존재와 5개 직렬화 참조, Human.prefab 구조(SkinnedMeshRenderer,
+    /// 검사 항목: GameSceneController 존재와 6개 직렬화 참조, Human.prefab 구조(SkinnedMeshRenderer,
     /// Human_Base의 Animator, 루프 clip, 모든 curve 경로가 Animator 하위에서 해석되는지), City 하위 MeshCollider
     /// 배치, GameConfig의 팀 material(shader/_BaseColor 색상 일치)과 수치 범위.
     /// </summary>
@@ -45,6 +46,7 @@ public static class GameSceneValidator
         ValidateHumanPrefab(failures);
         ValidateGeneratedBuildings(failures);
         ValidateCityColliders(failures);
+        ValidateCrowdCountTextStyleAsset(failures);
         ValidateConfigAsset(failures);
 
         if (failures.Count == 0)
@@ -86,6 +88,7 @@ public static class GameSceneValidator
         // 필드가 private이므로 GameSceneSetup과 같은 방식(SerializedObject, 이름 기반)으로 읽는다.
         SerializedObject serialized = new SerializedObject(controller);
         Object configRef = GetObjectReference(serialized, "config", failures);
+        Object crowdCountTextStyleRef = GetObjectReference(serialized, "crowdCountTextStyle", failures);
         Object prefabRef = GetObjectReference(serialized, "humanPrefab", failures);
         GetObjectReference(serialized, "mainCamera", failures);
         Object cityRef = GetObjectReference(serialized, "cityRoot", failures);
@@ -107,6 +110,15 @@ public static class GameSceneValidator
         if (configRef != null && configAsset != null && configRef != configAsset)
         {
             failures.Add($"GameSceneController.config가 {ConfigAssetPath} 에셋이 아님");
+        }
+
+        TMPTextStyleSO crowdCountTextStyleAsset =
+            AssetDatabase.LoadAssetAtPath<TMPTextStyleSO>(CrowdCountTextStyleAssetPath);
+        if (crowdCountTextStyleRef != null && crowdCountTextStyleAsset != null &&
+            crowdCountTextStyleRef != crowdCountTextStyleAsset)
+        {
+            failures.Add(
+                $"GameSceneController.crowdCountTextStyle이 {CrowdCountTextStyleAssetPath} 에셋이 아님");
         }
 
         Material occludedMaterial = occludedMaterialRef as Material;
@@ -410,6 +422,29 @@ public static class GameSceneValidator
             failures.Add(
                 $"개별 건물 geometry 합계 불일치: vertices={totalVertices}, triangles={totalTriangles}");
         }
+    }
+
+    private static void ValidateCrowdCountTextStyleAsset(List<string> failures)
+    {
+        Object mainAsset = AssetDatabase.LoadMainAssetAtPath(CrowdCountTextStyleAssetPath);
+        if (mainAsset == null)
+        {
+            failures.Add($"CrowdCountTextStyle 에셋이 없음({CrowdCountTextStyleAssetPath})");
+            return;
+        }
+
+        TMPTextStyleSO style = mainAsset as TMPTextStyleSO;
+        if (style == null)
+        {
+            failures.Add(
+                $"CrowdCountTextStyle 에셋 type이 TMPTextStyleSO가 아님({mainAsset.GetType().Name})");
+            return;
+        }
+
+        Check(
+            style.OutlineWidth >= 0f && style.OutlineWidth <= 1f,
+            $"CrowdCountTextStyle.OutlineWidth({style.OutlineWidth})는 0..1이어야 함",
+            failures);
     }
 
     private static void ValidateConfigAsset(List<string> failures)
