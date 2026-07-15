@@ -827,6 +827,16 @@ public sealed class CrowdRoot : MonoBehaviour
                 {
                     velocity = actualVel;
                 }
+
+                // blocked-damping(옵션 d, raycast 없음): 명령 속도 대비 실제 이동 비율(progress)로 막힘 정도를 추정해
+                // 명확히 막힌 팔로워의 속도만 감쇠한다. 벽을 우회하지는 않고 램밍/떨림을 진정시키는 증상 완화다.
+                // progress>=BlockedThreshold(자유 이동/벽 미끄러짐)면 dampFactor==1이라 위 bounce-fix 속도가 그대로 유지된다.
+                float commandedMag = commandedVel.magnitude;
+                float progress = commandedMag > 1e-4f ? actualVel.magnitude / commandedMag : 1f; // 1 = 명령대로 이동(자유), ~0 = 막힘
+                const float BlockedThreshold = 0.5f; // 이 미만이면 막힘으로 간주(하드코딩). 벽을 따라 미끄러지는 슬라이더는 접선 속도가 있어 이 위를 유지한다.
+                float dampFactor = Mathf.Lerp(_config.FollowerBlockedDamping, 1f, Mathf.Clamp01(progress / BlockedThreshold)); // progress>=threshold -> 1(감쇠 없음), progress 0 -> FollowerBlockedDamping
+                velocity *= dampFactor;
+
                 _followerVelocity[index] = velocity;
 
                 float speed = velocity.magnitude;

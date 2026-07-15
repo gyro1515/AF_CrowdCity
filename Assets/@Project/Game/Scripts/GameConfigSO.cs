@@ -92,6 +92,11 @@ public sealed class GameConfigSO : ScriptableObject
     /// <summary>팔로워 crowd가 모이는 단일 중심이 리더 진행 방향 뒤로 놓이는 거리(m)다. blob이 리더 뒤에 자리 잡게 한다.</summary>
     public float FollowerTrailingOffset => followerTrailingOffset;
 
+    [Tooltip("부하가 벽/장애물에 막혔을 때 속도 감쇠 계수(0~1). 낮을수록 벽에서 더 빨리 정착(덜 떨림). 1이면 감쇠 없음.")]
+    [SerializeField] private float followerBlockedDamping = 0.4f;
+    /// <summary>부하가 벽/장애물에 막혔을 때 적용하는 속도 감쇠 계수(0~1)다. 낮을수록 벽에서 더 빨리 정착하며 1이면 감쇠 없음이다.</summary>
+    public float FollowerBlockedDamping => followerBlockedDamping;
+
     [Header("Rules")]
     [Tooltip("영입/전투 규칙에 쓰이는 시뮬레이션 커널 튜닝 값 묶음(각 하위 항목 tooltip 참고).")]
     [SerializeField] private SimTuning sim = new SimTuning { RecruitRadius = 1.2f, CombatRadius = 0.5f, ConvertPerSecond = 40f, PairNormalizer = 15, RateLimitConversion = true, LeaderProtection = true };
@@ -229,6 +234,7 @@ public sealed class GameConfigSO : ScriptableObject
         followerArriveRadiusPerSqrtMember = Mathf.Max(0f, followerArriveRadiusPerSqrtMember);
         followerMaxAccel = Mathf.Max(0.1f, followerMaxAccel);
         followerTrailingOffset = Mathf.Max(0f, followerTrailingOffset);
+        followerBlockedDamping = Mathf.Clamp01(followerBlockedDamping);
 
         // 오버슈트 방지 불변식: followerMaxAccel >= followerCohesionGain * followerMaxSpeed^2 / followerArriveRadius.
         // 위반 시 blob이 리더 주위를 도는 orbit/wobble이 생기므로 계산된 하한으로 소프트 상향한다(arriveRadius 0-나눗셈 방지).
