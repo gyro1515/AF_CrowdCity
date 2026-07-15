@@ -40,6 +40,7 @@ public sealed class GameplayRoot : MonoBehaviour
     public void Initialize(
         GameSession session,
         GameConfigSO config,
+        TMPTextStyleSO crowdCountTextStyle,
         GameObject humanPrefab,
         Camera mainCamera,
         Transform cityRoot,
@@ -64,7 +65,7 @@ public sealed class GameplayRoot : MonoBehaviour
         _inputRoot.Initialize(config);
         _crowdRoot.Initialize(config, humanPrefab, cityRoot);
         _cameraRoot.Initialize(mainCamera, config, cityRoot, buildingOccludedMaterial);
-        _hudRoot.Initialize(_session, config, mainCamera);
+        _hudRoot.Initialize(_session, config, crowdCountTextStyle, mainCamera);
 
         // ③ session의 bus 구독을 등록한다.
         _session.Initialize();

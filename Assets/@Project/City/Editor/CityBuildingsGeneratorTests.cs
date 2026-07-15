@@ -11,6 +11,7 @@ using UnityEngine.SceneManagement;
 public sealed class CityBuildingsGeneratorTests
 {
     private const string GameScenePath = "Assets/@Project/Scenes/GameScene.unity";
+    private const string CrowdCountTextStylePath = "Assets/@Project/Hud/CrowdCountTextStyle.asset";
 
     [Test]
     public void CurrentSource_ProducesExpectedUniqueBuildingPlan()
@@ -301,6 +302,7 @@ public sealed class CityBuildingsGeneratorTests
     [TestCase("cityRoot")]
     [TestCase("mainCamera")]
     [TestCase("material")]
+    [TestCase("crowdCountTextStyle")]
     public void FullControllerConvergence_RecoversWithoutCityPreflightDeadlock(string missingReference)
     {
         EditorSceneManager.OpenScene(GameScenePath, OpenSceneMode.Single);
@@ -335,6 +337,9 @@ public sealed class CityBuildingsGeneratorTests
             Assert.That(AssetDatabase.GetAssetPath(
                     result.FindProperty("buildingOccludedMaterial").objectReferenceValue),
                 Is.EqualTo(CityBuildingsGenerator.OccludedMaterialPath));
+            Assert.That(AssetDatabase.GetAssetPath(
+                    result.FindProperty("crowdCountTextStyle").objectReferenceValue),
+                Is.EqualTo(CrowdCountTextStylePath));
         }
         finally
         {

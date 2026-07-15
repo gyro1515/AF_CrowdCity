@@ -9,6 +9,7 @@ public sealed class GameSceneController : MonoBehaviour
 {
     // Editor setup(GameSceneSetup)이 SerializedObject로 이름 기반 배선하므로 필드 이름을 바꾸지 않는다.
     [SerializeField] private GameConfigSO config;
+    [SerializeField] private TMPTextStyleSO crowdCountTextStyle;
     [SerializeField] private GameObject humanPrefab;    // Assets/@Project/Human/Prefabs/Human.prefab (editor setup이 구성된 씬 템플릿에서 생성)
     [SerializeField] private Camera mainCamera;
     [SerializeField] private Transform cityRoot;        // GameArea/City
@@ -34,6 +35,12 @@ public sealed class GameSceneController : MonoBehaviour
         if (config == null)
         {
             Debug.LogError("[GameSceneController] config 참조가 비어 있습니다.", this);
+            valid = false;
+        }
+
+        if (crowdCountTextStyle == null)
+        {
+            Debug.LogError("[GameSceneController] crowdCountTextStyle 참조가 비어 있습니다.", this);
             valid = false;
         }
 
@@ -76,7 +83,7 @@ public sealed class GameSceneController : MonoBehaviour
         gameplayRootGo.transform.SetParent(transform, false);
         _gameplayRoot = gameplayRootGo.AddComponent<GameplayRoot>();
         _gameplayRoot.Initialize(
-            _session, config, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial);
+            _session, config, crowdCountTextStyle, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial);
         _gameplayRoot.ReloadRequested += OnReloadRequested;
     }
 

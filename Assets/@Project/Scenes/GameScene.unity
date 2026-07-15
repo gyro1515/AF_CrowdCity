@@ -1128,6 +1128,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameSceneController
   config: {fileID: 11400000, guid: 3296273a037a6ac40acbf97bb2a03604, type: 2}
+  crowdCountTextStyle: {fileID: 11400000, guid: 90df816b6c57d496fba85dd6d4794ac5, type: 2}
   humanPrefab: {fileID: 4557897642118330164, guid: 303a7c17cbf54bd4aa58b274fa7e7b66, type: 3}
   mainCamera: {fileID: 330585545}
   cityRoot: {fileID: 5165518116837827667}

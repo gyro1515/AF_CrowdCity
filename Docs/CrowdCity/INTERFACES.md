@@ -2,7 +2,7 @@
 
 Rules for every implementer: global namespace (NO `namespace` blocks). Unity 6000.3.9f1 APIs. New Input System only. No LINQ/allocations in per-tick paths. Every `Subscribe` token disposed in the same lifecycle. XML doc comments in Korean (match EventManager.cs style) on public members. Counts: `MemberCount` INCLUDES the leader (lone leader = 1). Teams: -1 = neutral, 0 = player, 1..3 = rivals. Files must contain EXACTLY the public surface pinned here (private helpers free). If you believe a pinned signature is wrong, STOP and report — do not silently change it.
 
-Supersedes DESIGN.md where they differ: world-space leader labels are owned by **HudRoot** (not CrowdRoot). E1/E2 belong to Wave 3 (E1 references GameSceneController).
+Supersedes DESIGN.md where they differ. **Latest approved ownership supersession (2026-07-15):** after reconsidering the temporary leader-attached direction, the user selected independent Hud-owned world labels. `HudRoot` owns all leader labels, their runtime TMP materials, screen HUD, and rival off-screen markers; `CrowdRoot` owns simulation/runtime models and publishes authoritative count/elimination facts only. This intentionally replaces the immediately preceding ownership direction and is not an architecture-guide exception. E1/E2 belong to Wave 3 (E1 references GameSceneController).
 
 ## Wave 1
 
@@ -342,18 +342,18 @@ public sealed class CrowdRoot : UnityEngine.MonoBehaviour
     public void Shutdown();                           // destroys spawned clones (never the prefab asset); idempotent
 }
 ```
-⟲⟲⟲⟲ SpawnClone = `Instantiate(humanPrefab, ...)` (prefab asset, NOT a scene object). The prefab is created by the editor setup from the fully-configured scene template (Animator on Human_Base child, walk controller, materials) and is active, so no scene-template dependency exists at runtime. Publishes via cached `EventManager.GetPublisher<CrowdCountChangedEvent>()` / `<CrowdEliminatedEvent>()`. Leaders get a `CharacterController` (radius 0.35, height 1.8, center y 0.9, skinWidth 0.08) added at spawn; movement fixed Y (Move with y-delta 0). Followers/neutrals: transform steering only. City walkable bounds = the `cityRoot/Ground` child renderer bounds shrunk 2 m (same rule as SpawnInitial — Ground REQUIRED). No object pooling: population is conserved (no per-frame Instantiate/Destroy); the only Destroy is Shutdown on scene-reload restart.
+⟲⟲⟲⟲ SpawnClone = `Instantiate(humanPrefab, ...)` (prefab asset, NOT a scene object). The prefab is created by the editor setup from the fully-configured scene template (Animator on Human_Base child, walk controller, materials) and is active, so no scene-template dependency exists at runtime. Publishes authoritative counts/eliminations via cached `EventManager.GetPublisher<CrowdCountChangedEvent>()` / `<CrowdEliminatedEvent>()`. CrowdRoot has no `TMPro` dependency and owns no label, presentation material, or UI lifecycle. Leaders get a `CharacterController` (radius 0.35, height 1.8, center y 0.9, skinWidth 0.08) added at spawn; movement fixed Y (Move with y-delta 0). Followers/neutrals: transform steering only. City walkable bounds = the `cityRoot/Ground` child renderer bounds shrunk 2 m (same rule as SpawnInitial — Ground REQUIRED). No object pooling: population is conserved.
 
 ### G3 `Game/Scripts/GameplayRoot.cs`
 ```csharp
 public sealed class GameplayRoot : UnityEngine.MonoBehaviour
 {
-    public void Initialize(GameSession session, GameConfigSO config, UnityEngine.GameObject humanPrefab, UnityEngine.Camera mainCamera, UnityEngine.Transform cityRoot, UnityEngine.Material buildingOccludedMaterial);
+    public void Initialize(GameSession session, GameConfigSO config, TMPTextStyleSO crowdCountTextStyle, UnityEngine.GameObject humanPrefab, UnityEngine.Camera mainCamera, UnityEngine.Transform cityRoot, UnityEngine.Material buildingOccludedMaterial);
     public event System.Action ReloadRequested;   // raised only when session.State == Finished and RestartTapped fires; after raising, Update RETURNS immediately (the fixed-step loop must not run in the same frame as a synchronous scene reload)
     public void Shutdown();                       // idempotent. EXACT order: unbind own C# bindings -> HudRoot.Shutdown -> CameraRoot.Shutdown -> CrowdRoot.Shutdown -> InputRoot.Shutdown (presentation -> sim -> input) -> destroy the child root GOs it created
-    // Initialize order (PINNED): create child GOs + AddComponent all four roots -> inputRoot.Initialize -> crowdRoot.Initialize -> cameraRoot.Initialize -> hudRoot.Initialize(session,...)
+    // Initialize order (PINNED): create child GOs + AddComponent all four roots -> inputRoot.Initialize -> crowdRoot.Initialize(config, prefab, cityRoot) -> cameraRoot.Initialize -> hudRoot.Initialize(session, config, style, camera)
     //   -> session.Initialize() -> bind C# events (FirstDrag -> session.Begin; RestartTapped -> gated ReloadRequested; session.StateChanged -> crowdRoot.OnMatchStateChanged)
-    //   -> crowdRoot.SpawnInitial() -> cameraRoot.SetTarget(crowdRoot.PlayerLeaderTransform) -> hudRoot.BindLeaderLabels(...)
+    //   -> crowdRoot.SpawnInitial() -> cameraRoot.SetTarget(crowdRoot.PlayerLeaderTransform) -> hudRoot.BindLeaderLabels(all teams 0..3)
     // Update (PINNED): ① inputRoot.Poll() ② restart gate ③ fixed-step accumulator dt=0.02 (<=4 steps/frame): per step { crowdRoot.SetPlayerHeading(inputRoot.HeadingDir, inputRoot.HasHeading); session.Tick(step); crowdRoot.SimTick(step); }
 }
 ```
@@ -362,14 +362,15 @@ public sealed class GameplayRoot : UnityEngine.MonoBehaviour
 ```csharp
 public sealed class GameSceneController : UnityEngine.MonoBehaviour
 {
-    // EXACT serialized field names (editor setup wires them via SerializedObject): config, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial
+    // EXACT serialized field names (editor setup wires them via SerializedObject): config, crowdCountTextStyle, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial
     [UnityEngine.SerializeField] private GameConfigSO config;
+    [UnityEngine.SerializeField] private TMPTextStyleSO crowdCountTextStyle;
     [UnityEngine.SerializeField] private UnityEngine.GameObject humanPrefab;    // Assets/@Project/Human/Prefabs/Human.prefab (editor setup creates it from the configured scene template)
     [UnityEngine.SerializeField] private UnityEngine.Camera mainCamera;
     [UnityEngine.SerializeField] private UnityEngine.Transform cityRoot;        // GameArea/City
     [UnityEngine.SerializeField] private UnityEngine.Material buildingOccludedMaterial; // Assets/@Project/City/Materials/City_Occluded.mat
     // Awake: null-validate only (Debug.LogError + disable self on missing ref). NO scene-template deactivation — runtime uses the prefab asset; editor setup already deactivated the scene GameArea/Human.
-    // Start: _session = new GameSession(config); create "GameplayRoot" child GO; _gameplayRoot.Initialize(session, config, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial); _gameplayRoot.ReloadRequested += OnReloadRequested
+    // Start: _session = new GameSession(config); create "GameplayRoot" child GO; _gameplayRoot.Initialize(session, config, crowdCountTextStyle, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial); _gameplayRoot.ReloadRequested += OnReloadRequested
     // OnReloadRequested: SceneManager.LoadScene(gameObject.scene.buildIndex)
     // OnDestroy EXACT order: ① _gameplayRoot.ReloadRequested -= ② _gameplayRoot.Shutdown() ③ _session.Dispose() LAST (session outlives roots so late events during root teardown are still handled)
 #if UNITY_EDITOR
@@ -387,20 +388,33 @@ public readonly struct CrowdLabelBinding
     public CrowdLabelBinding(int teamId, UnityEngine.Transform leaderTransform);
 }
 
+[UnityEngine.DefaultExecutionOrder(100)]
 public sealed class HudRoot : UnityEngine.MonoBehaviour
 {
-    public void Initialize(IGameSessionReadOnly session, GameConfigSO config, UnityEngine.Camera worldCamera); // builds Canvas (ScreenSpaceOverlay + CanvasScaler 1080x1920 match 0.5), subscribes bus + session.StateChanged
-    public void BindLeaderLabels(System.Collections.Generic.List<CrowdLabelBinding> bindings); // creates world-space TextMesh labels, billboarded to worldCamera in LateUpdate, text updated only on count events, removed on elimination
-    public void Shutdown(); // disposes tokens, unhooks session, destroys canvas + labels; idempotent
+    public void Initialize(IGameSessionReadOnly session, GameConfigSO config, TMPTextStyleSO crowdCountTextStyle, UnityEngine.Camera worldCamera); // loads the TMP font, creates Canvas + per-team label materials, subscribes bus + session.StateChanged
+    public void BindLeaderLabels(System.Collections.Generic.List<CrowdLabelBinding> bindings); // binds all living teams 0..3; creates independent world labels for every leader and off-screen markers for rivals 1..3; reads current session counts after the initial publish
+    public void Shutdown(); // disposes tokens, unhooks session, destroys Canvas, labels, markers, and runtime label materials; idempotent
 }
 ```
-Font: `UnityEngine.Resources.GetBuiltinResource<UnityEngine.Font>("LegacyRuntime.ttf")`. Elements: timer top-center (M:SS), leaderboard top-right 4 rows "color swatch (Image) + count", start hint "DRAG TO START" (visible in Ready), result overlay (dark Image + WIN!/LOSE + final standings + "R / TAP TO RESTART") shown on Finished. Handlers never throw.
+All HudRoot text uses TextMesh Pro; no legacy `Text`, `TextMesh`, or `LegacyRuntime.ttf`. `HudRoot.Initialize` loads `Resources/Fonts & Materials/LiberationSans SDF - Fallback` and throws immediately if that tracked TMP resource is missing. Elements: timer top-center (M:SS), leaderboard top-right 4 rows "color swatch (Image) + count", start hint "DRAG TO START" (visible in Ready), result overlay (dark Image + WIN!/LOSE + final standings + "R / TAP TO RESTART") shown on Finished, independent world labels for all leaders, and rival off-screen direction/count markers. World labels use `TextMeshPro`, `FontStyles.Bold`, white face color, each team's outline color, and `TMPTextStyleSO.OutlineWidth`; player text retains its team-colored arrow. `DefaultExecutionOrder(100)` makes HudRoot run after the default-order camera update. Each `LateUpdate` first synchronizes every label to its bound leader position plus the label offset and the latest camera rotation, then updates rival markers. Count/elimination events update or remove labels, markers, and ranking/result presentation; handlers never mutate simulation state or throw.
+
+### U2 `Hud/Scripts/TMPTextStyleSO.cs`
+
+```csharp
+[UnityEngine.CreateAssetMenu(menuName = "AF/CrowdCity/TMP Text Style", fileName = "TMPTextStyle")]
+public sealed class TMPTextStyleSO : UnityEngine.ScriptableObject
+{
+    public UnityEngine.Color FaceColor { get; }
+    public float OutlineWidth { get; } // clamped 0..1
+}
+```
+The SO is immutable source configuration only; it stores no runtime material or current count. `HudRoot` combines its face/width with each `GameConfigSO.TeamColors` value to create and own the team-outline runtime materials.
 
 ### E1 `Game/Editor/GameSceneSetup.cs`
 `[MenuItem("AF/CrowdCity/Setup Game Scene")] public static void Apply()` — implements DESIGN.md §5 steps 1–7 exactly (load-or-create/converge, save only if changed). Constants for all asset paths. Also `public static void ApplyBatch()` (Apply + `EditorApplication.Exit(0/1)`).
-⟲⟲⟲⟲ **Prefab step (new step 4b, after the scene template is fully configured — Animator on Human_Base child, controller, materials — and BEFORE controller wiring):** create/refresh `Assets/@Project/Human/Prefabs/Human.prefab` from the configured `GameArea/Human` scene GameObject via `PrefabUtility.SaveAsPrefabAsset` (load-or-create: overwrite same path each run so it converges). Then `SetActive(false)` on the scene `GameArea/Human` (it is no longer used at runtime; runtime clones the prefab) and save the scene. Wire `GameSceneController.humanPrefab` (serialized field name `humanPrefab`) to the prefab asset via SerializedObject; wire `config`, `mainCamera` (scene Main Camera), `cityRoot` (GameArea/City), and `buildingOccludedMaterial` (`Assets/@Project/City/Materials/City_Occluded.mat`) as before (no `humanTemplate` field anymore). City building generation must preflight source/scene/provenance before writes and converges 37 generated mesh/prefab instances transactionally.
+⟲⟲⟲⟲ **Prefab step (new step 4b, after the scene template is fully configured — Animator on Human_Base child, controller, materials — and BEFORE controller wiring):** create/refresh `Assets/@Project/Human/Prefabs/Human.prefab` from the configured `GameArea/Human` scene GameObject via `PrefabUtility.SaveAsPrefabAsset` (load-or-create: overwrite same path each run so it converges). Then `SetActive(false)` on the scene `GameArea/Human` (it is no longer used at runtime; runtime clones the prefab) and save the scene. Load-or-create `Assets/@Project/Hud/CrowdCountTextStyle.asset`; wire `GameSceneController.humanPrefab` and `crowdCountTextStyle` to the intended assets via SerializedObject; wire `config`, `mainCamera` (scene Main Camera), `cityRoot` (GameArea/City), and `buildingOccludedMaterial` (`Assets/@Project/City/Materials/City_Occluded.mat`) as before (no `humanTemplate` field anymore). TMP Essential Resources under `Assets/TextMesh Pro/**` are tracked project infrastructure and are not imported or generated by GameSceneSetup. City building generation must preflight source/scene/provenance before writes and converges 37 generated mesh/prefab instances transactionally.
 
 City policy: Full `Setup Game Scene` only read-validates the City source, generated assets, and 37-building hierarchy before other writes; that preflight does not require an existing `GameSceneController` or its references. Full Setup never mutates City assets/hierarchy, but afterward load-or-creates `GameSceneController` and wires `cityRoot`, `mainCamera`, and `buildingOccludedMaterial`. `[MenuItem("AF/CrowdCity/Setup City Buildings")]` is the sole City convergence entry point, requires exactly one open scene (the active GameScene, no additive scenes), and succeeds even when the controller is absent; when present it may converge only `buildingOccludedMaterial`, while Full Setup owns controller creation and complete reference wiring.
 
 ### E2 `Game/Editor/GameSceneValidator.cs`
-`[MenuItem("AF/CrowdCity/Validate Game Scene")] public static void ValidateMenu()`; `public static bool Validate()` — DESIGN.md §5 assertions incl. AnimationUtility curve-path resolution; logs `[Validator] PASS` / `[Validator] FAIL: <reasons>`; `public static void ValidateBatch()` exits 0/1. ⟲⟲⟲⟲ Validate the PREFAB (`Assets/@Project/Human/Prefabs/Human.prefab`), not the scene template: it exists, has a `Human_Base` child carrying SkinnedMeshRenderer + Animator whose controller default-state motion is a looping AnimationClip, and every `AnimationUtility.GetCurveBindings(clip)` path resolves via `transform.Find` under the Animator inside the prefab. Also assert `GameSceneController.humanPrefab` ref is non-null and points at that prefab.
+`[MenuItem("AF/CrowdCity/Validate Game Scene")] public static void ValidateMenu()`; `public static bool Validate()` — DESIGN.md §5 assertions incl. AnimationUtility curve-path resolution; logs `[Validator] PASS` / `[Validator] FAIL: <reasons>`; `public static void ValidateBatch()` exits 0/1. ⟲⟲⟲⟲ Validate the PREFAB (`Assets/@Project/Human/Prefabs/Human.prefab`), not the scene template: it exists, has a `Human_Base` child carrying SkinnedMeshRenderer + Animator whose controller default-state motion is a looping AnimationClip, and every `AnimationUtility.GetCurveBindings(clip)` path resolves via `transform.Find` under the Animator inside the prefab. Also assert `GameSceneController.humanPrefab` and `crowdCountTextStyle` refs are non-null and point at the intended assets and that `TMPTextStyleSO.OutlineWidth` is in range. The required LiberationSans fallback is a HudRoot runtime `Resources.Load` fail-fast dependency, not an Editor-validator assertion.
