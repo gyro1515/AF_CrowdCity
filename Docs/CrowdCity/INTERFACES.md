@@ -229,7 +229,6 @@ public sealed class Human : UnityEngine.MonoBehaviour
     public void Init(UnityEngine.Material teamMaterial, bool isLeader);
     public void SetTeamMaterial(UnityEngine.Material teamMaterial);   // sharedMaterial assignment — NEVER .material
     public void SetLeader(bool isLeader);                             // updates shadow casting
-    public void SetPosition(UnityEngine.Vector3 worldPos);            // followers/neutrals only (leader is moved via CharacterController by CrowdRoot)
     public void SetHeadingAndSpeed(float headingDeg, float speed01);  // rotates Y toward heading; animator.speed = speed01 (clamped 0..1.5)
 }
 ```

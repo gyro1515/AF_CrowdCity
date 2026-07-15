@@ -59,15 +59,6 @@ public sealed class Human : MonoBehaviour
     }
 
     /// <summary>
-    /// world 위치를 직접 지정한다. follower와 neutral 전용이며
-    /// 리더는 CrowdRoot가 CharacterController로 이동시킨다.
-    /// </summary>
-    public void SetPosition(Vector3 worldPos)
-    {
-        transform.position = worldPos;
-    }
-
-    /// <summary>
     /// Y축 회전을 지정한 heading으로 즉시 맞추고 Animator 재생 속도를 speed01로 설정한다.
     /// speed01은 0..1.5로 clamp하며 Animator가 없으면 회전만 적용하고 조용히 넘어간다.
     /// </summary>
