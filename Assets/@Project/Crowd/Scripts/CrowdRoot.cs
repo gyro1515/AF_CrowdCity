@@ -129,9 +129,9 @@ public sealed class CrowdRoot : MonoBehaviour
     /// <exception cref="InvalidOperationException">cityRoot 아래에 "Ground" 자식 또는 그 renderer가 없으면 발생한다.</exception>
     public void Initialize(GameConfigSO config, GameObject humanPrefab, Transform cityRoot)
     {
-        if (_shutdown)
+        if (_initialized || _shutdown)
         {
-            return; // 종료 이후의 재초기화는 no-op다(중복/무효 init 방지).
+            return; // 초기화 완료 또는 종료 이후의 재초기화는 no-op다(중복/무효 init 방지).
         }
 
         // 유닛(리더/팔로워/중립)의 CharacterController 캡슐끼리 서로의 이동을 막지 않도록 전용 레이어를 확보해
@@ -257,9 +257,9 @@ public sealed class CrowdRoot : MonoBehaviour
 
         for (int n = 0; n < neutralCount; n++)
         {
-            // 이 중립이 스폰 시 받을 스케일. instantiate에서 쓰는 nextId(=_teamCount + placedNeutrals)와 같은 결정적 해시라 값이 일치한다.
+            // 이 중립이 스폰 시 받을 최종 스케일. instantiate에서 쓰는 nextId(=_teamCount + placedNeutrals)와 같은 id라 값이 일치한다.
             // 큰 중립이 지오메트리에 겹쳐 스폰되지 않도록 clearance 검사 반경을 스케일에 비례해 키운다(스케일 1이면 기존과 byte-identical).
-            float neutralScale = 1f + NeutralScaleT(_config.Seed, _teamCount + placedNeutrals) * (_config.NeutralMaxScale - 1f);
+            float neutralScale = ComputeNeutralScale(_config.Seed, _teamCount + placedNeutrals);
             float checkRadius = SpawnCheckRadius * neutralScale;
             bool placed = false;
             for (int attempt = 0; attempt < NeutralAttemptMax; attempt++)
@@ -329,14 +329,12 @@ public sealed class CrowdRoot : MonoBehaviour
             Human neutral = SpawnClone(spot, "Human_Neutral_" + n);
             neutral.Init(neutralMaterial, false);
 
-            // 결정적 해시로 1~neutralMaxScale 균일 스케일을 준다. 시뮬레이션 RNG(_rng)를 소비하지 않아
-            // 배회/시뮬레이션 draw 순서가 그대로 유지된다. 발/피벗이 바닥에 있어 균일 스케일이 접지를 보존하고,
-            // CharacterController 충돌 캡슐도 lossyScale로 함께 스케일되므로 상수를 따로 스케일하지 않는다.
-            float scale = 1f + NeutralScaleT(_config.Seed, nextId) * (_config.NeutralMaxScale - 1f);
-            // 스케일을 0.1 단위로 양자화해 중립이 연속 smear 대신 눈에 띄는 크기 버킷(1.0, 1.1, ...)으로 들어오게 한다.
-            // 결정적 값의 반올림이라 결정성은 그대로다(_rng 미소비). 이 단일 원천이 localScale과 buffer.Scale에 모두 흘러간다.
-            scale = Mathf.Round(scale * 10f) / 10f;
-            scale = Mathf.Clamp(scale, 1f, _config.NeutralMaxScale);
+            // 결정적 해시 기반 split 분포로 스케일을 준다: baselineChance 확률로 정확히 1.0, 나머지는 1.1~neutralMaxScale
+            // 큰 버킷에서 0.1 단위로 균일 양자화해 뽑아 큰 개체를 희소화한다(ComputeNeutralScale 참고).
+            // 시뮬레이션 RNG(_rng)를 소비하지 않아 배회/시뮬레이션 draw 순서가 그대로 유지된다. 발/피벗이 바닥에 있어
+            // 스케일이 접지를 보존하고, CharacterController 충돌 캡슐도 lossyScale로 함께 스케일되므로 상수를 따로 스케일하지 않는다.
+            // 이 단일 원천이 localScale과 buffer.Scale에 모두 흘러간다.
+            float scale = ComputeNeutralScale(_config.Seed, nextId);
             neutral.transform.localScale = Vector3.one * scale;
 
             // scale을 buffer의 단일 진실 원천에 기록한다(kernel의 스케일 인지 접촉/영입/분리가 buffer.Scale을 읽는다).
@@ -583,6 +581,32 @@ public sealed class CrowdRoot : MonoBehaviour
             x ^= x >> 16;
             return (x >> 8) * (1f / 16777216f); // 상위 24비트를 [0,1)로 매핑한다.
         }
+    }
+
+    // 중립 스폰 스케일의 최종 값을 계산한다: baselineChance 확률로 정확히 1.0, 나머지는 1.1~maxScale 큰 버킷에서
+    // 0.1 단위로 균일 양자화해 뽑는다(큰 개체 희소화). NeutralScaleT의 단일 해시 draw만 소비해 결정성/draw 순서를 보존한다.
+    // clearance 검사와 instantiate 양쪽이 같은 (seed, id)로 이 메서드를 호출해 같은 최종 스케일을 쓴다.
+    private float ComputeNeutralScale(int seed, int id)
+    {
+        float t = NeutralScaleT(seed, id); // 단일 draw, ∈[0,1).
+        float maxScale = _config.NeutralMaxScale;
+        float baselineChance = _config.NeutralBaselineScaleChance;
+
+        // 큰 버킷이 없거나, baseline 분기가 선택됐거나, P>=1이면 기본 크기(1.0)다.
+        if (maxScale <= 1.0f + 1e-4f || baselineChance >= 1f || t < baselineChance)
+        {
+            return 1f;
+        }
+
+        // maxScale이 (1.0, 1.1) 사이면 0.1 단위 양자화로 유효한 큰 버킷이 없다.
+        if (maxScale < 1.1f)
+        {
+            return 1f;
+        }
+
+        float u = (t - baselineChance) / (1f - baselineChance); // ∈[0,1).
+        float scale = Mathf.Round((1f + u * (maxScale - 1f)) * 10f) / 10f;
+        return Mathf.Clamp(scale, 1.1f, maxScale);
     }
 
     // ---- SimTick 내부 단계 ----

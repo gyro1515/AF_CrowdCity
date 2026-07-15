@@ -150,10 +150,15 @@ public sealed class GameConfigSO : ScriptableObject
     /// <summary>중립 캐릭터 애니메이션 재생 속도 배율이다.</summary>
     public float NeutralAnimationSpeed => neutralAnimationSpeed;
 
-    [Tooltip("중립 캐릭터 최대 스케일. 스폰 시 1~이 값 사이 랜덤 균일 스케일. CharacterController 충돌 크기도 자동으로 함께 스케일됨.")]
+    [Tooltip("중립 캐릭터 최대 스케일. neutralBaselineScaleChance 확률로 기본 크기(1.0), 나머지는 1.1~이 값 사이에서 0.1 단위 랜덤 -> 큰 개체 희소화. CharacterController 충돌 크기도 자동으로 함께 스케일됨.")]
     [SerializeField] private float neutralMaxScale = 1.3f;
     /// <summary>중립 캐릭터 최대 스케일이다.</summary>
     public float NeutralMaxScale => neutralMaxScale;
+
+    [Tooltip("중립이 기본 크기(1.0)로 스폰될 확률(0~1). 나머지는 1.1~최대에서 랜덤 -> 큰 개체 희소화.")]
+    [SerializeField] private float neutralBaselineScaleChance = 0.5f;
+    /// <summary>중립이 기본 크기(1.0)로 스폰될 확률이다.</summary>
+    public float NeutralBaselineScaleChance => neutralBaselineScaleChance;
 
     [Header("Camera")]
     [Tooltip("카메라가 아래를 내려다보는 pitch 각도(도, 10~89로 clamp).")]
@@ -250,6 +255,7 @@ public sealed class GameConfigSO : ScriptableObject
         wanderRepickMaxSeconds = Mathf.Max(wanderRepickMinSeconds, wanderRepickMaxSeconds);
         neutralAnimationSpeed = Mathf.Max(0f, neutralAnimationSpeed);
         neutralMaxScale = Mathf.Max(1f, neutralMaxScale);
+        neutralBaselineScaleChance = Mathf.Clamp01(neutralBaselineScaleChance);
 
         camPitchDeg = Mathf.Clamp(camPitchDeg, 10f, 89f);
         camBaseDistance = Mathf.Max(1f, camBaseDistance);
