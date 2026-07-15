@@ -28,7 +28,7 @@ public readonly struct CrowdConversion
 }
 
 /// <summary>
-/// 혼자 남은 leader가 strictly 더 큰 crowd에게 제거된 사실을 나타내는 결과 항목이다.
+/// leader가 CombatRadius 안에서 국소 수적으로 열세라 더 큰 crowd에게 제거된 사실을 나타내는 결과 항목이다.
 /// </summary>
 public readonly struct CrowdElimination
 {
@@ -149,7 +149,9 @@ public sealed class CombatResolver
 
     // 시작 팀에 3단계 변환만 겹친 고정 가상 매핑. 4단계 제거 판정 전용.
     private readonly int[] _virtualTeam;
-    private readonly int[] _virtualCounts;
+
+    // 4단계에서 leader 하나의 CombatRadius 안 가상 팀별 member 수를 세는 국소 tally scratch(leader마다 재사용).
+    private readonly int[] _localTeamCounts;
 
     // pair별 victim 정렬용 scratch.
     private readonly int[] _victimBuffer;
@@ -169,7 +171,7 @@ public sealed class CombatResolver
         _assignedTeam = new int[agentCapacity];
         _assignedDistSq = new float[agentCapacity];
         _virtualTeam = new int[agentCapacity];
-        _virtualCounts = new int[teamCount];
+        _localTeamCounts = new int[teamCount];
         _victimBuffer = new int[agentCapacity];
         _queryResults = new List<int>(agentCapacity);
     }
@@ -184,16 +186,24 @@ public sealed class CombatResolver
     ///   ordered (winner, loser) pair 누적값(<see cref="CombatState"/>)에 호출을 넘어 누적한다.
     ///   이번 호출에 접촉 pair가 없는 pair는 누적값을 0으로 되돌린다. 시작 count가 같으면 변환하지 않고 누적값을 유지한다.
     /// 3단계: victim은 전역으로 중재한다. 후보는 지는 팀의 non-leader member 중 winning 팀 member와 접촉한 agent이고,
-    ///   가장 가까운 접촉 member 순으로, 거리 동률은 낮은 agent Id 순으로 변환한다. agent 하나는 호출당 최대 한 번만
-    ///   변환되며 leader는 이 단계에서 절대 변환되지 않는다. 여러 winning 팀이 같은 victim을 노리면 가장 가까운 접촉
-    ///   member를 가진 팀이 가져가고(거리 동률은 낮은 팀 id), 밀린 pair의 예산은 미달로 남는다. 미달 예산은 소모되지
-    ///   않고 CombatState에 유지된다(방출된 변환만 누적값을 소모한다). 변환은 한 배치로 방출한다.
-    /// 4단계: 제거 pass는 시작 팀에 3단계 변환만 겹친 하나의 고정 가상 매핑으로 모든 팀을 평가한다. 이 pass가 방출하는
-    ///   leader 변환은 같은 호출의 다른 팀 판정에 반영되지 않는다(순서 의존성 없음). 가상 count가 1(lone leader)인 팀의
-    ///   leader에서 CombatRadius 안에 strictly 더 큰(가상 count) 팀의 member가 있으면 그 팀이 제거된다. eliminator는
-    ///   가장 가까운 그런 member를 가진 팀이고, 거리 동률은 낮은 팀 id다. <see cref="CrowdElimination"/>과 함께
-    ///   CrowdConversion(leaderIndex, eliminatorTeam)을 방출하며 buffer의 IsLeader=false 적용은 caller 책임이다.
-    ///   lone leader 둘(1 대 1)은 서로 inert다.
+    ///   가장 가까운 접촉 member 순으로, 거리 동률은 낮은 agent Id 순으로 변환한다. leader는 이 단계에서 절대 변환되지 않고,
+    ///   여러 winning 팀이 같은 victim을 노리면 가장 가까운 접촉 member를 가진 팀이 가져간다(거리 동률은 낮은 팀 id).
+    ///   tuning.RateLimitConversion=false(기본)면 배정된 victim 전원을 이번 호출에 한 배치로 방출한다(접촉 즉시 전향).
+    ///   true면 2단계 누적 예산 상한 min((int)accumulators, victim 수)만큼만 방출하고 그 방출분만 누적값을 소모하며,
+    ///   밀린 pair의 미달 예산은 소모되지 않고 CombatState에 유지된다. 두 경로 모두 agent 하나는 호출당 최대 한 번만 변환된다.
+    /// 4단계: 제거 pass는 시작 팀에 3단계 변환만 겹친 하나의 고정 가상 매핑(_virtualTeam)으로 모든 leader를 국소 판정한다.
+    ///   각 leader는 자신을 중심으로 한 CombatRadius 원 안에서 가상 팀별 member 수를 세어, 자기 자신을 포함한 아군 국소
+    ///   수(ownLocal)와 적 팀별 국소 수(enemyLocal)를 비교한다. tuning.LeaderProtection=true(기본)면 enemyLocal>ownLocal인
+    ///   적 팀만, false면 enemyLocal>=ownLocal인 적 팀도 제거자 자격을 가진다. 자격 적 팀 중 국소 수가 가장 많은 팀이
+    ///   제거자이며 동률은 낮은 팀 id다(정수만 쓰는 전순서 → 스냅샷/삽입 순서 불변, 거리 float 동률 없음). 전역 count가
+    ///   아니라 국소 수로 판정하므로 map-separated straggler로 전역 count가 부풀어도 코너에 몰린 leader가 제거된다.
+///   추가로 전역 가드가 있다: 시작 시점 전역 count가 strictly 더 큰 적 팀만 제거자 자격을 얻는다(3단계 전향 게이트와
+///   동일한 strict >). 전역적으로 더 작지만 국소로 더 밀집한 crowd가 더 큰 crowd의 leader를 제거하는 것을 막으며,
+///   이 가드는 LeaderProtection ON/OFF 바깥이라 두 모드 모두에 적용된다(국소 우세는 여전히 필요, 전역 동수는 inert).
+    ///   이 pass가 방출하는 leader 변환은 _virtualTeam에 되먹이지 않아 같은 호출의 다른 팀 판정에 영향을 주지 않는다
+    ///   (순서 의존성 없음). <see cref="CrowdElimination"/>과 함께 CrowdConversion(leaderIndex, killerTeam)을 방출하며
+    ///   buffer의 IsLeader=false 적용은 caller 책임이다. 보호 ON에서 홀로 남은 leader 둘(각 ownLocal=1, enemyLocal=1,
+    ///   1 대 1)은 strictly 비교라 서로 inert다.
     /// </remarks>
     public void Resolve(AgentBuffer buffer, SpatialGrid grid, in SimTuning tuning, float dt, CombatState state, CombatOutcome outcome)
     {
@@ -205,8 +215,12 @@ public sealed class CombatResolver
         bool[] isLeader = buffer.IsLeader;
         int[] ids = buffer.Id;
         Vector2[] positions = buffer.Pos;
+        float[] scales = buffer.Scale;
         float radius = tuning.CombatRadius;
-        float radiusSq = radius * radius;
+        // 스케일 인지: worst-case pair(둘 다 최대 스케일)까지 이웃이 잡히도록 질의 반경을 넓힌다.
+        // MaxScale이 0(bare default)이면 1로 가드해 질의를 축소하지 않는다. 실제 접촉 판정은 아래 pair별 반경으로 건다.
+        float queryRadius = radius * Mathf.Max(1f, tuning.MaxScale);
+        bool leaderProtection = tuning.LeaderProtection;
         float[] accumulators = state.Accumulators;
 
         // ---- 1단계: 시작 count 스냅샷 + 팀 pair별 접촉 수 + agent별 적 팀 최근접 접촉 거리 ----
@@ -244,7 +258,7 @@ public sealed class CombatResolver
                 continue;
             }
 
-            grid.QueryCircle(positions[i], radius, _queryResults);
+            grid.QueryCircle(positions[i], queryRadius, _queryResults);
             int foundCount = _queryResults.Count;
             for (int q = 0; q < foundCount; q++)
             {
@@ -259,7 +273,10 @@ public sealed class CombatResolver
                 float dx = positions[i].x - positions[j].x;
                 float dy = positions[i].y - positions[j].y;
                 float distSq = dx * dx + dy * dy;
-                if (distSq > radiusSq)
+                // 스케일 인지 접촉: 두 유닛 스케일 평균으로 pair별 접촉 반경을 정한다(둘 다 1.0이면 radius와 동일해 기존 판정과 byte-identical).
+                // Scale[i]+Scale[j]는 교환법칙이 성립해 열거/삽입 순서와 무관하게 같은 float 값이다.
+                float pairR = radius * 0.5f * (scales[i] + scales[j]);
+                if (distSq > pairR * pairR)
                 {
                     continue;
                 }
@@ -351,6 +368,8 @@ public sealed class CombatResolver
             }
         }
 
+        bool rateLimited = tuning.RateLimitConversion;
+
         for (int w = 0; w < teamCount; w++)
         {
             for (int l = 0; l < teamCount; l++)
@@ -361,8 +380,9 @@ public sealed class CombatResolver
                 }
 
                 int pairIndex = w * teamCount + l;
+                // rate-limited 경로는 정수화된 누적 예산이 있어야 방출한다. instant 경로는 예산 게이트 없이 전원 방출한다.
                 int budget = (int)accumulators[pairIndex];
-                if (budget <= 0)
+                if (rateLimited && budget <= 0)
                 {
                     continue;
                 }
@@ -379,13 +399,15 @@ public sealed class CombatResolver
 
                 if (victimCount == 0)
                 {
-                    // 미달 예산은 소모하지 않고 다음 호출을 위해 유지한다.
+                    // rate-limited 경로의 미달 예산은 소모하지 않고 다음 호출을 위해 유지한다.
                     continue;
                 }
 
                 SortVictimsByDistanceThenId(victimCount, ids);
 
-                int emitCount = budget < victimCount ? budget : victimCount;
+                // instant(RateLimitConversion=false): 배정된 victim 전원 방출.
+                // rate-limited(true): 이번 tick 예산 상한 min(budget, victim 수)만큼만 방출.
+                int emitCount = rateLimited ? (budget < victimCount ? budget : victimCount) : victimCount;
                 for (int v = 0; v < emitCount; v++)
                 {
                     int victim = _victimBuffer[v];
@@ -393,91 +415,115 @@ public sealed class CombatResolver
                     _virtualTeam[victim] = w;
                 }
 
-                // 방출된 변환만 누적값을 소모한다. 나머지 미달분은 그대로 남는다.
-                accumulators[pairIndex] -= emitCount;
-            }
-        }
-
-        // ---- 4단계: 고정 가상 매핑(시작 팀 + 3단계 변환)으로 lone leader 제거 판정 ----
-        for (int t = 0; t < teamCount; t++)
-        {
-            _virtualCounts[t] = 0;
-        }
-
-        for (int a = 0; a < agentCount; a++)
-        {
-            int team = _virtualTeam[a];
-            if (team >= 0)
-            {
-                _virtualCounts[team]++;
-            }
-        }
-
-        for (int t = 0; t < teamCount; t++)
-        {
-            if (_virtualCounts[t] != 1)
-            {
-                continue;
-            }
-
-            // leader는 3단계에서 변환되지 않으므로 가상 count 1인 팀의 유일한 member가 곧 leader다.
-            int leaderIndex = -1;
-            for (int a = 0; a < agentCount; a++)
-            {
-                if (_virtualTeam[a] == t && isLeader[a])
+                if (rateLimited)
                 {
-                    leaderIndex = a;
-                    break;
+                    // 방출된 변환만 누적값을 소모한다. 나머지 미달분은 그대로 남는다.
+                    accumulators[pairIndex] -= emitCount;
                 }
             }
+        }
 
-            if (leaderIndex < 0)
+        // ---- 4단계: 국소 수적 판정으로 leader 제거(map-separated straggler로 인한 전역 count 오판 제거) ----
+        // 시작 팀 + 3단계 변환을 겹친 고정 가상 매핑(_virtualTeam)으로만 판정한다. 3단계에서 escort가 변환되어
+        // 국소적으로 홀로 남은 leader는 같은 tick에 홀로 판정된다(instant-conversion 의도). 각 leader 판정은
+        // 하나의 스냅샷(_virtualTeam)에 대해 독립적으로 이뤄지고 결과를 _virtualTeam에 되먹이지 않아 팀 간
+        // 순서 의존성이 없다.
+        for (int a = 0; a < agentCount; a++)
+        {
+            if (!isLeader[a])
             {
                 continue;
             }
 
-            Vector2 leaderPos = positions[leaderIndex];
-            grid.QueryCircle(leaderPos, radius, _queryResults);
+            int t = _virtualTeam[a];
+            if (t < 0)
+            {
+                // leader는 3단계/4단계에서 _virtualTeam이 바뀌지 않으므로 t는 곧 이 leader의 시작 팀이다.
+                continue;
+            }
 
-            float bestDistSq = float.MaxValue;
-            int bestTeam = -1;
+            Vector2 leaderPos = positions[a];
+            grid.QueryCircle(leaderPos, queryRadius, _queryResults);
+
+            for (int k = 0; k < teamCount; k++)
+            {
+                _localTeamCounts[k] = 0;
+            }
+
             int foundCount = _queryResults.Count;
             for (int q = 0; q < foundCount; q++)
             {
                 int j = _queryResults[q];
-                int enemyTeam = _virtualTeam[j];
-                if (enemyTeam < 0 || enemyTeam == t)
+                if (j == a)
                 {
+                    // leader 자신은 아래에서 ownLocal에 명시적으로 1로 센다(QueryCircle self-inclusion 여부와 무관하게 정확).
                     continue;
                 }
 
-                if (_virtualCounts[enemyTeam] <= 1)
+                int teamJ = _virtualTeam[j];
+                if (teamJ < 0)
                 {
-                    // strictly 더 큰 팀만 제거할 수 있다. lone leader 둘(1 대 1)은 서로 inert다.
                     continue;
                 }
 
                 float dx = leaderPos.x - positions[j].x;
                 float dy = leaderPos.y - positions[j].y;
                 float distSq = dx * dx + dy * dy;
-                if (distSq > radiusSq)
+                // 스케일 인지 국소 판정: 리더 a(스케일 1)와 이웃 j의 스케일 평균으로 pair별 반경을 정한다(둘 다 1.0이면 radius와 동일).
+                float pairR = radius * 0.5f * (scales[a] + scales[j]);
+                if (distSq > pairR * pairR)
                 {
                     continue;
                 }
 
-                if (distSq < bestDistSq || (distSq == bestDistSq && enemyTeam < bestTeam))
+                _localTeamCounts[teamJ]++;
+            }
+
+            // ownLocal은 leader 자신을 포함한 CombatRadius 안 아군 수다. QueryCircle의 self-inclusion 여부와 무관하게
+            // 리더를 명시적으로 1로 세고(위 tally에서 리더 index는 건너뛰어 중복을 막았다) 국소 아군 수를 더한다.
+            int ownLocal = _localTeamCounts[t] + 1;
+
+            // 국소 수가 가장 많은 자격 적 팀이 제거자. 동률이면 낮은 팀 id(오름차순 순회 + strict 비교로 보장).
+            // 정수만 쓰는 전순서라 스냅샷 순서/삽입 순서에 불변이다(거리 float 동률 없음).
+            int killer = -1;
+            int bestEnemyLocal = 0;
+            for (int e = 0; e < teamCount; e++)
+            {
+                if (e == t)
                 {
-                    bestDistSq = distSq;
-                    bestTeam = enemyTeam;
+                    continue;
+                }
+
+                int enemyLocal = _localTeamCounts[e];
+
+                // 전역 가드: 시작 시점 전역 count가 strictly 더 큰 적 팀만 이 leader를 제거할 수 있다.
+                // 국소 우세만으로는 부족하다 — 전역적으로 더 작지만 국소로 더 밀집한 crowd가 더 큰 crowd의 leader를
+                // 먹는 것을 막는다. 3단계 member 전향 게이트(_startCounts[w] > _startCounts[l])와 동일하게 strict >라
+                // 전역 동수는 서로 inert다. 이 가드는 LeaderProtection ON/OFF 바깥이라 두 모드 모두에 적용되고,
+                // 토글은 아래 국소 임계값(>, >=)만 제어한다. t는 leader의 시작 팀이라 _startCounts[t]가 그 팀의 전역 count다.
+                if (_startCounts[e] <= _startCounts[t])
+                {
+                    continue;
+                }
+
+                bool qualifies = leaderProtection ? (enemyLocal > ownLocal) : (enemyLocal >= ownLocal);
+                if (!qualifies)
+                {
+                    continue;
+                }
+
+                if (enemyLocal > bestEnemyLocal)
+                {
+                    bestEnemyLocal = enemyLocal;
+                    killer = e;
                 }
             }
 
-            if (bestTeam >= 0)
+            if (killer >= 0)
             {
-                // 이 leader 변환은 가상 매핑에 반영하지 않는다.
-                // 같은 호출 안 다른 팀의 제거 판정에 feedback되면 순서 의존성이 생기기 때문이다.
-                outcome.Eliminations.Add(new CrowdElimination(t, bestTeam, leaderIndex));
-                outcome.Conversions.Add(new CrowdConversion(leaderIndex, bestTeam));
+                // leader 판정 결과는 _virtualTeam에 되먹이지 않는다(팀 간 판정 독립성/순서 무의존 유지).
+                outcome.Eliminations.Add(new CrowdElimination(t, killer, a));
+                outcome.Conversions.Add(new CrowdConversion(a, killer));
             }
         }
     }

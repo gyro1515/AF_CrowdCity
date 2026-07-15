@@ -4,7 +4,8 @@ using NUnit.Framework;
 using UnityEngine;
 
 /// <summary>
-/// <see cref="CombatResolver"/>의 전향 누적 수식, 스냅샷 순수성, 제거 판정, 순열 불변성을 검증하는 EditMode 테스트다.
+/// <see cref="CombatResolver"/>의 두 전향 모드(RateLimitConversion=false 접촉 즉시 전향 / true 점진 전향 누적 수식),
+/// 스냅샷 순수성, 제거 판정, 순열 불변성을 검증하는 EditMode 테스트다.
 /// 모든 시나리오는 고정 위치와 고정 seed를 써서 결정적으로 동작한다.
 /// </summary>
 [TestFixture]
@@ -18,6 +19,9 @@ public sealed class CombatResolverTests
         return new Vector2(x, z);
     }
 
+    // 프로덕션 기본값과 동일하게 RateLimitConversion=false(접촉 즉시 전향), LeaderProtection=true(리더 보호 ON)로 둔다.
+    // MaxScale=2로 두어 스케일 인지 질의가 최대 스케일 2까지 이웃을 잡게 한다(모든 유닛 스케일 1인 기존 테스트에는
+    // pair별 반경 게이트가 radius로 축소되어 결과가 byte-identical이다).
     private static SimTuning Default()
     {
         SimTuning tuning;
@@ -25,6 +29,25 @@ public sealed class CombatResolverTests
         tuning.CombatRadius = 1.0f;
         tuning.ConvertPerSecond = 10f;
         tuning.PairNormalizer = 8;
+        tuning.MaxScale = 2f;
+        tuning.RateLimitConversion = false;
+        tuning.LeaderProtection = true;
+        return tuning;
+    }
+
+    // 기존 점진 전향(rate limit) 경로 검증용. Default()에서 토글만 켠다.
+    private static SimTuning RateLimited()
+    {
+        SimTuning tuning = Default();
+        tuning.RateLimitConversion = true;
+        return tuning;
+    }
+
+    // 리더 보호 OFF(국소 동수 >= 에도 리더 제거) 경로 검증용. Default()에서 토글만 끈다.
+    private static SimTuning LeaderProtectionOff()
+    {
+        SimTuning tuning = Default();
+        tuning.LeaderProtection = false;
         return tuning;
     }
 
@@ -36,10 +59,10 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// 접촉 pair가 PairNormalizer를 초과하면 clamp가 1.0에서 포화하고, 누적값이 dt마다 쌓여 예상한 호출에서만 전향이 방출됨을 검증한다.
+    /// [RateLimitConversion=true] 접촉 pair가 PairNormalizer를 초과하면 clamp가 1.0에서 포화하고, 누적값이 dt마다 쌓여 예상한 호출에서만 전향이 방출됨을 검증한다.
     /// </summary>
     [Test]
-    public void ConversionAccumulator_ClampSaturates_ConvertsOnFourthCall()
+    public void RateLimited_ConversionAccumulator_ClampSaturates_ConvertsOnFourthCall()
     {
         AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 6명(리더 1 + 팔로워 5), 반경 안에 밀집.
@@ -49,8 +72,9 @@ public sealed class CombatResolverTests
         buffer.Add(3, 0, false, V(0.00f, 0.10f));
         buffer.Add(4, 0, false, V(0.10f, 0.10f));
         buffer.Add(5, 0, false, V(0.20f, 0.10f));
-        // team1: 5명(리더 1 + 팔로워 4), 반경 안에 밀집.
-        buffer.Add(6, 1, true, V(0.00f, 0.20f));
+        // team1: 5명(리더 1 + 팔로워 4). 리더는 반경 밖(멀리) 두어 stage-4 리더 제거를 배제하고,
+        // 팔로워 4명만 team0과 접촉시켜 rate-limit member 누적만 분리 검증한다.
+        buffer.Add(6, 1, true, V(50.0f, 50.0f));
         buffer.Add(7, 1, false, V(0.10f, 0.20f));
         buffer.Add(8, 1, false, V(0.20f, 0.20f));
         buffer.Add(9, 1, false, V(0.00f, 0.30f));
@@ -60,9 +84,9 @@ public sealed class CombatResolverTests
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
         CombatState state = new CombatState(TeamCount);
         CombatOutcome outcome = new CombatOutcome(Cap);
-        SimTuning tuning = Default();
+        SimTuning tuning = RateLimited();
 
-        // clamp01(30/8)=1.0, rate=10, dt=0.03 -> 0.3/호출. 3호출까지 누적 0.9(<1) => 전향 없음.
+        // 접촉 pair 24(=team0 6 x 근접 team1 팔로워 4). clamp01(24/8)=1.0, rate=10, dt=0.03 -> 0.3/호출. 3호출까지 누적 0.9(<1) => 전향 없음.
         for (int call = 1; call <= 3; call++)
         {
             resolver.Resolve(buffer, grid, tuning, 0.03f, state, outcome);
@@ -82,10 +106,10 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// 접촉 pair가 PairNormalizer 미만이면 clamp가 pairs/normalizer 비율로 스케일되어 누적 속도가 느려짐을 검증한다.
+    /// [RateLimitConversion=true] 접촉 pair가 PairNormalizer 미만이면 clamp가 pairs/normalizer 비율로 스케일되어 누적 속도가 느려짐을 검증한다.
     /// </summary>
     [Test]
-    public void ConversionRate_FractionalClamp_ConvertsOnSecondCall()
+    public void RateLimited_ConversionRate_FractionalClamp_ConvertsOnSecondCall()
     {
         AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(승자): 4명 원점 밀집.
@@ -102,7 +126,7 @@ public sealed class CombatResolverTests
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
         CombatState state = new CombatState(TeamCount);
         CombatOutcome outcome = new CombatOutcome(Cap);
-        SimTuning tuning = Default();
+        SimTuning tuning = RateLimited();
 
         // clamp01(4/8)=0.5, rate=10, dt=0.12 -> 0.6/호출. 1호출 0.6(<1) => 전향 없음.
         resolver.Resolve(buffer, grid, tuning, 0.12f, state, outcome);
@@ -117,10 +141,10 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// 접촉이 끊긴 호출에서 해당 pair 누적값이 0으로 리셋되어, 재접촉 후 다시 처음부터 쌓임을 검증한다.
+    /// [RateLimitConversion=true] 접촉이 끊긴 호출에서 해당 pair 누적값이 0으로 리셋되어, 재접촉 후 다시 처음부터 쌓임을 검증한다.
     /// </summary>
     [Test]
-    public void Accumulator_ResetsWhenContactBreaks()
+    public void RateLimited_Accumulator_ResetsWhenContactBreaks()
     {
         AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 5명.
@@ -129,8 +153,9 @@ public sealed class CombatResolverTests
         buffer.Add(2, 0, false, V(0.20f, 0.00f));
         buffer.Add(3, 0, false, V(0.00f, 0.10f));
         buffer.Add(4, 0, false, V(0.10f, 0.10f));
-        // team1: 4명(리더 1 + 팔로워 3). 인덱스 5..8.
-        buffer.Add(5, 1, true, V(0.00f, 0.20f));
+        // team1: 4명(리더 1 + 팔로워 3). 인덱스 5..8. 리더는 반경 밖(멀리) 두어 stage-4 리더 제거를 배제하고,
+        // 팔로워 3명만 team0과 접촉시켜 누적/리셋만 분리 검증한다.
+        buffer.Add(5, 1, true, V(50.0f, 50.0f));
         buffer.Add(6, 1, false, V(0.10f, 0.20f));
         buffer.Add(7, 1, false, V(0.20f, 0.20f));
         buffer.Add(8, 1, false, V(0.00f, 0.30f));
@@ -145,9 +170,9 @@ public sealed class CombatResolverTests
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
         CombatState state = new CombatState(TeamCount);
         CombatOutcome outcome = new CombatOutcome(Cap);
-        SimTuning tuning = Default();
+        SimTuning tuning = RateLimited();
 
-        // clamp01(20/8)=1.0, rate=10, dt=0.03 -> 0.3/호출.
+        // 접촉 pair 15(=team0 5 x 근접 team1 팔로워 3). clamp01(15/8)=1.0, rate=10, dt=0.03 -> 0.3/호출.
         // 접촉 3회: 누적 0.9(<1).
         for (int call = 1; call <= 3; call++)
         {
@@ -294,22 +319,23 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// 홀로 남은 리더는 접촉한 더 큰 팀 중 가장 가까운 member를 가진 팀에게 제거됨(nearest 규칙)을 검증한다.
+    /// [LeaderProtection=true] 국소 판정: 홀로 남은 리더는 CombatRadius 안 국소 수가 가장 많은 자격 적 팀에게 제거됨
+    /// (거리 nearest가 아니라 국소 count 최대 규칙)을 검증한다. 두 적 팀은 리더 반대편에 배치해 서로 비접촉이라
+    /// 3단계 상호 전향이 없다.
     /// </summary>
     [Test]
-    public void Elimination_Attribution_NearestWins()
+    public void Elimination_Attribution_MaxLocalCountWins()
     {
         AgentBuffer buffer = new AgentBuffer(Cap);
-        // team0: 홀로 남은 리더.
+        // team0: 홀로 남은 리더(ownLocal=1).
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
-        // team1: 3명. 근접 member는 거리 0.5.
-        buffer.Add(10, 1, true, V(5.0f, 5.0f));
-        buffer.Add(11, 1, false, V(5.0f, 6.0f));
-        buffer.Add(12, 1, false, V(0.5f, 0.0f));
-        // team2: 3명. 근접 member는 거리 0.4(더 가까움).
-        buffer.Add(20, 2, true, V(-5.0f, 5.0f));
-        buffer.Add(21, 2, false, V(-5.0f, 6.0f));
-        buffer.Add(22, 2, false, V(0.4f, 0.0f));
+        // team1: 리더 근처 국소 2명(한쪽).
+        buffer.Add(10, 1, true, V(0.5f, 0.5f));
+        buffer.Add(11, 1, false, V(0.6f, 0.5f));
+        // team2: 리더 근처 국소 3명(반대쪽) -> 국소 수 최대.
+        buffer.Add(20, 2, true, V(-0.5f, -0.5f));
+        buffer.Add(21, 2, false, V(-0.6f, -0.5f));
+        buffer.Add(22, 2, false, V(-0.5f, -0.6f));
 
         SpatialGrid grid = NewGrid(buffer);
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
@@ -321,28 +347,29 @@ public sealed class CombatResolverTests
         Assert.AreEqual(1, outcome.Eliminations.Count);
         CrowdElimination elim = outcome.Eliminations[0];
         Assert.AreEqual(0, elim.Team, "제거된 팀은 team0");
-        Assert.AreEqual(2, elim.ByTeam, "더 가까운 team2가 제거");
+        Assert.AreEqual(2, elim.ByTeam, "국소 수 최대(3)인 team2가 제거");
         Assert.AreEqual(0, buffer.Id[elim.LeaderAgentIndex]);
-        // 제거된 리더는 eliminator 팀으로의 전향도 함께 방출된다.
+        // 제거된 리더는 killer 팀으로의 전향도 함께 방출된다.
         Assert.IsTrue(ContainsConversion(buffer, outcome, 0, 2));
     }
 
     /// <summary>
-    /// 제거 후보 팀이 같은 거리로 접촉하면 낮은 팀 id가 eliminator가 됨(tie -> lower team)을 검증한다.
+    /// [LeaderProtection=true] 제거 후보 두 팀의 국소 수가 동률(둘 다 ownLocal 초과)이면 낮은 팀 id가 killer가 됨
+    /// (count 동률 -> lower team)을 검증한다. 두 적 팀은 리더 반대편에 배치해 서로 비접촉 + 시작 인원 동수라
+    /// 3단계 상호 전향이 없다.
     /// </summary>
     [Test]
     public void Elimination_Attribution_TieFavorsLowerTeam()
     {
         AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0: 홀로 남은 리더(ownLocal=1).
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
-        // team1 근접 member (0, 0.4): 거리 0.4.
-        buffer.Add(10, 1, true, V(5.0f, 5.0f));
-        buffer.Add(11, 1, false, V(5.0f, 6.0f));
-        buffer.Add(12, 1, false, V(0.0f, 0.4f));
-        // team2 근접 member (0.4, 0): 거리 0.4(동률).
-        buffer.Add(20, 2, true, V(-5.0f, 5.0f));
-        buffer.Add(21, 2, false, V(-5.0f, 6.0f));
-        buffer.Add(22, 2, false, V(0.4f, 0.0f));
+        // team1: 리더 근처 국소 2명(한쪽).
+        buffer.Add(10, 1, true, V(0.5f, 0.5f));
+        buffer.Add(11, 1, false, V(0.6f, 0.5f));
+        // team2: 리더 근처 국소 2명(반대쪽, 동률).
+        buffer.Add(20, 2, true, V(-0.5f, -0.5f));
+        buffer.Add(21, 2, false, V(-0.6f, -0.5f));
 
         SpatialGrid grid = NewGrid(buffer);
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
@@ -353,11 +380,12 @@ public sealed class CombatResolverTests
 
         Assert.AreEqual(1, outcome.Eliminations.Count);
         Assert.AreEqual(0, outcome.Eliminations[0].Team);
-        Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "동률이면 낮은 팀 id(team1)가 제거");
+        Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "국소 수 동률이면 낮은 팀 id(team1)가 제거");
     }
 
     /// <summary>
-    /// 홀로 남은 리더 둘(1 대 1)은 서로 strictly 크지 않으므로 아무 일도 일어나지 않음을 검증한다.
+    /// [LeaderProtection=true] 국소 접촉한 홀로 남은 리더 둘(각 ownLocal=1, enemyLocal=1, 1 대 1)은 strictly 비교라
+    /// 서로 제거되지 않음을 검증한다(보호 ON의 국소 동수 inert 케이스).
     /// </summary>
     [Test]
     public void BothLoneLeaders_Inert()
@@ -378,17 +406,18 @@ public sealed class CombatResolverTests
     }
 
     /// <summary>
-    /// 홀로 남은 리더는 strictly 더 큰 팀에게만 제거되고, 동수(1 대 1) 이웃에게는 제거되지 않음을 검증한다.
+    /// [LeaderProtection=true] 홀로 남은 리더는 CombatRadius 안 적 국소 수가 자기(ownLocal=1)보다 strictly 클 때만
+    /// 제거되고, 국소 동수(1 대 1) 이웃에게는 제거되지 않음을 검증한다.
     /// </summary>
     [Test]
     public void LoneLeader_EliminatedOnlyVsStrictlyLarger()
     {
-        // (a) team1이 2명(> 1)이면 team0 리더가 제거된다.
+        // (a) team1이 리더 반경 안 국소 2명(> 1)이면 team0 리더가 제거된다.
         {
             AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
-            buffer.Add(1, 1, true, V(5.0f, 5.0f));
-            buffer.Add(2, 1, false, V(0.5f, 0.0f));
+            buffer.Add(1, 1, true, V(0.5f, 0.0f));
+            buffer.Add(2, 1, false, V(0.4f, 0.3f));
 
             SpatialGrid grid = NewGrid(buffer);
             CombatResolver resolver = new CombatResolver(TeamCount, Cap);
@@ -396,12 +425,12 @@ public sealed class CombatResolverTests
             CombatOutcome outcome = new CombatOutcome(Cap);
             resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
 
-            Assert.AreEqual(1, outcome.Eliminations.Count, "size 2 이웃은 제거 가능");
+            Assert.AreEqual(1, outcome.Eliminations.Count, "국소 2명 이웃은 제거 가능");
             Assert.AreEqual(0, outcome.Eliminations[0].Team);
             Assert.AreEqual(1, outcome.Eliminations[0].ByTeam);
         }
 
-        // (b) team1이 1명(홀로)이면 제거되지 않는다.
+        // (b) team1이 반경 안 국소 1명(홀로)이면 제거되지 않는다.
         {
             AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
@@ -413,15 +442,191 @@ public sealed class CombatResolverTests
             CombatOutcome outcome = new CombatOutcome(Cap);
             resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
 
-            Assert.AreEqual(0, outcome.Eliminations.Count, "동수 이웃은 제거 불가");
+            Assert.AreEqual(0, outcome.Eliminations.Count, "국소 동수 이웃은 제거 불가");
         }
     }
 
     /// <summary>
-    /// 여러 승자 팀이 같은 victim을 노리면 가장 가까운 팀이 가져가고, 밀린 팀의 예산은 소모되지 않고 다음 호출로 이월됨을 검증한다.
+    /// [LeaderProtection=true] 회귀 테스트: 코너에 몰린 리더는 map-separated straggler(반경 밖 같은 팀 팔로워)로
+    /// 전역 count가 3이어도(구 전역 게이트라면 count!=1이라 제거 판정에서 제외되었을 것) CombatRadius 안에서 국소
+    /// 수적 열세(ownLocal=1 < enemyLocal)면 제거+전향된다. straggler는 반경 밖이라 전향 대상이 아님을 함께 확인한다.
     /// </summary>
     [Test]
-    public void VictimClaimableByTwoTeams_NearestWins_OtherBudgetRetained()
+    public void Leader_LocallyOutnumbered_EliminatedDespiteDistantStragglers()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0(코너에 몰린 팀): 리더 + 반경 밖 멀리 떨어진 straggler 2명 -> 전역 count 3.
+        buffer.Add(0, 0, true, V(0.0f, 0.0f));
+        buffer.Add(1, 0, false, V(50.0f, 0.0f));
+        buffer.Add(2, 0, false, V(50.0f, 1.0f));
+        // team1(포위): 리더 반경 안 국소 4명 -> 전역 count 4(team0보다 커서 team0이 3단계 aggressor가 되지 않음).
+        buffer.Add(10, 1, true, V(0.5f, 0.0f));
+        buffer.Add(11, 1, false, V(0.4f, 0.3f));
+        buffer.Add(12, 1, false, V(0.3f, -0.3f));
+        buffer.Add(13, 1, false, V(0.6f, 0.3f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+        Assert.AreEqual(1, outcome.Eliminations.Count, "전역 count 3이어도 국소 열세면 리더가 제거되어야 한다");
+        Assert.AreEqual(0, outcome.Eliminations[0].Team, "제거된 팀은 team0");
+        Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "국소 우세 team1이 제거");
+        Assert.AreEqual(0, buffer.Id[outcome.Eliminations[0].LeaderAgentIndex], "제거된 것은 team0 리더 id0");
+        // 방출 전향은 리더 흡수 1건뿐: 반경 밖 straggler는 전향되지 않는다(3단계 무전향, 4단계는 리더만).
+        Assert.AreEqual(1, outcome.Conversions.Count, "반경 밖 straggler는 전향 대상이 아니다");
+        Assert.IsTrue(ContainsConversion(buffer, outcome, 0, 1), "리더는 team1로 흡수 전향");
+    }
+
+    /// <summary>
+    /// 국소 동수(enemyLocal == ownLocal) 대비: 같은 배치에서 LeaderProtection ON이면 동수는 보호(strict >)되어
+    /// 제거되지 않고, OFF면 동수(>=)에도 제거+전향됨을 대조 검증한다. team1 리더는 반경 안 팔로워가 있어 스스로는
+    /// 국소 열세가 아니게 배치해 제거가 team0 리더 하나로 격리된다.
+    /// </summary>
+    [Test]
+    public void Leader_LocalParity_EliminatedInModeOff()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0: 홀로 남은 리더(ownLocal=1).
+        buffer.Add(0, 0, true, V(0.0f, 0.0f));
+        // team1: 리더는 team0 리더 반경 안(거리 0.9) 국소 1명만 보이게, 팔로워는 team0 반경 밖·team1 리더 반경 안(거리 0.6).
+        buffer.Add(10, 1, true, V(0.9f, 0.0f));
+        buffer.Add(11, 1, false, V(1.5f, 0.0f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        // ON: team0 리더 국소 동수(ownLocal=1, enemyLocal[1]=1) -> 보호되어 제거 없음.
+        CombatState stateOn = new CombatState(TeamCount);
+        resolver.Resolve(buffer, grid, Default(), 0.1f, stateOn, outcome);
+        Assert.AreEqual(0, outcome.Eliminations.Count, "ON: 국소 동수는 보호되어 제거되지 않는다");
+
+        // OFF: 같은 배치에서 국소 동수(>=)면 team0 리더가 제거+전향된다.
+        CombatState stateOff = new CombatState(TeamCount);
+        resolver.Resolve(buffer, grid, LeaderProtectionOff(), 0.1f, stateOff, outcome);
+        Assert.AreEqual(1, outcome.Eliminations.Count, "OFF: 국소 동수(>=)면 제거된다");
+        Assert.AreEqual(0, outcome.Eliminations[0].Team, "제거된 팀은 team0");
+        Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "제거자는 team1");
+        Assert.AreEqual(0, buffer.Id[outcome.Eliminations[0].LeaderAgentIndex]);
+        Assert.IsTrue(ContainsConversion(buffer, outcome, 0, 1), "리더는 team1로 흡수 전향");
+    }
+
+    /// <summary>
+    /// [회귀·핵심 버그] 전역적으로 더 크지만 국소 호위가 얇은 crowd의 leader가, 전역적으로 더 작지만 국소로 리더를
+    /// 둘러싼 crowd에게 제거되지 않음을 검증한다. RateLimitConversion=true 첫 호출은 예산이 아직 0이라 3단계 전향이
+    /// 일어나지 않으므로(즉시 전향 모드였다면 큰 팀이 국소 적을 먼저 흡수해 버그가 드러나지 않는다) 국소 밀집한 적이
+    /// 4단계까지 살아남아 국소 열세를 만든다. 전역 가드가 없다면 이 leader가 제거되고, 가드가 있으면 제거되지 않는다
+    /// (가드 적용 전에는 실패, 적용 후 통과).
+    /// </summary>
+    [Test]
+    public void Leader_NotEliminated_ByGloballySmallerButLocallyDenserEnemy()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0(전역 큼, 6명): 리더는 원점, 팔로워 5명은 CombatRadius(1.0) 밖 멀리 => 리더의 국소 호위 = 0.
+        buffer.Add(0, 0, true, V(0.0f, 0.0f));
+        buffer.Add(1, 0, false, V(10.0f, 0.0f));
+        buffer.Add(2, 0, false, V(10.0f, 1.0f));
+        buffer.Add(3, 0, false, V(10.0f, 2.0f));
+        buffer.Add(4, 0, false, V(10.0f, 3.0f));
+        buffer.Add(5, 0, false, V(10.0f, 4.0f));
+        // team1(전역 작음, 3명): team0 리더 국소 반경 안에 밀집 => 국소 3 대 1로 우세.
+        buffer.Add(10, 1, true, V(0.3f, 0.0f));
+        buffer.Add(11, 1, false, V(0.3f, 0.3f));
+        buffer.Add(12, 1, false, V(0.0f, 0.3f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        // clamp01(3/8)=0.375, rate=10, dt=0.1 -> 누적 0.375(<1) => 첫 호출 3단계 전향 없음 => 국소 밀집 적이 4단계까지 유지.
+        resolver.Resolve(buffer, grid, RateLimited(), 0.1f, state, outcome);
+
+        // 전역 가드: team1(전역 3) <= team0(전역 6)이라 국소 우세(3>1)에도 team0 리더는 제거되지 않는다.
+        Assert.AreEqual(0, outcome.Eliminations.Count, "전역적으로 더 큰 crowd의 리더가 더 작은(국소 밀집) crowd에게 먹히면 안 된다");
+        Assert.AreEqual(0, outcome.Conversions.Count, "첫 호출 예산 0이라 3단계 전향도, 4단계 리더 흡수도 없어야 한다");
+    }
+
+    /// <summary>
+    /// [확인] 전역적으로 더 큰 crowd는 접촉한 더 작은 적의 leader를 국소 접촉만으로 제거한다. 이때 작은 적이 반경 밖
+    /// straggler를 둬 전역 count가 1이 아니라 3이어도(과거 "count==1 lone leader만 제거" 규칙이라면 안전했을 것)
+    /// 전역 크기가 결정하므로 제거된다. 전역 가드는 killer가 전역적으로 더 크기만 하면 정상 제거를 막지 않는다.
+    /// </summary>
+    [Test]
+    public void Leader_Eliminated_ByGloballyLargerEnemy_DespiteEnemyStragglers()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team1(피해자, 전역 3): 리더는 원점, straggler 2명은 반경 밖 멀리 => 전역 count 3(>1)이지만 국소는 리더 홀로.
+        buffer.Add(10, 1, true, V(0.0f, 0.0f));
+        buffer.Add(11, 1, false, V(50.0f, 0.0f));
+        buffer.Add(12, 1, false, V(50.0f, 1.0f));
+        // team0(killer, 전역 4): 리더 + 팔로워 3명이 team1 리더를 국소 포위.
+        buffer.Add(0, 0, true, V(0.5f, 0.0f));
+        buffer.Add(1, 0, false, V(0.3f, 0.3f));
+        buffer.Add(2, 0, false, V(0.3f, -0.3f));
+        buffer.Add(3, 0, false, V(0.6f, 0.3f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+        // team0(전역 4) > team1(전역 3)이라 가드 통과 + 국소 4>1 => team1 리더 제거.
+        Assert.AreEqual(1, outcome.Eliminations.Count, "전역적으로 더 큰 crowd는 straggler로 count가 3이어도 작은 적 리더를 제거한다");
+        Assert.AreEqual(1, outcome.Eliminations[0].Team, "제거된 팀은 team1");
+        Assert.AreEqual(0, outcome.Eliminations[0].ByTeam, "제거자는 team0");
+        Assert.AreEqual(10, buffer.Id[outcome.Eliminations[0].LeaderAgentIndex], "제거된 것은 team1 리더 id10");
+        // 반경 밖 straggler는 전향되지 않고, 방출 전향은 리더 흡수 1건뿐(전역 크기가 결정, count==1이 아님).
+        Assert.AreEqual(1, outcome.Conversions.Count, "반경 밖 straggler는 전향 대상이 아니다");
+        Assert.IsTrue(ContainsConversion(buffer, outcome, 10, 0), "리더는 team0로 흡수 전향");
+    }
+
+    /// <summary>
+    /// [회귀] 전역 동수(strict > 가드)면 국소 우세가 있어도 leader가 제거되지 않고, 이는 LeaderProtection ON/OFF 두
+    /// 모드 모두에 적용됨을 검증한다(가드가 토글 바깥). 전역 동수라 3단계 전향도 없어(strict >) 국소 밀집 적이 4단계까지
+    /// 그대로 남지만, 전역 가드가 양쪽에서 제거를 막는다. 가드 도입 전에는 두 모드 모두에서 team0 리더가 제거되었다.
+    /// </summary>
+    [Test]
+    public void EqualGlobalSize_NoLeaderElimination_InBothModes()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0(전역 3): 리더는 원점, 팔로워 2명은 반경 밖 멀리 => 리더 국소 호위 0.
+        buffer.Add(0, 0, true, V(0.0f, 0.0f));
+        buffer.Add(1, 0, false, V(50.0f, 0.0f));
+        buffer.Add(2, 0, false, V(50.0f, 1.0f));
+        // team1(전역 3, 동수): team0 리더 국소 반경 안 밀집 3명 => 국소 3 대 1.
+        buffer.Add(10, 1, true, V(0.3f, 0.0f));
+        buffer.Add(11, 1, false, V(0.3f, 0.3f));
+        buffer.Add(12, 1, false, V(0.0f, 0.3f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        // ON: 전역 동수(3==3)라 국소 우세(3>1)에도 team0 리더 제거 없음.
+        CombatState stateOn = new CombatState(TeamCount);
+        resolver.Resolve(buffer, grid, Default(), 0.1f, stateOn, outcome);
+        Assert.AreEqual(0, outcome.Eliminations.Count, "ON: 전역 동수면 국소 우세여도 제거되지 않는다");
+        Assert.AreEqual(0, outcome.Conversions.Count, "ON: 전역 동수면 전향/흡수 없음");
+
+        // OFF: 같은 배치에서 전역 동수면 국소 동률(>=) 규칙이어도 가드가 우선해 제거 없음(가드는 토글 바깥).
+        CombatState stateOff = new CombatState(TeamCount);
+        resolver.Resolve(buffer, grid, LeaderProtectionOff(), 0.1f, stateOff, outcome);
+        Assert.AreEqual(0, outcome.Eliminations.Count, "OFF: 전역 동수면 가드가 토글보다 우선해 제거되지 않는다");
+        Assert.AreEqual(0, outcome.Conversions.Count, "OFF: 전역 동수면 전향/흡수 없음");
+    }
+
+    /// <summary>
+    /// [RateLimitConversion=true] 여러 승자 팀이 같은 victim을 노리면 가장 가까운 팀이 가져가고, 밀린 팀의 예산은 소모되지 않고 다음 호출로 이월됨을 검증한다.
+    /// </summary>
+    [Test]
+    public void RateLimited_VictimClaimableByTwoTeams_NearestWins_OtherBudgetRetained()
     {
         AgentBuffer buffer = new AgentBuffer(Cap);
         // team2(패자): victim v(id 100)는 원점, 리더(id 101)는 멀리.
@@ -442,7 +647,7 @@ public sealed class CombatResolverTests
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
         CombatState state = new CombatState(TeamCount);
         CombatOutcome outcome = new CombatOutcome(Cap);
-        SimTuning tuning = Default();
+        SimTuning tuning = RateLimited();
 
         // pairs(0,2)=pairs(1,2)=4 -> clamp 0.5, rate 5, dt=0.06 -> 0.3/호출(<1).
         // Phase 1: 6호출. v는 매번 team0(더 가까움)에 배정 -> (1,2) 예산은 victim 없어 미달로 이월.
@@ -509,6 +714,249 @@ public sealed class CombatResolverTests
         Assert.AreEqual(3, outcome.Conversions[0].ToTeam);
     }
 
+    /// <summary>
+    /// [RateLimitConversion=false] 큰 팀과 접촉한 작은 팀의 non-leader member 전원이 단 한 번의 Resolve 호출에서 모두 전향함을 검증한다(접촉 즉시 전향).
+    /// 작은 팀 리더는 반경 밖에 두어 이 호출에서 전향/제거되지 않게 해 팔로워 즉시 전향만 분리 검증한다.
+    /// </summary>
+    [Test]
+    public void Instant_AllContactingFollowers_ConvertInSingleCall()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0(승자): 6명(리더 1 + 팔로워 5), 원점 부근 밀집.
+        buffer.Add(0, 0, true, V(0.00f, 0.00f));
+        buffer.Add(1, 0, false, V(0.10f, 0.00f));
+        buffer.Add(2, 0, false, V(0.20f, 0.00f));
+        buffer.Add(3, 0, false, V(0.00f, 0.10f));
+        buffer.Add(4, 0, false, V(0.10f, 0.10f));
+        buffer.Add(5, 0, false, V(0.20f, 0.10f));
+        // team1(패자, 4명): 리더는 반경 밖(멀리), 팔로워 3명은 team0과 접촉.
+        buffer.Add(6, 1, true, V(50.0f, 50.0f));
+        buffer.Add(7, 1, false, V(0.30f, 0.00f));
+        buffer.Add(8, 1, false, V(0.30f, 0.10f));
+        buffer.Add(9, 1, false, V(0.10f, 0.20f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        // 단 한 번의 호출로 접촉한 팔로워 3명이 모두 team0으로 전향한다.
+        resolver.Resolve(buffer, grid, Default(), 0.03f, state, outcome);
+
+        Assert.AreEqual(3, outcome.Conversions.Count, "접촉한 team1 팔로워 전원이 한 호출에 전향해야 한다");
+        Assert.AreEqual(0, outcome.Eliminations.Count, "team1 리더는 반경 밖이라 제거되지 않는다");
+        for (int i = 0; i < outcome.Conversions.Count; i++)
+        {
+            CrowdConversion c = outcome.Conversions[i];
+            Assert.AreEqual(1, buffer.Team[c.AgentIndex], "victim은 team1 소속이어야 한다");
+            Assert.IsFalse(buffer.IsLeader[c.AgentIndex], "리더는 전향 대상이 아니다");
+            Assert.AreEqual(0, c.ToTeam, "전향 대상 팀은 team0");
+        }
+    }
+
+    /// <summary>
+    /// [RateLimitConversion=false] 작은 팀(3명)이 훨씬 큰 팀(10명)에게 반경 안에서 완전히 포위되면, 팔로워 전원 즉시 전향 후
+    /// 홀로 남은 리더도 같은 호출의 제거 pass에서 흡수되어 팀 전체가 한 번에 사라짐을 검증한다.
+    /// (제거 pass가 같은 호출의 전향 결과를 반영하는 것은 기존 동작이며, 즉시 전향으로 첫 호출에 lone-leader 조건이 성립한다.)
+    /// </summary>
+    [Test]
+    public void Instant_SmallTeamSurrounded_AllMembersFlipInSingleCall()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0(작은 팀, 3명): 리더 + 팔로워 2, 중심에 밀집.
+        buffer.Add(100, 0, true, V(0.00f, 0.00f));
+        buffer.Add(101, 0, false, V(0.10f, 0.00f));
+        buffer.Add(102, 0, false, V(0.00f, 0.10f));
+        // team1(큰 팀, 10명): 리더 1 + 팔로워 9, 작은 팀을 반경 안에서 포위.
+        buffer.Add(0, 1, true, V(0.40f, 0.40f));
+        buffer.Add(1, 1, false, V(0.30f, 0.00f));
+        buffer.Add(2, 1, false, V(0.30f, 0.10f));
+        buffer.Add(3, 1, false, V(0.30f, 0.20f));
+        buffer.Add(4, 1, false, V(0.00f, 0.30f));
+        buffer.Add(5, 1, false, V(0.10f, 0.30f));
+        buffer.Add(6, 1, false, V(0.20f, 0.30f));
+        buffer.Add(7, 1, false, V(-0.10f, 0.00f));
+        buffer.Add(8, 1, false, V(-0.10f, 0.10f));
+        buffer.Add(9, 1, false, V(-0.20f, 0.00f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        resolver.Resolve(buffer, grid, Default(), 0.03f, state, outcome);
+
+        // 팔로워 2명 즉시 전향 + 홀로 남은 리더 제거 흡수 전향 1건 = 전향 3건.
+        Assert.AreEqual(3, outcome.Conversions.Count, "작은 팀 3명 전원이 team1로 전향");
+        Assert.AreEqual(1, outcome.Eliminations.Count, "포위된 lone leader는 같은 호출에 제거된다");
+        Assert.AreEqual(0, outcome.Eliminations[0].Team, "제거된 팀은 team0");
+        Assert.AreEqual(1, outcome.Eliminations[0].ByTeam, "제거자는 team1");
+        Assert.AreEqual(100, buffer.Id[outcome.Eliminations[0].LeaderAgentIndex], "제거된 것은 team0 리더 id100");
+        for (int i = 0; i < outcome.Conversions.Count; i++)
+        {
+            Assert.AreEqual(1, outcome.Conversions[i].ToTeam, "전향 대상은 team1");
+        }
+    }
+
+    /// <summary>
+    /// [RateLimitConversion=false] 여러 승자 팀이 같은 victim에 접촉하면 가장 가까운 팀이 배타적으로 victim을 즉시 가져감을 검증한다(배타 배정 + 즉시 전향).
+    /// </summary>
+    [Test]
+    public void Instant_VictimClaimableByTwoTeams_NearestWins()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team2(패자): victim v(id 100)는 원점, 리더(id 101)는 멀리.
+        buffer.Add(100, 2, false, V(0.0f, 0.0f));
+        buffer.Add(101, 2, true, V(40.0f, 40.0f));
+        // team0(승자 A): v에 거리 ~0.3로 더 가까운 4명 밀집.
+        buffer.Add(0, 0, true, V(0.30f, 0.00f));
+        buffer.Add(1, 0, false, V(0.35f, 0.00f));
+        buffer.Add(2, 0, false, V(0.30f, 0.05f));
+        buffer.Add(3, 0, false, V(0.35f, 0.05f));
+        // team1(승자 B): v에 거리 ~0.6로 더 먼 4명 밀집.
+        buffer.Add(10, 1, true, V(0.00f, 0.60f));
+        buffer.Add(11, 1, false, V(0.05f, 0.60f));
+        buffer.Add(12, 1, false, V(0.00f, 0.65f));
+        buffer.Add(13, 1, false, V(0.05f, 0.65f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        // 한 번의 호출로 v는 더 가까운 team0에만 배타 배정되어 즉시 전향한다.
+        resolver.Resolve(buffer, grid, Default(), 0.06f, state, outcome);
+        Assert.IsTrue(ContainsConversion(buffer, outcome, 100, 0), "더 가까운 team0가 v를 즉시 가져간다");
+        Assert.IsFalse(ContainsConversion(buffer, outcome, 100, 1), "동시에 team1으로는 전향되지 않는다(배타 배정)");
+    }
+
+    /// <summary>
+    /// [LeaderProtection=false] 전역 가드 추가 후: 전역 동수(각 count=1)로 접촉한 lone leader 둘은 OFF 모드(>=)여도
+    /// 서로를 제거하지 못한다. 전역 가드가 strict >라 전역 동수는 어느 쪽도 제거자 자격을 얻지 못하고(가드가 ON/OFF
+    /// 토글보다 우선), 따라서 상호/순환 제거 쌍이 방출되지 않는다. 전역 count가 전순서를 이루므로 제거는 acyclic이다
+    /// (A가 B를 제거하려면 count[A]>count[B]라 A,B 상호 제거는 불가능). 가드 도입 전 이 배치는 순환 쌍을 방출했다.
+    /// </summary>
+    [Test]
+    public void ModeOff_EqualGlobalLoneLeaders_NoCyclicElimination()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0, team1의 lone leader가 CombatRadius(1.0) 안(거리 0.5)에서 접촉. 각 전역 count=1로 동수.
+        buffer.Add(0, 0, true, V(0.0f, 0.0f));
+        buffer.Add(1, 1, true, V(0.5f, 0.0f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        resolver.Resolve(buffer, grid, LeaderProtectionOff(), 0.1f, state, outcome);
+
+        // 전역 동수(strict > 가드)라 OFF(>=) 국소 동수여도 어느 쪽도 제거되지 않는다: 순환 제거 쌍이 생기지 않는다.
+        Assert.AreEqual(0, outcome.Eliminations.Count, "전역 동수 lone leader 둘은 OFF 모드여도 서로 제거되지 않는다(전역 가드가 토글보다 우선)");
+        Assert.AreEqual(0, outcome.Conversions.Count);
+    }
+
+    /// <summary>
+    /// [LeaderProtection=true] 한 번의 Resolve가 비순환 체인 제거(team2가 team0에게, team0이 team1에게 제거되고
+    /// team1은 생존)를 방출함을 검증한다. 즉 중간 팀 team0이 자기도 이번 tick에 제거되면서 동시에 team2의 killer로
+    /// 기록된다. 이 형태가 CommitOutcomes의 BUG 2(제거된 중간 팀에 ex-리더/팔로워가 남는 zombie) 트리거다.
+    /// 주의: 여기서는 resolver 방출 "기록"만 검증한다. 체인을 최종 live 생존 팀(team1)까지 해소하는 CommitOutcomes
+    /// 로직은 CrowdRoot 소관이라 이 유닛 테스트 범위 밖이며 Unity Test Runner + 플레이테스트로 확인해야 한다.
+    /// </summary>
+    [Test]
+    public void ChainElimination_MiddleTeamAlsoEliminated_EmitsChainRecords()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team1(생존, 국소 강): 리더 + 원점 팔로워 2 + 반경 밖 팔로워 1. 원점 밀집 3명이 team0 리더를 국소 열세로
+        // 만들고, 전역 count 4 > team0 전역 count 3이라 전역 가드를 통과해 team0 리더의 killer가 될 수 있다.
+        buffer.Add(10, 1, true, V(0.0f, 0.0f));
+        buffer.Add(11, 1, false, V(0.2f, 0.0f));
+        buffer.Add(12, 1, false, V(0.0f, 0.2f));
+        buffer.Add(13, 1, false, V(100.0f, 100.0f));
+        // team0(중간): 리더는 team1 국소 반경 안(거리 0.6)이라 team1에게 제거된다.
+        buffer.Add(0, 0, true, V(0.6f, 0.0f));
+        // team0의 팔로워 2명은 멀리 떨어진 team2 리더 옆에 두어, team2를 국소 열세로 만들되 team0 리더 판정에는 안 잡히게 한다.
+        buffer.Add(1, 0, false, V(2.7f, 0.0f));
+        buffer.Add(2, 0, false, V(3.0f, 0.3f));
+        // team2(lone leader): team0 팔로워 2명에게 국소 포위(거리 0.3)되어 team0에게 제거된다. team1/team0 리더와는 비접촉.
+        buffer.Add(20, 2, true, V(3.0f, 0.0f));
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+        // 체인: team2 -> team0 -> team1(생존). 중간 team0이 자기도 제거되면서 team2의 killer로 기록된다.
+        Assert.AreEqual(2, outcome.Eliminations.Count, "team2와 team0 둘이 제거되어야 한다(team1은 생존)");
+        Assert.IsTrue(ContainsElimination(outcome, 2, 0), "team2가 team0에게 제거되는 기록(중간 팀이 killer)");
+        Assert.IsTrue(ContainsElimination(outcome, 0, 1), "team0가 team1에게 제거되는 기록(중간 팀도 제거됨)");
+        for (int i = 0; i < outcome.Eliminations.Count; i++)
+        {
+            Assert.AreNotEqual(1, outcome.Eliminations[i].Team, "team1은 생존해야 한다(제거 기록에 없음)");
+        }
+    }
+
+    /// <summary>
+    /// [스케일 인지] 스케일 1.5인 승자 팀 유닛은 base CombatRadius(1.0)를 넘는 거리(1.1 &lt; radius*1.25=1.25)의 적을
+    /// pair 평균 반경으로 접촉해 전향시킨다. 같은 배치에서 스케일 1이면(대조 테스트) pair 반경이 radius로 줄어 접촉하지 못한다.
+    /// </summary>
+    [Test]
+    public void SizeAware_LargeUnit_ConvertsEnemyBeyondBaseRadius()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0(승자, 3명 > team1 2명):
+        buffer.Add(0, 0, true, V(40.0f, 40.0f));           // 리더: 멀리(stage-4 리더 제거 배제, 접촉 유닛 아님).
+        buffer.Add(1, 0, false, V(1.1f, 0.0f), 1.5f);      // 큰 유닛(스케일 1.5): victim에 거리 1.1(radius 1.0 초과, radius*1.25=1.25 이내).
+        buffer.Add(2, 0, false, V(41.0f, 40.0f), 1.5f);    // 멀리(count 채우기).
+        // team1(패자, 2명):
+        buffer.Add(10, 1, false, V(0.0f, 0.0f));           // victim(스케일 1): 원점.
+        buffer.Add(11, 1, true, V(50.0f, 50.0f));          // 리더: 멀리.
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        // pairR = radius*0.5*(1.5+1.0)=1.25 > 1.1 => 접촉. team0(3)>team1(2) => victim 전향.
+        resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+        Assert.AreEqual(0, outcome.Eliminations.Count, "멀리 떨어진 리더들은 제거되지 않는다");
+        Assert.AreEqual(1, outcome.Conversions.Count, "큰 유닛(1.5)은 radius를 넘는 1.1 거리의 적을 접촉·전향시킨다");
+        CrowdConversion c = outcome.Conversions[0];
+        Assert.AreEqual(10, buffer.Id[c.AgentIndex], "victim은 team1 follower id10");
+        Assert.AreEqual(0, c.ToTeam, "전향 대상 팀은 team0");
+    }
+
+    /// <summary>
+    /// [스케일 인지 대조] 위 배치에서 접촉 유닛이 스케일 1이면 pair 반경이 base radius(1.0)로 줄어 거리 1.1 적을 접촉하지
+    /// 못하고 전향이 일어나지 않는다(스케일 1 pair는 기존 base radius 경계를 그대로 쓴다).
+    /// </summary>
+    [Test]
+    public void SizeAware_BaselineUnit_DoesNotConvertBeyondBaseRadius()
+    {
+        AgentBuffer buffer = new AgentBuffer(Cap);
+        // team0(승자, 3명 > team1 2명):
+        buffer.Add(0, 0, true, V(40.0f, 40.0f));           // 리더: 멀리.
+        buffer.Add(1, 0, false, V(1.1f, 0.0f));            // 접촉 유닛(스케일 1, 기본): victim에 거리 1.1(base radius 1.0 초과).
+        buffer.Add(2, 0, false, V(41.0f, 40.0f));          // 멀리(count 채우기).
+        // team1(패자, 2명):
+        buffer.Add(10, 1, false, V(0.0f, 0.0f));           // victim(스케일 1): 원점.
+        buffer.Add(11, 1, true, V(50.0f, 50.0f));          // 리더: 멀리.
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+
+        // pairR = radius*0.5*(1.0+1.0)=1.0 < 1.1 => 접촉 없음 => 전향 없음.
+        resolver.Resolve(buffer, grid, Default(), 0.1f, state, outcome);
+
+        Assert.AreEqual(0, outcome.Conversions.Count, "스케일 1 유닛은 base radius(1.0) 밖 1.1 거리 적을 접촉하지 못한다");
+        Assert.AreEqual(0, outcome.Eliminations.Count);
+    }
+
     // ---- helpers ----
 
     private static CrowdConversion ResolveUntilFirstConversion(
@@ -534,6 +982,20 @@ public sealed class CombatResolverTests
         {
             CrowdConversion c = outcome.Conversions[i];
             if (buffer.Id[c.AgentIndex] == agentId && c.ToTeam == toTeam)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsElimination(CombatOutcome outcome, int team, int byTeam)
+    {
+        for (int i = 0; i < outcome.Eliminations.Count; i++)
+        {
+            CrowdElimination e = outcome.Eliminations[i];
+            if (e.Team == team && e.ByTeam == byTeam)
             {
                 return true;
             }

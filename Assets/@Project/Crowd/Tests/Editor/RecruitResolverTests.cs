@@ -52,7 +52,7 @@ public sealed class RecruitResolverTests
             buffer.Add(1, 0, true, V(0.5f, 0f));
             SpatialGrid grid = NewGrid(buffer);
 
-            resolver.Resolve(buffer, grid, Radius, results);
+            resolver.Resolve(buffer, grid, Radius, 1f, results);
             Assert.AreEqual(1, results.Count);
             Assert.AreEqual(0, results[0].ToTeam);
             Assert.AreEqual(0, buffer.Id[results[0].AgentIndex]);
@@ -65,7 +65,7 @@ public sealed class RecruitResolverTests
             buffer.Add(1, 0, true, V(5f, 0f));
             SpatialGrid grid = NewGrid(buffer);
 
-            resolver.Resolve(buffer, grid, Radius, results);
+            resolver.Resolve(buffer, grid, Radius, 1f, results);
             Assert.AreEqual(0, results.Count);
         }
     }
@@ -84,7 +84,7 @@ public sealed class RecruitResolverTests
 
         RecruitResolver resolver = new RecruitResolver();
         List<RecruitAssignment> results = new List<RecruitAssignment>();
-        resolver.Resolve(buffer, grid, Radius, results);
+        resolver.Resolve(buffer, grid, Radius, 1f, results);
 
         Assert.AreEqual(1, results.Count);
         Assert.AreEqual(1, ToTeamOf(buffer, results, 0), "가까운 team1로 합류");
@@ -106,7 +106,7 @@ public sealed class RecruitResolverTests
 
             RecruitResolver resolver = new RecruitResolver();
             List<RecruitAssignment> results = new List<RecruitAssignment>();
-            resolver.Resolve(buffer, grid, Radius, results);
+            resolver.Resolve(buffer, grid, Radius, 1f, results);
             Assert.AreEqual(1, results.Count);
             Assert.AreEqual(0, ToTeamOf(buffer, results, 0), "동률이면 낮은 Id(1)의 team0");
         }
@@ -121,7 +121,7 @@ public sealed class RecruitResolverTests
 
             RecruitResolver resolver = new RecruitResolver();
             List<RecruitAssignment> results = new List<RecruitAssignment>();
-            resolver.Resolve(buffer, grid, Radius, results);
+            resolver.Resolve(buffer, grid, Radius, 1f, results);
             Assert.AreEqual(1, results.Count);
             Assert.AreEqual(1, ToTeamOf(buffer, results, 0), "동률이면 낮은 Id(2)의 team1");
         }
@@ -142,7 +142,7 @@ public sealed class RecruitResolverTests
             SpatialGrid grid = NewGrid(buffer);
             RecruitResolver resolver = new RecruitResolver();
             List<RecruitAssignment> results = new List<RecruitAssignment>();
-            resolver.Resolve(buffer, grid, Radius, results);
+            resolver.Resolve(buffer, grid, Radius, 1f, results);
             forwardResult = ToTeamOf(buffer, results, 0);
         }
 
@@ -155,7 +155,7 @@ public sealed class RecruitResolverTests
             SpatialGrid grid = NewGrid(buffer);
             RecruitResolver resolver = new RecruitResolver();
             List<RecruitAssignment> results = new List<RecruitAssignment>();
-            resolver.Resolve(buffer, grid, Radius, results);
+            resolver.Resolve(buffer, grid, Radius, 1f, results);
             reversedResult = ToTeamOf(buffer, results, 0);
         }
 
@@ -179,11 +179,65 @@ public sealed class RecruitResolverTests
 
         RecruitResolver resolver = new RecruitResolver();
         List<RecruitAssignment> results = new List<RecruitAssignment>();
-        resolver.Resolve(buffer, grid, Radius, results);
+        resolver.Resolve(buffer, grid, Radius, 1f, results);
 
         Assert.AreEqual(2, results.Count, "합류 가능한 중립은 2명");
         Assert.AreEqual(0, ToTeamOf(buffer, results, 0));
         Assert.AreEqual(1, ToTeamOf(buffer, results, 1));
         Assert.AreEqual(int.MinValue, ToTeamOf(buffer, results, 2), "고립된 중립은 claim 없음");
+    }
+
+    /// <summary>
+    /// [스케일 인지] 큰 중립(또는 큰 recruiter)은 pair 평균 반경으로 base recruitRadius(1.2)를 넘는 거리에서 영입되고,
+    /// 스케일 1 중립은 base 경계를 그대로 쓴다. base radius(1.2) &lt; 거리 1.35 &lt; pairR(1.2*1.25=1.5)로 대조한다.
+    /// </summary>
+    [Test]
+    public void SizeAware_LargeNeutralOrRecruiter_RecruitedBeyondBaseRadius()
+    {
+        const float MaxScale = 1.5f;
+
+        // (a) 큰 중립(스케일 1.5): pairR = 1.2*0.5*(1.5+1.0)=1.5 > 1.35 => 영입된다.
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f), 1.5f);
+            buffer.Add(1, 0, true, V(1.35f, 0f)); // 스케일 1 recruiter, 거리 1.35.
+            SpatialGrid grid = NewGrid(buffer);
+
+            RecruitResolver resolver = new RecruitResolver();
+            List<RecruitAssignment> results = new List<RecruitAssignment>();
+            resolver.Resolve(buffer, grid, Radius, MaxScale, results);
+
+            Assert.AreEqual(1, results.Count, "큰 중립(1.5)은 base radius를 넘는 1.35 거리에서 영입된다");
+            Assert.AreEqual(0, ToTeamOf(buffer, results, 0), "team0로 합류");
+        }
+
+        // (b) 대조: 스케일 1 중립은 pairR = 1.2 < 1.35 => 영입되지 않는다(base 경계 유지).
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
+            buffer.Add(1, 0, true, V(1.35f, 0f));
+            SpatialGrid grid = NewGrid(buffer);
+
+            RecruitResolver resolver = new RecruitResolver();
+            List<RecruitAssignment> results = new List<RecruitAssignment>();
+            resolver.Resolve(buffer, grid, Radius, MaxScale, results);
+
+            Assert.AreEqual(0, results.Count, "스케일 1 중립은 base radius(1.2) 밖 1.35 거리에서 영입되지 않는다");
+        }
+
+        // (c) 큰 recruiter: 스케일 1 중립도 스케일 1.5 member에게는 pairR = 1.5 > 1.35 => 영입된다(recruiter 쪽 스케일도 도달 거리를 늘린다).
+        {
+            AgentBuffer buffer = new AgentBuffer(Cap);
+            buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
+            buffer.Add(1, 0, false, V(1.35f, 0f), 1.5f); // 스케일 1.5 recruiter(영입된 큰 member는 최대 스케일까지 가능).
+            SpatialGrid grid = NewGrid(buffer);
+
+            RecruitResolver resolver = new RecruitResolver();
+            List<RecruitAssignment> results = new List<RecruitAssignment>();
+            resolver.Resolve(buffer, grid, Radius, MaxScale, results);
+
+            Assert.AreEqual(1, results.Count, "스케일 1.5 recruiter는 1.35 거리 중립을 영입한다");
+            Assert.AreEqual(0, ToTeamOf(buffer, results, 0), "team0로 합류");
+        }
     }
 }
