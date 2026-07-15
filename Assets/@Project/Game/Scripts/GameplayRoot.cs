@@ -42,7 +42,8 @@ public sealed class GameplayRoot : MonoBehaviour
         GameConfigSO config,
         GameObject humanPrefab,
         Camera mainCamera,
-        Transform cityRoot)
+        Transform cityRoot,
+        Material buildingOccludedMaterial)
     {
         if (_initialized)
         {
@@ -62,7 +63,7 @@ public sealed class GameplayRoot : MonoBehaviour
         // ② 각 root를 고정된 순서로 초기화한다. bus 구독은 전부 여기서 등록된다.
         _inputRoot.Initialize(config);
         _crowdRoot.Initialize(config, humanPrefab, cityRoot);
-        _cameraRoot.Initialize(mainCamera, config);
+        _cameraRoot.Initialize(mainCamera, config, cityRoot, buildingOccludedMaterial);
         _hudRoot.Initialize(_session, config, mainCamera);
 
         // ③ session의 bus 구독을 등록한다.

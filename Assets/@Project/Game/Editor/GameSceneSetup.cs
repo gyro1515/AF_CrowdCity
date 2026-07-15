@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using UnityEditor;
 using UnityEditor.Animations;
@@ -15,6 +16,122 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public static class GameSceneSetup
 {
+    private sealed class ScenePreflight
+    {
+        internal GameObject GameArea;
+        internal Transform HumanWrapper;
+        internal Transform HumanBase;
+        internal Transform City;
+        internal Camera MainCamera;
+        internal CityBuildingsGenerator.ScenePlan Buildings;
+        internal GameSceneController Controller;
+    }
+
+    private sealed class SceneFileTransaction : IDisposable
+    {
+        private readonly byte[] _sceneBytes;
+        private readonly byte[] _metaBytes;
+        private bool _completed;
+
+        internal SceneFileTransaction()
+        {
+            string scenePath = ToAbsolutePath(ScenePath);
+            string metaPath = scenePath + ".meta";
+            _sceneBytes = File.ReadAllBytes(scenePath);
+            _metaBytes = File.Exists(metaPath) ? File.ReadAllBytes(metaPath) : null;
+        }
+
+        internal void Commit()
+        {
+            _completed = true;
+        }
+
+        internal void RestoreAndReload()
+        {
+            if (_completed)
+            {
+                return;
+            }
+
+            string scenePath = ToAbsolutePath(ScenePath);
+            string metaPath = scenePath + ".meta";
+            File.WriteAllBytes(scenePath, _sceneBytes);
+            if (_metaBytes == null)
+            {
+                if (File.Exists(metaPath))
+                {
+                    File.Delete(metaPath);
+                }
+            }
+            else
+            {
+                File.WriteAllBytes(metaPath, _metaBytes);
+            }
+
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            _completed = true;
+        }
+
+        public void Dispose()
+        {
+            RestoreAndReload();
+        }
+    }
+
+    internal static Action<GameSceneController> AfterLocalSceneSaveForTests;
+
+    internal static void ApplyCityBuildingsForTests()
+    {
+        ApplyCityBuildings();
+    }
+
+    internal static GameSceneController ConvergeControllerAfterCityPreflightForTests()
+    {
+        Scene scene = SceneManager.GetActiveScene();
+        if (scene.path != ScenePath)
+        {
+            throw new InvalidOperationException($"[GameSceneSetup] test에는 '{ScenePath}'가 필요합니다.");
+        }
+
+        CityBuildingsGenerator.GenerationPlan plan = CityBuildingsGenerator.CreateValidatedPlan();
+        ScenePreflight preflight = CreateScenePreflight(scene, false, false);
+        CityBuildingsGenerator.GeneratedAssets assets = CityBuildingsGenerator.LoadFullyConvergedAssets(plan);
+        CityBuildingsGenerator.ValidateFullyConvergedScene(preflight.Buildings, assets);
+
+        GameConfigSO config = AssetDatabase.LoadAssetAtPath<GameConfigSO>(ConfigPath);
+        GameObject humanPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath);
+        if (config == null || humanPrefab == null)
+        {
+            throw new InvalidOperationException("[GameSceneSetup] controller converge test asset이 없습니다.");
+        }
+
+        List<string> changed = new List<string>();
+        List<string> unchanged = new List<string>();
+        ConvergeSceneController(
+            scene,
+            config,
+            humanPrefab,
+            preflight.MainCamera,
+            preflight.City,
+            assets.OccludedMaterial,
+            changed,
+            unchanged);
+
+        GameObject controllerGo = FindSceneRoot(scene, ControllerGoName);
+        return controllerGo != null ? controllerGo.GetComponent<GameSceneController>() : null;
+    }
+
+    internal static bool LocalCityPreflightFindsControllerForTests()
+    {
+        Scene scene = SceneManager.GetActiveScene();
+        CityBuildingsGenerator.GenerationPlan plan = CityBuildingsGenerator.CreateValidatedPlan();
+        CityBuildingsGenerator.PreflightConvergence(plan);
+        ScenePreflight preflight = CreateScenePreflight(scene, false, false);
+        PreflightCityColliderTargets(preflight.City);
+        return preflight.Controller != null;
+    }
+
     private const string ScenePath = "Assets/@Project/Scenes/GameScene.unity";
     private const string FbxPath = "Assets/@Project/Human/Externals/Human_Base.fbx";
     private const string AnimationsFolder = "Assets/@Project/Human/Animations";
@@ -44,10 +161,9 @@ public static class GameSceneSetup
         "Team_Neutral.mat",
     };
 
-    // MeshCollider를 가져야 하는 City 자식. 이 밖의 자식(Ground, RoadMarks)은 collider가 없어야 한다.
+    // 직접 MeshCollider를 가져야 하는 결합 City 자식. Buildings는 generator가 자식 37개의 collider를 소유한다.
     private static readonly string[] ColliderChildNames =
     {
-        "Buildings",
         "StreetProps",
         "Vehicles",
         "Parks",
@@ -68,6 +184,28 @@ public static class GameSceneSetup
                 $"[GameSceneSetup] '{ScenePath}'가 열려 있어야 합니다. 현재 활성 씬: '{scene.path}'");
         }
 
+        // Full Setup은 City를 절대 변경하지 않는다. City가 이미 완전 수렴했는지 먼저 읽기 전용 검사한다.
+        CityBuildingsGenerator.GenerationPlan buildingPlan;
+        CityBuildingsGenerator.GeneratedAssets buildingAssets;
+        ScenePreflight preflight;
+        try
+        {
+            buildingPlan = CityBuildingsGenerator.CreateValidatedPlan();
+            preflight = CreateScenePreflight(scene, false, false);
+            buildingAssets = CityBuildingsGenerator.LoadFullyConvergedAssets(buildingPlan);
+            CityBuildingsGenerator.ValidateFullyConvergedScene(preflight.Buildings, buildingAssets);
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] City 건물 생성 상태가 완전히 수렴하지 않았습니다. " +
+                "다른 asset을 수정하기 전에 'AF/CrowdCity/Setup City Buildings'를 먼저 실행하세요.",
+                exception);
+        }
+
+        preflight = CreateScenePreflight(scene, false, true);
+        PreflightHumanAssets();
+
         List<string> changed = new List<string>(16);
         List<string> unchanged = new List<string>(16);
 
@@ -87,39 +225,339 @@ public static class GameSceneSetup
         // 5(후행). config에 팀 material 배선.
         WireConfigMaterials(config, teamMaterials, changed, unchanged);
 
-        // 4 + 6. 씬 오브젝트 수렴(없으면 예외).
-        GameObject gameArea = RequireSceneRoot(scene, GameAreaName);
-        Transform humanWrapper = RequireChild(gameArea.transform, HumanWrapperName);
-        Transform humanBase = RequireChild(humanWrapper, HumanBaseName);
-        Transform city = RequireChild(gameArea.transform, CityName);
-        Camera mainCamera = RequireMainCamera(scene);
-
-        bool sceneChanged = false;
-        sceneChanged |= ConvergeHumanAnimator(humanBase, animatorController, changed, unchanged);
-        sceneChanged |= ConvergeCityColliders(city, changed, unchanged);
-
-        // 4b. 완전히 구성된 씬 템플릿(Animator/controller/material 반영)을 prefab asset으로 저장하고
-        //     씬 템플릿을 비활성화한다. 런타임은 이 prefab을 clone한다(씬 템플릿 의존 제거).
-        GameObject humanPrefab = ConvergeHumanPrefab(humanWrapper, ref sceneChanged, changed);
-
-        sceneChanged |= ConvergeSceneController(scene, config, humanPrefab, mainCamera, city, changed, unchanged);
-
-        // 7. 바뀐 것이 있을 때만 저장한다.
-        if (sceneChanged)
+        int undoGroup = BeginSceneUndo("Setup CrowdCity Game Scene");
+        try
         {
-            EditorSceneManager.MarkSceneDirty(scene);
-            if (!EditorSceneManager.SaveScene(scene))
-            {
-                throw new InvalidOperationException($"[GameSceneSetup] 씬 저장에 실패했습니다: {ScenePath}");
-            }
+            bool sceneChanged = false;
+            sceneChanged |= ConvergeHumanAnimator(preflight.HumanBase, animatorController, changed, unchanged);
+
+            // 4b. 완전히 구성된 씬 템플릿을 prefab asset으로 저장하고 씬 템플릿을 비활성화한다.
+            GameObject humanPrefab = ConvergeHumanPrefab(preflight.HumanWrapper, ref sceneChanged, changed);
+
+            sceneChanged |= ConvergeSceneController(
+                scene,
+                config,
+                humanPrefab,
+                preflight.MainCamera,
+                preflight.City,
+                buildingAssets.OccludedMaterial,
+                changed,
+                unchanged);
+
+            SaveDirtyAssets(animatorController, config, teamMaterials);
+            SaveSceneIfChanged(scene, sceneChanged);
+            Undo.CollapseUndoOperations(undoGroup);
         }
-
-        if (changed.Count > 0)
+        catch
         {
-            AssetDatabase.SaveAssets();
+            Undo.RevertAllDownToGroup(undoGroup);
+            throw;
         }
 
         Debug.Log(BuildSummary(changed, unchanged));
+    }
+
+    /// <summary>
+    /// 기존 Human/Config setup을 다시 저장하지 않고 City 건물 생성 결과와 가림용 material 배선만 수렴시킨다.
+    /// </summary>
+    [MenuItem("AF/CrowdCity/Setup City Buildings")]
+    private static void ApplyCityBuildings()
+    {
+        Scene scene = SceneManager.GetActiveScene();
+        if (SceneManager.sceneCount != 1 || scene.path != ScenePath)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] Local City Setup은 additive scene 없이 '{ScenePath}' 하나만 열려 있어야 합니다. " +
+                $"현재 scene 수={SceneManager.sceneCount}, 활성 씬='{scene.path}'");
+        }
+
+        if (scene.isDirty)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] City 건물 Setup 전에 GameScene의 기존 변경을 먼저 저장하세요.");
+        }
+
+        CityBuildingsGenerator.GenerationPlan buildingPlan = CityBuildingsGenerator.CreateValidatedPlan();
+        CityBuildingsGenerator.PreflightConvergence(buildingPlan);
+        ScenePreflight preflight = CreateScenePreflight(scene, false, false);
+        PreflightCityColliderTargets(preflight.City);
+        List<string> changed = new List<string>(16);
+        List<string> unchanged = new List<string>(16);
+
+        CityBuildingsGenerator.GeneratedAssetsTransaction assetTransaction = null;
+        SceneFileTransaction sceneTransaction = new SceneFileTransaction();
+        int undoGroup = BeginSceneUndo("Setup City Buildings");
+        try
+        {
+            assetTransaction = CityBuildingsGenerator.BeginConvergeAssets(buildingPlan, changed, unchanged);
+            CityBuildingsGenerator.GeneratedAssets buildingAssets = assetTransaction.Assets;
+            bool sceneChanged = CityBuildingsGenerator.ConvergeScene(
+                preflight.Buildings, buildingAssets, changed, unchanged);
+            sceneChanged |= ConvergeCityColliders(preflight.City, changed, unchanged);
+
+            if (preflight.Controller != null)
+            {
+                SerializedObject serialized = new SerializedObject(preflight.Controller);
+                if (SetObjectReference(serialized, "buildingOccludedMaterial", buildingAssets.OccludedMaterial))
+                {
+                    serialized.ApplyModifiedProperties();
+                    sceneChanged = true;
+                    changed.Add("씬: GameSceneController 건물 가림 material 배선");
+                }
+                else
+                {
+                    unchanged.Add("씬: GameSceneController 건물 가림 material 배선");
+                }
+            }
+            else
+            {
+                unchanged.Add("씬: GameSceneController 없음(Full Setup에서 생성/배선)");
+            }
+
+            SaveSceneIfChanged(scene, sceneChanged);
+            if (AfterLocalSceneSaveForTests != null)
+            {
+                AfterLocalSceneSaveForTests(preflight.Controller);
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+            assetTransaction.Commit();
+            sceneTransaction.Commit();
+        }
+        catch (Exception failure)
+        {
+            List<Exception> rollbackFailures = new List<Exception>();
+            TryRollback(() => Undo.RevertAllDownToGroup(undoGroup), rollbackFailures);
+            if (assetTransaction != null)
+            {
+                TryRollback(assetTransaction.Dispose, rollbackFailures);
+            }
+            TryRollback(sceneTransaction.RestoreAndReload, rollbackFailures);
+
+            if (rollbackFailures.Count > 0)
+            {
+                rollbackFailures.Insert(0, failure);
+                throw new AggregateException("[GameSceneSetup] City Setup 및 rollback 중 예외가 발생했습니다.", rollbackFailures);
+            }
+
+            throw;
+        }
+
+        Debug.Log(BuildSummary(changed, unchanged));
+    }
+
+    private static ScenePreflight CreateScenePreflight(
+        Scene scene, bool requireExistingController, bool validateHumanSetup)
+    {
+        GameObject gameArea = RequireSceneRoot(scene, GameAreaName);
+        Transform city = RequireChild(gameArea.transform, CityName);
+        ScenePreflight result = new ScenePreflight
+        {
+            GameArea = gameArea,
+            City = city,
+            MainCamera = RequireMainCamera(scene),
+            Buildings = CityBuildingsGenerator.CreateValidatedScenePlan(city),
+        };
+
+        if (validateHumanSetup)
+        {
+            result.HumanWrapper = RequireChild(gameArea.transform, HumanWrapperName);
+            result.HumanBase = RequireChild(result.HumanWrapper, HumanBaseName);
+            PreflightCityColliderTargets(city);
+        }
+
+        GameObject controllerGo = FindSceneRoot(scene, ControllerGoName);
+        GameSceneController controller = controllerGo != null
+            ? controllerGo.GetComponent<GameSceneController>()
+            : null;
+        if (requireExistingController && controller == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] 씬 root '{ControllerGoName}'와 GameSceneController가 필요합니다.");
+        }
+
+        if (controller != null)
+        {
+            ValidateControllerSerializedFields(controller);
+            result.Controller = controller;
+        }
+        else
+        {
+            ValidateControllerFieldDeclarations();
+        }
+
+        return result;
+    }
+
+    private static void PreflightHumanAssets()
+    {
+        ModelImporter importer = AssetImporter.GetAtPath(FbxPath) as ModelImporter;
+        if (importer == null)
+        {
+            throw new InvalidOperationException($"[GameSceneSetup] ModelImporter를 찾지 못했습니다: {FbxPath}");
+        }
+
+        ModelImporterClipAnimation[] current = importer.clipAnimations;
+        if ((current == null || current.Length == 0 || current[0].name != WalkName || !current[0].loopTime) &&
+            (importer.defaultClipAnimations == null || importer.defaultClipAnimations.Length == 0))
+        {
+            throw new InvalidOperationException($"[GameSceneSetup] FBX에 기본 take clip이 없습니다: {FbxPath}");
+        }
+
+        ValidateAssetPathType<AnimatorController>(ControllerPath);
+        AnimatorController animatorController = AssetDatabase.LoadAssetAtPath<AnimatorController>(ControllerPath);
+        if (animatorController != null && animatorController.layers.Length > 0 &&
+            animatorController.layers[0].stateMachine == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] controller layer 0에 state machine이 없습니다(asset 손상 의심): {ControllerPath}");
+        }
+
+        ValidateAssetPathType<GameConfigSO>(ConfigPath);
+        ValidateAssetPathType<GameObject>(HumanPrefabPath);
+        for (int i = 0; i < TeamMaterialFileNames.Length; i++)
+        {
+            ValidateAssetPathType<Material>(MaterialsFolder + "/" + TeamMaterialFileNames[i]);
+        }
+
+        LoadSourceMaterial();
+
+        GameConfigSO config = AssetDatabase.LoadAssetAtPath<GameConfigSO>(ConfigPath);
+        bool destroyConfig = false;
+        if (config == null)
+        {
+            config = ScriptableObject.CreateInstance<GameConfigSO>();
+            config.hideFlags = HideFlags.HideAndDontSave;
+            destroyConfig = true;
+        }
+
+        try
+        {
+            if (config.TeamColors == null || config.TeamColors.Count < 4)
+            {
+                throw new InvalidOperationException("[GameSceneSetup] GameConfig.TeamColors 길이가 4가 아닙니다.");
+            }
+
+            SerializedObject serialized = new SerializedObject(config);
+            if (serialized.FindProperty("teamMaterials") == null)
+            {
+                throw new InvalidOperationException(
+                    "[GameSceneSetup] GameConfig에서 직렬화 필드 'teamMaterials'을(를) 찾지 못했습니다.");
+            }
+        }
+        finally
+        {
+            if (destroyConfig)
+            {
+                UnityEngine.Object.DestroyImmediate(config);
+            }
+        }
+    }
+
+    private static void PreflightCityColliderTargets(Transform city)
+    {
+        for (int i = 0; i < ColliderChildNames.Length; i++)
+        {
+            Transform child = RequireChild(city, ColliderChildNames[i]);
+            MeshFilter filter = child.GetComponent<MeshFilter>();
+            if (filter == null || filter.sharedMesh == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] '{CityName}/{ColliderChildNames[i]}'에 sharedMesh를 가진 MeshFilter가 없습니다.");
+            }
+        }
+    }
+
+    private static void ValidateControllerSerializedFields(GameSceneController controller)
+    {
+        string[] fieldNames =
+        {
+            "config", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+        };
+        SerializedObject serialized = new SerializedObject(controller);
+        for (int i = 0; i < fieldNames.Length; i++)
+        {
+            if (serialized.FindProperty(fieldNames[i]) == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] GameSceneController에서 직렬화 필드 '{fieldNames[i]}'을(를) 찾지 못했습니다.");
+            }
+        }
+    }
+
+    private static void ValidateControllerFieldDeclarations()
+    {
+        string[] fieldNames =
+        {
+            "config", "humanPrefab", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+        };
+        Type controllerType = typeof(GameSceneController);
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        for (int i = 0; i < fieldNames.Length; i++)
+        {
+            if (controllerType.GetField(fieldNames[i], flags) == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] GameSceneController field 선언 '{fieldNames[i]}'을(를) 찾지 못했습니다.");
+            }
+        }
+    }
+
+    private static void ValidateAssetPathType<T>(string path)
+        where T : UnityEngine.Object
+    {
+        UnityEngine.Object main = AssetDatabase.LoadMainAssetAtPath(path);
+        if (main != null && !(main is T))
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] asset 경로에 예상 밖 type이 있습니다: {path} ({main.GetType().Name})");
+        }
+    }
+
+    private static int BeginSceneUndo(string name)
+    {
+        Undo.IncrementCurrentGroup();
+        int group = Undo.GetCurrentGroup();
+        Undo.SetCurrentGroupName(name);
+        return group;
+    }
+
+    private static void TryRollback(Action rollback, List<Exception> failures)
+    {
+        try
+        {
+            rollback();
+        }
+        catch (Exception exception)
+        {
+            failures.Add(exception);
+        }
+    }
+
+    private static void SaveDirtyAssets(
+        AnimatorController animatorController, GameConfigSO config, Material[] teamMaterials)
+    {
+        AssetDatabase.SaveAssetIfDirty(animatorController);
+        AssetDatabase.SaveAssetIfDirty(config);
+        for (int i = 0; i < teamMaterials.Length; i++)
+        {
+            AssetDatabase.SaveAssetIfDirty(teamMaterials[i]);
+        }
+    }
+
+    private static void SaveSceneIfChanged(Scene scene, bool sceneChanged)
+    {
+        if (!sceneChanged)
+        {
+            return;
+        }
+
+        EditorSceneManager.MarkSceneDirty(scene);
+        if (!EditorSceneManager.SaveScene(scene))
+        {
+            throw new InvalidOperationException($"[GameSceneSetup] 씬 저장에 실패했습니다: {ScenePath}");
+        }
     }
 
     /// <summary>
@@ -439,9 +877,11 @@ public static class GameSceneSetup
         Animator animator = humanBase.GetComponent<Animator>();
         if (animator == null)
         {
-            animator = humanBase.gameObject.AddComponent<Animator>();
+            animator = Undo.AddComponent<Animator>(humanBase.gameObject);
             changedHere = true;
         }
+
+        Undo.RecordObject(animator, "Configure Human Animator");
 
         if (animator.runtimeAnimatorController != animatorController)
         {
@@ -491,12 +931,13 @@ public static class GameSceneSetup
             MeshCollider meshCollider = child.GetComponent<MeshCollider>();
             if (meshCollider == null)
             {
-                meshCollider = child.gameObject.AddComponent<MeshCollider>();
+                meshCollider = Undo.AddComponent<MeshCollider>(child.gameObject);
                 changedHere = true;
             }
 
             if (meshCollider.sharedMesh != meshFilter.sharedMesh)
             {
+                Undo.RecordObject(meshCollider, "Configure City Collider");
                 meshCollider.sharedMesh = meshFilter.sharedMesh;
                 changedHere = true;
             }
@@ -514,14 +955,14 @@ public static class GameSceneSetup
             MeshCollider stray = child.GetComponent<MeshCollider>();
             if (stray != null)
             {
-                UnityEngine.Object.DestroyImmediate(stray);
+                Undo.DestroyObjectImmediate(stray);
                 changedHere = true;
             }
         }
 
         if (changedHere)
         {
-            changed.Add("씬: City MeshCollider(Buildings/StreetProps/Vehicles/Parks만)");
+            changed.Add("씬: City 직접 MeshCollider(StreetProps/Vehicles/Parks만)");
         }
         else
         {
@@ -559,6 +1000,7 @@ public static class GameSceneSetup
         bool wasActive = templateGo.activeSelf;
         if (!wasActive)
         {
+            Undo.RecordObject(templateGo, "Activate Human Prefab Template");
             templateGo.SetActive(true);
         }
 
@@ -569,7 +1011,11 @@ public static class GameSceneSetup
         }
 
         // 저장 후 씬 템플릿은 런타임에서 쓰이지 않으므로 비활성화한다(런타임은 prefab을 clone).
-        templateGo.SetActive(false);
+        if (templateGo.activeSelf)
+        {
+            Undo.RecordObject(templateGo, "Deactivate Human Scene Template");
+            templateGo.SetActive(false);
+        }
 
         // active 상태가 실제로 바뀐 경우(최초 실행: active -> inactive)에만 씬을 dirty로 표시한다.
         if (wasActive)
@@ -589,6 +1035,7 @@ public static class GameSceneSetup
         GameObject humanPrefab,
         Camera mainCamera,
         Transform city,
+        Material buildingOccludedMaterial,
         List<string> changed,
         List<string> unchanged)
     {
@@ -599,13 +1046,14 @@ public static class GameSceneSetup
         {
             // 활성 씬이 GameScene임을 이미 검증했으므로 새 GO는 GameScene의 root로 들어간다.
             controllerGo = new GameObject(ControllerGoName);
+            Undo.RegisterCreatedObjectUndo(controllerGo, "Create GameSceneController");
             changedHere = true;
         }
 
         GameSceneController controller = controllerGo.GetComponent<GameSceneController>();
         if (controller == null)
         {
-            controller = controllerGo.AddComponent<GameSceneController>();
+            controller = Undo.AddComponent<GameSceneController>(controllerGo);
             changedHere = true;
         }
 
@@ -615,9 +1063,10 @@ public static class GameSceneSetup
         changedHere |= SetObjectReference(serialized, "humanPrefab", humanPrefab);
         changedHere |= SetObjectReference(serialized, "mainCamera", mainCamera);
         changedHere |= SetObjectReference(serialized, "cityRoot", city);
+        changedHere |= SetObjectReference(serialized, "buildingOccludedMaterial", buildingOccludedMaterial);
         if (serialized.hasModifiedProperties)
         {
-            serialized.ApplyModifiedPropertiesWithoutUndo();
+            serialized.ApplyModifiedProperties();
         }
 
         if (changedHere)
@@ -713,6 +1162,11 @@ public static class GameSceneSetup
         string leafName = folderPath.Substring(separatorIndex + 1);
         EnsureFolder(parentPath);
         AssetDatabase.CreateFolder(parentPath, leafName);
+    }
+
+    private static string ToAbsolutePath(string assetPath)
+    {
+        return Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), assetPath));
     }
 
     private static string BuildSummary(List<string> changed, List<string> unchanged)

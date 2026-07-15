@@ -12,6 +12,7 @@ public sealed class GameSceneController : MonoBehaviour
     [SerializeField] private GameObject humanPrefab;    // Assets/@Project/Human/Prefabs/Human.prefab (editor setup이 구성된 씬 템플릿에서 생성)
     [SerializeField] private Camera mainCamera;
     [SerializeField] private Transform cityRoot;        // GameArea/City
+    [SerializeField] private Material buildingOccludedMaterial; // City_Occluded.mat (editor setup이 생성/배선)
 
     private GameSession _session;
     private GameplayRoot _gameplayRoot;
@@ -54,6 +55,12 @@ public sealed class GameSceneController : MonoBehaviour
             valid = false;
         }
 
+        if (buildingOccludedMaterial == null)
+        {
+            Debug.LogError("[GameSceneController] buildingOccludedMaterial 참조가 비어 있습니다.", this);
+            valid = false;
+        }
+
         if (!valid)
         {
             enabled = false;
@@ -68,7 +75,8 @@ public sealed class GameSceneController : MonoBehaviour
         GameObject gameplayRootGo = new GameObject("GameplayRoot");
         gameplayRootGo.transform.SetParent(transform, false);
         _gameplayRoot = gameplayRootGo.AddComponent<GameplayRoot>();
-        _gameplayRoot.Initialize(_session, config, humanPrefab, mainCamera, cityRoot);
+        _gameplayRoot.Initialize(
+            _session, config, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial);
         _gameplayRoot.ReloadRequested += OnReloadRequested;
     }
 

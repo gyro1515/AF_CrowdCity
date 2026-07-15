@@ -32,7 +32,7 @@ public static class GameSceneValidator
 
     /// <summary>
     /// 열린 씬과 GameConfig 에셋을 검증한다.
-    /// 검사 항목: GameSceneController 존재와 4개 직렬화 참조, Human.prefab 구조(SkinnedMeshRenderer,
+    /// 검사 항목: GameSceneController 존재와 5개 직렬화 참조, Human.prefab 구조(SkinnedMeshRenderer,
     /// Human_Base의 Animator, 루프 clip, 모든 curve 경로가 Animator 하위에서 해석되는지), City 하위 MeshCollider
     /// 배치, GameConfig의 팀 material(shader/_BaseColor 색상 일치)과 수치 범위.
     /// </summary>
@@ -43,6 +43,7 @@ public static class GameSceneValidator
 
         ValidateController(failures);
         ValidateHumanPrefab(failures);
+        ValidateGeneratedBuildings(failures);
         ValidateCityColliders(failures);
         ValidateConfigAsset(failures);
 
@@ -88,6 +89,7 @@ public static class GameSceneValidator
         Object prefabRef = GetObjectReference(serialized, "humanPrefab", failures);
         GetObjectReference(serialized, "mainCamera", failures);
         Object cityRef = GetObjectReference(serialized, "cityRoot", failures);
+        Object occludedMaterialRef = GetObjectReference(serialized, "buildingOccludedMaterial", failures);
 
         GameObject prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath);
         if (prefabRef != null && prefabAsset != null && prefabRef != prefabAsset)
@@ -105,6 +107,32 @@ public static class GameSceneValidator
         if (configRef != null && configAsset != null && configRef != configAsset)
         {
             failures.Add($"GameSceneController.config가 {ConfigAssetPath} 에셋이 아님");
+        }
+
+        Material occludedMaterial = occludedMaterialRef as Material;
+        if (occludedMaterial != null)
+        {
+            if (AssetDatabase.GetAssetPath(occludedMaterial) != CityBuildingsGenerator.OccludedMaterialPath)
+            {
+                failures.Add(
+                    $"GameSceneController.buildingOccludedMaterial이 {CityBuildingsGenerator.OccludedMaterialPath} 에셋이 아님");
+            }
+
+            if (occludedMaterial.shader == null || occludedMaterial.shader.name != UrpLitShaderName ||
+                !occludedMaterial.HasProperty("_Surface") ||
+                !Mathf.Approximately(occludedMaterial.GetFloat("_Surface"), 1f) ||
+                !occludedMaterial.HasProperty(BaseColorProperty) ||
+                Mathf.Abs(occludedMaterial.GetColor(BaseColorProperty).a - 0.25f) > ColorTolerance ||
+                !occludedMaterial.HasProperty("_ZWrite") ||
+                !Mathf.Approximately(occludedMaterial.GetFloat("_ZWrite"), 0f) ||
+                !occludedMaterial.HasProperty("_AlphaClip") ||
+                !Mathf.Approximately(occludedMaterial.GetFloat("_AlphaClip"), 0f) ||
+                occludedMaterial.renderQueue != 3000 ||
+                occludedMaterial.FindPass("ShadowCaster") < 0)
+            {
+                failures.Add(
+                    "buildingOccludedMaterial의 URP Transparent alpha/ZWrite/AlphaClip/queue/ShadowCaster pass 계약이 다름");
+            }
         }
     }
 
@@ -277,6 +305,110 @@ public static class GameSceneValidator
             {
                 failures.Add($"City/{childName}에 MeshCollider가 있으면 안 됨({colliderCount}개 발견)");
             }
+        }
+    }
+
+    private static void ValidateGeneratedBuildings(List<string> failures)
+    {
+        CityBuildingsGenerator.GenerationPlan plan;
+        try
+        {
+            plan = CityBuildingsGenerator.CreateValidatedPlan();
+        }
+        catch (System.Exception exception)
+        {
+            failures.Add("City Buildings source signature/귀속 검증 실패: " + exception.Message);
+            return;
+        }
+
+        Transform city = FindSceneTransform("GameArea", "City");
+        Transform buildings = city == null ? null : city.Find(CityBuildingsGenerator.BuildingsName);
+        if (buildings == null)
+        {
+            failures.Add("씬에 GameArea/City/Buildings가 없음");
+            return;
+        }
+
+        if (buildings.GetComponent<MeshFilter>() != null ||
+            buildings.GetComponent<MeshRenderer>() != null ||
+            buildings.GetComponent<MeshCollider>() != null)
+        {
+            failures.Add("City/Buildings root에 결합 MeshFilter/MeshRenderer/MeshCollider가 남아 있음");
+        }
+
+        if (buildings.childCount != CityBuildingsGenerator.ExpectedBuildingCount)
+        {
+            failures.Add(
+                $"City/Buildings 개별 건물 수가 {buildings.childCount}개임(기대 {CityBuildingsGenerator.ExpectedBuildingCount})");
+            return;
+        }
+
+        int totalVertices = 0;
+        int totalTriangles = 0;
+        for (int i = 0; i < buildings.childCount; i++)
+        {
+            Transform child = buildings.GetChild(i);
+            string expectedName = CityBuildingsGenerator.GetBuildingAssetName(i);
+            if (child.name != expectedName ||
+                child.localPosition != Vector3.zero ||
+                child.localRotation != Quaternion.identity ||
+                child.localScale != Vector3.one)
+            {
+                failures.Add($"City/Buildings/{expectedName} 이름/순서/local transform 불일치");
+                continue;
+            }
+
+            string prefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(child.gameObject);
+            if (prefabPath != CityBuildingsGenerator.GetPrefabAssetPath(i))
+            {
+                failures.Add($"{expectedName}이 기대 generated prefab instance가 아님");
+            }
+
+            MeshFilter filter = child.GetComponent<MeshFilter>();
+            MeshRenderer renderer = child.GetComponent<MeshRenderer>();
+            MeshCollider collider = child.GetComponent<MeshCollider>();
+            if (filter == null || filter.sharedMesh == null || renderer == null || collider == null)
+            {
+                failures.Add($"{expectedName}에 MeshFilter/MeshRenderer/MeshCollider가 모두 있지 않음");
+                continue;
+            }
+
+            Mesh mesh = filter.sharedMesh;
+            if (AssetDatabase.GetAssetPath(mesh) != CityBuildingsGenerator.GetMeshAssetPath(i) ||
+                collider.sharedMesh != mesh)
+            {
+                failures.Add($"{expectedName}의 render/collider mesh 참조가 generated mesh와 다름");
+            }
+
+            Material[] materials = renderer.sharedMaterials;
+            if (materials.Length != 1 || materials[0] != plan.SourceMaterial)
+            {
+                failures.Add($"{expectedName}이 원본 CityAtlas sharedMaterial 하나를 사용하지 않음");
+            }
+
+            if (renderer.shadowCastingMode != UnityEngine.Rendering.ShadowCastingMode.On)
+            {
+                failures.Add($"{expectedName}의 Shadow Casting Mode가 On이 아님");
+            }
+
+            if (mesh.normals.Length != mesh.vertexCount ||
+                mesh.tangents.Length != mesh.vertexCount ||
+                mesh.uv.Length != mesh.vertexCount ||
+                mesh.subMeshCount != 1 ||
+                mesh.GetTopology(0) != MeshTopology.Triangles)
+            {
+                failures.Add($"{expectedName}의 vertex channel/submesh 구조가 불완전함");
+            }
+
+            totalVertices += mesh.vertexCount;
+            totalTriangles += (int)mesh.GetIndexCount(0) / 3;
+        }
+
+        if (totalVertices != CityBuildingsGenerator.ExpectedSourceVertexCount ||
+            totalTriangles != CityBuildingsGenerator.ExpectedSourceTriangleCount)
+        {
+            failures.Add(
+                $"개별 건물 geometry 합계 불일치: vertices={totalVertices}, triangles={totalTriangles}");
         }
     }
 

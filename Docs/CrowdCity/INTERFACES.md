@@ -317,10 +317,11 @@ Polling inside Poll() only: `Mouse.current` and `Touchscreen.current.primaryTouc
 ```csharp
 public sealed class CameraRoot : UnityEngine.MonoBehaviour
 {
-    public void Initialize(UnityEngine.Camera camera, GameConfigSO config); // subscribes both bus events (tokens kept)
+    public void Initialize(UnityEngine.Camera camera, GameConfigSO config, UnityEngine.Transform cityRoot, UnityEngine.Material buildingOccludedMaterial); // clones the material, enables ShadowCaster on the CameraRoot-owned clone, subscribes both bus events, and registers the 37 generated building colliders
     public void SetTarget(UnityEngine.Transform playerLeader);
     public void Shutdown();                     // disposes tokens; idempotent
     // LateUpdate: SmoothDamp toward pitch-55 orbit at distance CamBaseDistance + CamDistancePerSqrtCount*sqrt(playerCount), clamped;
+    // after the final camera pose, registered buildings intersecting the target-to-camera sphere cast use the runtime clone; every clear/target-change/latch path restores original sharedMaterials, and reinitialize/shutdown destroys the clone after restore
     // CrowdEliminatedEvent(CrowdId==MatchRules.PlayerTeam) -> latch current pose, null target. Null/inactive target guard every frame.
 }
 ```
@@ -348,7 +349,7 @@ public sealed class CrowdRoot : UnityEngine.MonoBehaviour
 ```csharp
 public sealed class GameplayRoot : UnityEngine.MonoBehaviour
 {
-    public void Initialize(GameSession session, GameConfigSO config, UnityEngine.GameObject humanPrefab, UnityEngine.Camera mainCamera, UnityEngine.Transform cityRoot);
+    public void Initialize(GameSession session, GameConfigSO config, UnityEngine.GameObject humanPrefab, UnityEngine.Camera mainCamera, UnityEngine.Transform cityRoot, UnityEngine.Material buildingOccludedMaterial);
     public event System.Action ReloadRequested;   // raised only when session.State == Finished and RestartTapped fires; after raising, Update RETURNS immediately (the fixed-step loop must not run in the same frame as a synchronous scene reload)
     public void Shutdown();                       // idempotent. EXACT order: unbind own C# bindings -> HudRoot.Shutdown -> CameraRoot.Shutdown -> CrowdRoot.Shutdown -> InputRoot.Shutdown (presentation -> sim -> input) -> destroy the child root GOs it created
     // Initialize order (PINNED): create child GOs + AddComponent all four roots -> inputRoot.Initialize -> crowdRoot.Initialize -> cameraRoot.Initialize -> hudRoot.Initialize(session,...)
@@ -362,13 +363,14 @@ public sealed class GameplayRoot : UnityEngine.MonoBehaviour
 ```csharp
 public sealed class GameSceneController : UnityEngine.MonoBehaviour
 {
-    // EXACT serialized field names (editor setup wires them via SerializedObject): config, humanPrefab, mainCamera, cityRoot
+    // EXACT serialized field names (editor setup wires them via SerializedObject): config, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial
     [UnityEngine.SerializeField] private GameConfigSO config;
     [UnityEngine.SerializeField] private UnityEngine.GameObject humanPrefab;    // Assets/@Project/Human/Prefabs/Human.prefab (editor setup creates it from the configured scene template)
     [UnityEngine.SerializeField] private UnityEngine.Camera mainCamera;
     [UnityEngine.SerializeField] private UnityEngine.Transform cityRoot;        // GameArea/City
+    [UnityEngine.SerializeField] private UnityEngine.Material buildingOccludedMaterial; // Assets/@Project/City/Materials/City_Occluded.mat
     // Awake: null-validate only (Debug.LogError + disable self on missing ref). NO scene-template deactivation — runtime uses the prefab asset; editor setup already deactivated the scene GameArea/Human.
-    // Start: _session = new GameSession(config); create "GameplayRoot" child GO; _gameplayRoot.Initialize(...); _gameplayRoot.ReloadRequested += OnReloadRequested
+    // Start: _session = new GameSession(config); create "GameplayRoot" child GO; _gameplayRoot.Initialize(session, config, humanPrefab, mainCamera, cityRoot, buildingOccludedMaterial); _gameplayRoot.ReloadRequested += OnReloadRequested
     // OnReloadRequested: SceneManager.LoadScene(gameObject.scene.buildIndex)
     // OnDestroy EXACT order: ① _gameplayRoot.ReloadRequested -= ② _gameplayRoot.Shutdown() ③ _session.Dispose() LAST (session outlives roots so late events during root teardown are still handled)
 #if UNITY_EDITOR
@@ -397,7 +399,9 @@ Font: `UnityEngine.Resources.GetBuiltinResource<UnityEngine.Font>("LegacyRuntime
 
 ### E1 `Game/Editor/GameSceneSetup.cs`
 `[MenuItem("AF/CrowdCity/Setup Game Scene")] public static void Apply()` — implements DESIGN.md §5 steps 1–7 exactly (load-or-create/converge, save only if changed). Constants for all asset paths. Also `public static void ApplyBatch()` (Apply + `EditorApplication.Exit(0/1)`).
-⟲⟲⟲⟲ **Prefab step (new step 4b, after the scene template is fully configured — Animator on Human_Base child, controller, materials — and BEFORE controller wiring):** create/refresh `Assets/@Project/Human/Prefabs/Human.prefab` from the configured `GameArea/Human` scene GameObject via `PrefabUtility.SaveAsPrefabAsset` (load-or-create: overwrite same path each run so it converges). Then `SetActive(false)` on the scene `GameArea/Human` (it is no longer used at runtime; runtime clones the prefab) and save the scene. Wire `GameSceneController.humanPrefab` (serialized field name `humanPrefab`) to the prefab asset via SerializedObject; wire `config`, `mainCamera` (scene Main Camera), `cityRoot` (GameArea/City) as before (no `humanTemplate` field anymore).
+⟲⟲⟲⟲ **Prefab step (new step 4b, after the scene template is fully configured — Animator on Human_Base child, controller, materials — and BEFORE controller wiring):** create/refresh `Assets/@Project/Human/Prefabs/Human.prefab` from the configured `GameArea/Human` scene GameObject via `PrefabUtility.SaveAsPrefabAsset` (load-or-create: overwrite same path each run so it converges). Then `SetActive(false)` on the scene `GameArea/Human` (it is no longer used at runtime; runtime clones the prefab) and save the scene. Wire `GameSceneController.humanPrefab` (serialized field name `humanPrefab`) to the prefab asset via SerializedObject; wire `config`, `mainCamera` (scene Main Camera), `cityRoot` (GameArea/City), and `buildingOccludedMaterial` (`Assets/@Project/City/Materials/City_Occluded.mat`) as before (no `humanTemplate` field anymore). City building generation must preflight source/scene/provenance before writes and converges 37 generated mesh/prefab instances transactionally.
+
+City policy: Full `Setup Game Scene` only read-validates the City source, generated assets, and 37-building hierarchy before other writes; that preflight does not require an existing `GameSceneController` or its references. Full Setup never mutates City assets/hierarchy, but afterward load-or-creates `GameSceneController` and wires `cityRoot`, `mainCamera`, and `buildingOccludedMaterial`. `[MenuItem("AF/CrowdCity/Setup City Buildings")]` is the sole City convergence entry point, requires exactly one open scene (the active GameScene, no additive scenes), and succeeds even when the controller is absent; when present it may converge only `buildingOccludedMaterial`, while Full Setup owns controller creation and complete reference wiring.
 
 ### E2 `Game/Editor/GameSceneValidator.cs`
 `[MenuItem("AF/CrowdCity/Validate Game Scene")] public static void ValidateMenu()`; `public static bool Validate()` — DESIGN.md §5 assertions incl. AnimationUtility curve-path resolution; logs `[Validator] PASS` / `[Validator] FAIL: <reasons>`; `public static void ValidateBatch()` exits 0/1. ⟲⟲⟲⟲ Validate the PREFAB (`Assets/@Project/Human/Prefabs/Human.prefab`), not the scene template: it exists, has a `Human_Base` child carrying SkinnedMeshRenderer + Animator whose controller default-state motion is a looping AnimationClip, and every `AnimationUtility.GetCurveBindings(clip)` path resolves via `transform.Find` under the Animator inside the prefab. Also assert `GameSceneController.humanPrefab` ref is non-null and points at that prefab.
