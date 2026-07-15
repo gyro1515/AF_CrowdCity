@@ -774,6 +774,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
                 // CC.Move로 이동해 건물 collider와 충돌시킨다(수평 delta만; Y는 아래에서 다시 고정).
                 Vector2 move = velocity * dt;
+                Vector2 commandedVel = velocity; // Move 직전의 명령 속도(아래 속도 재조정에서 방향 기준으로 사용).
                 _controllerByAgent[index].Move(new Vector3(move.x, 0f, move.y));
 
                 Vector3 moved = followerTransform.position;
@@ -786,8 +787,22 @@ public sealed class CrowdRoot : MonoBehaviour
 
                 // 충돌/clamp로 실제 수평 이동이 명령 속도와 달라질 수 있으므로, 실제 수평 변위를 dt로 나눠
                 // 저장 속도를 재조정한다. 다음 tick 적분과 애니메이션(heading/speed)이 현실을 반영해 장애물 뒤 lurch를 막는다.
+                // 단, 벽에서 밀려나는 depenetration의 역방향 성분이 속도로 굳어 cohesion과 진동(bounce)하지 않도록,
+                // 실제 속도를 명령 방향 기준으로 분해해 접선 성분은 유지(벽 미끄러짐), 전진 성분은 [0, |명령|]로 상한한다(역방향 제거).
                 Vector3 finalPos = followerTransform.position;
-                velocity = new Vector2(finalPos.x - pos.x, finalPos.z - pos.y) / dt;
+                Vector2 actualVel = new Vector2(finalPos.x - pos.x, finalPos.z - pos.y) / dt;
+                if (commandedVel.sqrMagnitude > 1e-6f)
+                {
+                    Vector2 dir = commandedVel.normalized;
+                    float along = Vector2.Dot(actualVel, dir);
+                    Vector2 tangential = actualVel - along * dir;
+                    float alongKept = Mathf.Clamp(along, 0f, commandedVel.magnitude);
+                    velocity = tangential + alongKept * dir;
+                }
+                else
+                {
+                    velocity = actualVel;
+                }
                 _followerVelocity[index] = velocity;
 
                 float speed = velocity.magnitude;
