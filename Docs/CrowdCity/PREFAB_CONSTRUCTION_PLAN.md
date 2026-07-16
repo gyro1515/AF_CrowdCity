@@ -14,7 +14,7 @@
 - 씬에는 부트스트랩 `GameSceneController` + 환경 오브젝트(Main Camera, GameArea/City, 비활성 GameArea/Human 저작 템플릿)만 남는다.
 - 기능/스폰 대상은 스크립트 사전부착 프리팹 8종(`Human/Human`, `Game/{GameplayRoot,InputRoot,CameraRoot}`, `Crowd/CrowdRoot`, `Hud/{HudRoot,CrowdLabel,RivalMarker}`)으로 저작되고 `Resources.Load<GameObject>("<피처세그먼트>/<자산>")`+`Instantiate`+`Init(deps)`로 조립된다. HUD Canvas/타이머/순위표/결과오버레이/라벨·마커까지 프리팹 저작.
 - `Human.prefab` 루트에 `Human.cs`와 `enabled` CharacterController가 baked(런타임 `AddComponent` 제거, `GetComponent`만 사용). `CrowdRoot`가 `Resources.Load(HumanResources.HumanPrefab)`로 스폰 대상을 직접 소유(`humanPrefab` 주입 체인 제거).
-- 경로 상수: `HumanResources`/`CrowdResources`/`GameResources`/`HudResources`. 중복 상대경로는 `ResourcePathValidator`(Editor), CC 스펙·`Human.cs` baking은 `GameSceneValidator`가 검증.
+- 경로 상수: `HumanResources`/`CrowdResources`/`HudResources`(비-root 로드 키). root 프리팹은 per-root 상수 없이 중앙 `ResourceLoader.LoadRoot<T>()`가 `typeof(T).Name`에서 `Roots/<클래스이름>` 키를 파생한다. 중복 상대경로는 `ResourcePathValidator`(Editor), CC 스펙·`Human.cs` baking은 `GameSceneValidator`가 검증.
 
 **목표**
 - 기능/스폰 대상을 **스크립트가 사전 부착된 프리팹**으로 저작 → 런타임에 **동적 로드 + Instantiate + C# 이벤트/Init 바인딩**.

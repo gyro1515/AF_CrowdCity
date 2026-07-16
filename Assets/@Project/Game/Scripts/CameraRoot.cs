@@ -17,6 +17,10 @@ public sealed class CameraRoot : MonoBehaviour
     private const float OcclusionTargetHeight = 0.9f;
     private const float OcclusionProbeRadius = 0.35f;
 
+    // 건물 가림용 원본 material이다. CameraRoot 프리팹에 직렬화 저작되며(GameSceneSetup이 City 생성물 material을 배선한다),
+    // Initialize에서 이 원본을 runtime clone(_runtimeOccludedMaterial)해 소유한다(원본 asset은 절대 변경하지 않는다).
+    [SerializeField] private Material buildingOccludedMaterial;
+
     private Camera _camera;
     private Transform _cameraTransform;
     private GameConfigSO _config;
@@ -115,13 +119,13 @@ public sealed class CameraRoot : MonoBehaviour
 
     /// <summary>
     /// 카메라와 설정을 받아 초기화하고 두 bus 이벤트를 구독한다.
+    /// 건물 가림 원본 material은 프리팹에 직렬화된 <see cref="buildingOccludedMaterial"/>에서 읽는다.
     /// 구독 delegate는 field에 보관해 Shutdown과 같은 lifecycle에서 해제한다.
     /// </summary>
     public void Initialize(
         Camera camera,
         GameConfigSO config,
-        Transform cityRoot,
-        Material buildingOccludedMaterial)
+        Transform cityRoot)
     {
         if (camera == null)
         {
@@ -140,7 +144,8 @@ public sealed class CameraRoot : MonoBehaviour
 
         if (buildingOccludedMaterial == null)
         {
-            throw new ArgumentNullException(nameof(buildingOccludedMaterial));
+            throw new InvalidOperationException(
+                "[CameraRoot] buildingOccludedMaterial 직렬화 필드가 비어 있습니다(프리팹 배선 누락).");
         }
 
         // 같은 component를 새 session에서 재사용할 수 있으므로 이전 material을 원복하고 runtime clone을 해제한다.

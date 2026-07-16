@@ -11,7 +11,7 @@ using UnityEngine.SceneManagement;
 public sealed class CityBuildingsGeneratorTests
 {
     private const string GameScenePath = "Assets/@Project/Scenes/GameScene.unity";
-    private const string CrowdCountTextStylePath = "Assets/@Project/Hud/CrowdCountTextStyle.asset";
+    private const string ConfigPath = "Assets/@Project/Game/GameConfig.asset";
 
     [Test]
     public void CurrentSource_ProducesExpectedUniqueBuildingPlan()
@@ -269,8 +269,9 @@ public sealed class CityBuildingsGeneratorTests
 
         GameSceneSetup.AfterLocalSceneSaveForTests = controller =>
         {
+            // buildingOccludedMaterial은 이제 GSC 필드가 아니므로 남은 GSC 참조(config)를 canary로 손상시켜 rollback을 검증한다.
             SerializedObject serialized = new SerializedObject(controller);
-            serialized.FindProperty("buildingOccludedMaterial").objectReferenceValue = null;
+            serialized.FindProperty("config").objectReferenceValue = null;
             serialized.ApplyModifiedProperties();
             Assert.That(EditorSceneManager.SaveScene(SceneManager.GetActiveScene()), Is.True);
             throw new InvalidOperationException("Injected failure after scene save");
@@ -293,16 +294,15 @@ public sealed class CityBuildingsGeneratorTests
 
         GameObject controllerGo = GameObject.Find("GameSceneController");
         SerializedObject restored = new SerializedObject(controllerGo.GetComponent<GameSceneController>());
-        UnityEngine.Object material = restored.FindProperty("buildingOccludedMaterial").objectReferenceValue;
-        Assert.That(AssetDatabase.GetAssetPath(material), Is.EqualTo(CityBuildingsGenerator.OccludedMaterialPath));
+        UnityEngine.Object configRef = restored.FindProperty("config").objectReferenceValue;
+        Assert.That(AssetDatabase.GetAssetPath(configRef), Is.EqualTo(ConfigPath));
         Assert.That(SceneManager.GetActiveScene().isDirty, Is.False);
     }
 
     [TestCase("controller")]
+    [TestCase("config")]
     [TestCase("cityRoot")]
     [TestCase("mainCamera")]
-    [TestCase("material")]
-    [TestCase("crowdCountTextStyle")]
     public void FullControllerConvergence_RecoversWithoutCityPreflightDeadlock(string missingReference)
     {
         EditorSceneManager.OpenScene(GameScenePath, OpenSceneMode.Single);
@@ -319,27 +319,22 @@ public sealed class CityBuildingsGeneratorTests
             }
             else
             {
+                // crowdCountTextStyle/buildingOccludedMaterial은 GSC 참조 체인에서 제거됐다(각 root 프리팹으로 이전).
+                // 남은 GSC 참조(config/cityRoot/mainCamera)만 convergence 복구 대상이며 케이스 이름이 곧 필드 이름이다.
                 SerializedObject serialized = new SerializedObject(originalController);
-                string propertyName = missingReference == "material"
-                    ? "buildingOccludedMaterial"
-                    : missingReference;
-                serialized.FindProperty(propertyName).objectReferenceValue = null;
+                serialized.FindProperty(missingReference).objectReferenceValue = null;
                 serialized.ApplyModifiedProperties();
             }
 
             GameSceneController converged = GameSceneSetup.ConvergeControllerAfterCityPreflightForTests();
             Assert.That(converged, Is.Not.Null);
             SerializedObject result = new SerializedObject(converged);
+            Assert.That(AssetDatabase.GetAssetPath(result.FindProperty("config").objectReferenceValue),
+                Is.EqualTo(ConfigPath));
             Assert.That(result.FindProperty("cityRoot").objectReferenceValue,
                 Is.SameAs(GameObject.Find("GameArea/City").transform));
             Assert.That(result.FindProperty("mainCamera").objectReferenceValue,
                 Is.SameAs(GameObject.Find("Main Camera").GetComponent<Camera>()));
-            Assert.That(AssetDatabase.GetAssetPath(
-                    result.FindProperty("buildingOccludedMaterial").objectReferenceValue),
-                Is.EqualTo(CityBuildingsGenerator.OccludedMaterialPath));
-            Assert.That(AssetDatabase.GetAssetPath(
-                    result.FindProperty("crowdCountTextStyle").objectReferenceValue),
-                Is.EqualTo(CrowdCountTextStylePath));
         }
         finally
         {

@@ -102,9 +102,7 @@ public static class GameSceneSetup
         CityBuildingsGenerator.ValidateFullyConvergedScene(preflight.Buildings, assets);
 
         GameConfigSO config = AssetDatabase.LoadAssetAtPath<GameConfigSO>(ConfigPath);
-        TMPTextStyleSO crowdCountTextStyle =
-            AssetDatabase.LoadAssetAtPath<TMPTextStyleSO>(CrowdCountTextStylePath);
-        if (config == null || crowdCountTextStyle == null)
+        if (config == null)
         {
             throw new InvalidOperationException("[GameSceneSetup] controller converge test asset이 없습니다.");
         }
@@ -114,10 +112,8 @@ public static class GameSceneSetup
         ConvergeSceneController(
             scene,
             config,
-            crowdCountTextStyle,
             preflight.MainCamera,
             preflight.City,
-            assets.OccludedMaterial,
             changed,
             unchanged);
 
@@ -162,6 +158,7 @@ public static class GameSceneSetup
     // HUD 동적 템플릿(CrowdLabel/RivalMarker)은 root가 아니므로 Roots가 아닌 Hud/Resources/Hud에 그대로 둔다.
     private const string HudResourcesFolder = HudFolder + "/Resources/Hud";
     private const string HudRootPrefabPath = HudRootsFolder + "/" + nameof(HudRoot) + ".prefab";      // 로드 키 Roots/HudRoot
+    private const string CameraRootPrefabPath = GameRootsFolder + "/" + nameof(CameraRoot) + ".prefab"; // 로드 키 Roots/CameraRoot
     private const string CrowdLabelPrefabPath = HudResourcesFolder + "/CrowdLabel.prefab";            // HudResources.CrowdLabel
     private const string RivalMarkerPrefabPath = HudResourcesFolder + "/RivalMarker.prefab";          // HudResources.RivalMarker
 
@@ -258,7 +255,8 @@ public static class GameSceneSetup
 
         // 5(선행). material 색상의 원본이 되는 config를 먼저 확보한다.
         GameConfigSO config = LoadOrCreateConfig(changed, unchanged);
-        TMPTextStyleSO crowdCountTextStyle = LoadOrCreateCrowdCountTextStyle(changed, unchanged);
+        // CrowdCountTextStyle.asset은 HudRoot 프리팹 배선(ConvergeFeatureRootPrefabs) 이전에 존재해야 하므로 여기서 보장만 한다.
+        LoadOrCreateCrowdCountTextStyle(changed, unchanged);
 
         // 3. FBX 원본 material 검증 + 팀 material 5종 수렴.
         Material[] teamMaterials = ConvergeTeamMaterials(config, changed, unchanged);
@@ -282,10 +280,8 @@ public static class GameSceneSetup
             sceneChanged |= ConvergeSceneController(
                 scene,
                 config,
-                crowdCountTextStyle,
                 preflight.MainCamera,
                 preflight.City,
-                buildingAssets.OccludedMaterial,
                 changed,
                 unchanged);
 
@@ -340,24 +336,8 @@ public static class GameSceneSetup
                 preflight.Buildings, buildingAssets, changed, unchanged);
             sceneChanged |= ConvergeCityColliders(preflight.City, changed, unchanged);
 
-            if (preflight.Controller != null)
-            {
-                SerializedObject serialized = new SerializedObject(preflight.Controller);
-                if (SetObjectReference(serialized, "buildingOccludedMaterial", buildingAssets.OccludedMaterial))
-                {
-                    serialized.ApplyModifiedProperties();
-                    sceneChanged = true;
-                    changed.Add("씬: GameSceneController 건물 가림 material 배선");
-                }
-                else
-                {
-                    unchanged.Add("씬: GameSceneController 건물 가림 material 배선");
-                }
-            }
-            else
-            {
-                unchanged.Add("씬: GameSceneController 없음(Full Setup에서 생성/배선)");
-            }
+            // 건물 가림 material은 이제 CameraRoot 프리팹에 직렬화 저작된다(GSC 배선 아님).
+            // 프리팹 배선은 ConvergeFeatureRootPrefabs(Full Setup / Bake Feature Root Prefabs)가 담당하므로 여기서는 하지 않는다.
 
             SaveSceneIfChanged(scene, sceneChanged);
             if (AfterLocalSceneSaveForTests != null)
@@ -518,7 +498,7 @@ public static class GameSceneSetup
     {
         string[] fieldNames =
         {
-            "config", "crowdCountTextStyle", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+            "config", "mainCamera", "cityRoot",
         };
         SerializedObject serialized = new SerializedObject(controller);
         for (int i = 0; i < fieldNames.Length; i++)
@@ -535,7 +515,7 @@ public static class GameSceneSetup
     {
         string[] fieldNames =
         {
-            "config", "crowdCountTextStyle", "mainCamera", "cityRoot", "buildingOccludedMaterial",
+            "config", "mainCamera", "cityRoot",
         };
         Type controllerType = typeof(GameSceneController);
         const System.Reflection.BindingFlags flags =
@@ -1290,6 +1270,92 @@ public static class GameSceneSetup
         ConvergeLogicRootPrefab<CameraRoot>(GameRootsFolder, changed, unchanged);
         ConvergeLogicRootPrefab<CrowdRoot>(CrowdRootsFolder, changed, unchanged);
         ConvergeHudPrefabs(changed, unchanged);
+
+        // 단일 소비자 editor-authored asset을 소비 feature root 프리팹의 직렬화 필드로 배선한다(Init 체인 드릴링 제거).
+        // 배선 대상 asset은 프리팹보다 먼저 존재해야 하므로 위 프리팹 수렴 뒤에 실행한다.
+        WireCameraRootOccludedMaterial(changed, unchanged);
+        WireHudRootCrowdCountTextStyle(changed, unchanged);
+    }
+
+    // CameraRoot 프리팹의 buildingOccludedMaterial 직렬화 필드에 City 생성물 material(City_Occluded.mat)을 배선한다.
+    private static void WireCameraRootOccludedMaterial(List<string> changed, List<string> unchanged)
+    {
+        Material occluded = AssetDatabase.LoadAssetAtPath<Material>(CityBuildingsGenerator.OccludedMaterialPath);
+        if (occluded == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] CameraRoot 프리팹 배선 대상 material이 없습니다: {CityBuildingsGenerator.OccludedMaterialPath}. " +
+                "먼저 'AF/CrowdCity/Setup City Buildings'를 실행하세요.");
+        }
+
+        ConvergePrefabSerializedRef<CameraRoot>(
+            CameraRootPrefabPath, "buildingOccludedMaterial", occluded, "CameraRoot", changed, unchanged);
+    }
+
+    // HudRoot 프리팹의 _crowdCountTextStyle 직렬화 필드에 CrowdCountTextStyle.asset을 배선한다.
+    private static void WireHudRootCrowdCountTextStyle(List<string> changed, List<string> unchanged)
+    {
+        TMPTextStyleSO style = AssetDatabase.LoadAssetAtPath<TMPTextStyleSO>(CrowdCountTextStylePath);
+        if (style == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] HudRoot 프리팹 배선 대상 스타일 SO가 없습니다: {CrowdCountTextStylePath}.");
+        }
+
+        ConvergePrefabSerializedRef<HudRoot>(
+            HudRootPrefabPath, "_crowdCountTextStyle", style, "HudRoot", changed, unchanged);
+    }
+
+    // 프리팹 asset의 컴포넌트 T에서 objectReference 직렬화 필드 하나를 목표 값으로 수렴한다.
+    // 이미 목표 값이면 프리팹을 다시 저장하지 않는다(idempotent). LoadPrefabContents로 격리 편집해 diff를 해당 필드로 한정한다.
+    private static void ConvergePrefabSerializedRef<T>(
+        string prefabPath,
+        string fieldName,
+        UnityEngine.Object value,
+        string label,
+        List<string> changed,
+        List<string> unchanged)
+        where T : Component
+    {
+        GameObject contents = PrefabUtility.LoadPrefabContents(prefabPath);
+        try
+        {
+            T component = contents.GetComponent<T>();
+            if (component == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] 프리팹 '{prefabPath}' root에 {typeof(T).Name} 컴포넌트가 없습니다.");
+            }
+
+            SerializedObject serialized = new SerializedObject(component);
+            SerializedProperty property = serialized.FindProperty(fieldName);
+            if (property == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] {typeof(T).Name}에서 직렬화 필드 '{fieldName}'을(를) 찾지 못했습니다.");
+            }
+
+            if (property.objectReferenceValue == value)
+            {
+                unchanged.Add($"{label} 프리팹 '{fieldName}' 배선");
+                return;
+            }
+
+            property.objectReferenceValue = value;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            PrefabUtility.SaveAsPrefabAsset(contents, prefabPath, out bool saveSuccess);
+            if (!saveSuccess)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] 프리팹 저장에 실패했습니다: {prefabPath} ('{fieldName}' 배선).");
+            }
+
+            changed.Add($"{label} 프리팹 '{fieldName}' 배선");
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(contents);
+        }
     }
 
     // HUD 프리팹 3종(HudRoot Canvas 트리 + CrowdLabel/RivalMarker 동적 템플릿)을 load-or-create 수렴한다.
@@ -1541,6 +1607,12 @@ public static class GameSceneSetup
         VerifyLogicRootPrefab<CrowdRoot>(CrowdRootsFolder);
         VerifyLogicRootPrefab<HudRoot>(HudRootsFolder);
 
+        // 새로 저작된 직렬화 참조가 저장된 프리팹에서 실제로 해석되는지(컴포넌트 존재만이 아니라) fail-fast 검증한다.
+        VerifyPrefabSerializedRef<CameraRoot>(
+            CameraRootPrefabPath, "buildingOccludedMaterial", CityBuildingsGenerator.OccludedMaterialPath);
+        VerifyPrefabSerializedRef<HudRoot>(
+            HudRootPrefabPath, "_crowdCountTextStyle", CrowdCountTextStylePath);
+
         Debug.Log(
             "[BakeFeatureRootPrefabs] PASS — GameplayRoot/InputRoot/CameraRoot/CrowdRoot/HudRoot 프리팹 저작 완료. " +
             BuildSummary(changed, unchanged));
@@ -1573,6 +1645,29 @@ public static class GameSceneSetup
         {
             throw new InvalidOperationException(
                 $"[GameSceneSetup] feature root 프리팹 baking 검증 실패: path={prefabPath}, prefab={prefab != null}, {typeof(T).Name}={(prefab != null && prefab.GetComponent<T>() != null)}");
+        }
+    }
+
+    // 저장된 프리팹 asset을 다시 로드해 objectReference 직렬화 필드가 기대 asset 경로로 해석되는지 검증한다(baking 성공 오탐 방지).
+    private static void VerifyPrefabSerializedRef<T>(string prefabPath, string fieldName, string expectedAssetPath)
+        where T : Component
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        T component = prefab != null ? prefab.GetComponent<T>() : null;
+        if (component == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] 프리팹 ref 검증 실패: '{prefabPath}'에서 {typeof(T).Name}을(를) 로드하지 못했습니다.");
+        }
+
+        SerializedObject serialized = new SerializedObject(component);
+        SerializedProperty property = serialized.FindProperty(fieldName);
+        UnityEngine.Object value = property != null ? property.objectReferenceValue : null;
+        string actualPath = value != null ? AssetDatabase.GetAssetPath(value) : null;
+        if (actualPath != expectedAssetPath)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] 프리팹 ref 검증 실패: {typeof(T).Name}.'{fieldName}'이(가) '{expectedAssetPath}'로 해석되지 않습니다(actual='{actualPath ?? "null"}').");
         }
     }
 
@@ -1751,10 +1846,8 @@ public static class GameSceneSetup
     private static bool ConvergeSceneController(
         Scene scene,
         GameConfigSO config,
-        TMPTextStyleSO crowdCountTextStyle,
         Camera mainCamera,
         Transform city,
-        Material buildingOccludedMaterial,
         List<string> changed,
         List<string> unchanged)
     {
@@ -1777,12 +1870,11 @@ public static class GameSceneSetup
         }
 
         // 필드 이름 기반 배선. 이름이 어긋나면(계약 위반) SetObjectReference가 예외를 던진다.
+        // crowdCountTextStyle/buildingOccludedMaterial은 GSC가 아니라 각 root 프리팹에 직렬화 저작된다.
         SerializedObject serialized = new SerializedObject(controller);
         changedHere |= SetObjectReference(serialized, "config", config);
-        changedHere |= SetObjectReference(serialized, "crowdCountTextStyle", crowdCountTextStyle);
         changedHere |= SetObjectReference(serialized, "mainCamera", mainCamera);
         changedHere |= SetObjectReference(serialized, "cityRoot", city);
-        changedHere |= SetObjectReference(serialized, "buildingOccludedMaterial", buildingOccludedMaterial);
         if (serialized.hasModifiedProperties)
         {
             serialized.ApplyModifiedProperties();

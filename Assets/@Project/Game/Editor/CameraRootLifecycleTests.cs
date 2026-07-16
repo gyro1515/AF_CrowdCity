@@ -37,7 +37,10 @@ public sealed class CameraRootLifecycleTests
 
         try
         {
-            root.Initialize(cameraOne, config, cityOne.transform, occluded);
+            // buildingOccludedMaterial은 이제 CameraRoot 프리팹의 직렬화 필드다. AddComponent 경로에서는 프리팹 직렬화가
+            // 없으므로 Initialize 이전에 명시적으로 주입한다(재초기화 사이에도 유지되므로 한 번만 설정한다).
+            SetPrivate(root, "buildingOccludedMaterial", occluded);
+            root.Initialize(cameraOne, config, cityOne.transform);
             Material runtimeOne = GetPrivate<Material>(root, "_runtimeOccludedMaterial");
             AssertRuntimeMaterial(runtimeOne, occluded);
             Assert.That(EditorJsonUtility.ToJson(occluded), Is.EqualTo(sourceMaterialJson));
@@ -51,7 +54,7 @@ public sealed class CameraRootLifecycleTests
             Renderer oldRenderer = cityOne.transform.Find("Buildings/Building_00").GetComponent<Renderer>();
             Assert.That(oldRenderer.sharedMaterial, Is.SameAs(runtimeOne));
 
-            root.Initialize(cameraTwo, config, cityTwo.transform, occluded);
+            root.Initialize(cameraTwo, config, cityTwo.transform);
             Material runtimeTwo = GetPrivate<Material>(root, "_runtimeOccludedMaterial");
 
             Assert.That(oldRenderer.sharedMaterial, Is.SameAs(originalOne));
@@ -104,6 +107,36 @@ public sealed class CameraRootLifecycleTests
             UnityEngine.Object.DestroyImmediate(originalTwo);
             UnityEngine.Object.DestroyImmediate(occluded);
         }
+    }
+
+    [Test]
+    public void FeatureRootPrefabs_CarryMovedSerializedRefs()
+    {
+        // Batch B: 단일 소비자 asset이 GSC Init 체인 대신 소비 feature root 프리팹에 직렬화 저작됐는지 검증한다(읽기 전용).
+        AssertPrefabRefPath(
+            "Assets/@Project/Game/Resources/Roots/CameraRoot.prefab",
+            typeof(CameraRoot),
+            "buildingOccludedMaterial",
+            "Assets/@Project/City/Materials/City_Occluded.mat");
+        AssertPrefabRefPath(
+            "Assets/@Project/Hud/Resources/Roots/HudRoot.prefab",
+            typeof(HudRoot),
+            "_crowdCountTextStyle",
+            "Assets/@Project/Hud/CrowdCountTextStyle.asset");
+    }
+
+    private static void AssertPrefabRefPath(
+        string prefabPath, Type componentType, string fieldName, string expectedAssetPath)
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        Assert.That(prefab, Is.Not.Null, prefabPath);
+        Component component = prefab.GetComponent(componentType);
+        Assert.That(component, Is.Not.Null, componentType.Name);
+        SerializedObject serialized = new SerializedObject(component);
+        SerializedProperty property = serialized.FindProperty(fieldName);
+        Assert.That(property, Is.Not.Null, fieldName);
+        Assert.That(property.objectReferenceValue, Is.Not.Null, $"{componentType.Name}.{fieldName} 미배선");
+        Assert.That(AssetDatabase.GetAssetPath(property.objectReferenceValue), Is.EqualTo(expectedAssetPath));
     }
 
     private static void AssertRuntimeMaterial(Material runtimeMaterial, Material source)

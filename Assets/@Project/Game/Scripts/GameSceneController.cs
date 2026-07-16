@@ -8,11 +8,11 @@ using UnityEngine.SceneManagement;
 public sealed class GameSceneController : MonoBehaviour
 {
     // Editor setup(GameSceneSetup)이 SerializedObject로 이름 기반 배선하므로 필드 이름을 바꾸지 않는다.
+    // 단일 소비자 asset(crowdCountTextStyle/buildingOccludedMaterial)은 각 feature root 프리팹에 직렬화 저작돼
+    // 여기서 드릴링하지 않는다. 씬 오브젝트 참조(mainCamera/cityRoot)와 공용 config만 주입한다.
     [SerializeField] private GameConfigSO config;
-    [SerializeField] private TMPTextStyleSO crowdCountTextStyle;
     [SerializeField] private Camera mainCamera;
     [SerializeField] private Transform cityRoot;        // GameArea/City
-    [SerializeField] private Material buildingOccludedMaterial; // City_Occluded.mat (editor setup이 생성/배선)
 
     private GameSession _session;
     private GameplayRoot _gameplayRoot;
@@ -37,12 +37,6 @@ public sealed class GameSceneController : MonoBehaviour
             valid = false;
         }
 
-        if (crowdCountTextStyle == null)
-        {
-            Debug.LogError("[GameSceneController] crowdCountTextStyle 참조가 비어 있습니다.", this);
-            valid = false;
-        }
-
         if (mainCamera == null)
         {
             Debug.LogError("[GameSceneController] mainCamera 참조가 비어 있습니다.", this);
@@ -52,12 +46,6 @@ public sealed class GameSceneController : MonoBehaviour
         if (cityRoot == null)
         {
             Debug.LogError("[GameSceneController] cityRoot 참조가 비어 있습니다.", this);
-            valid = false;
-        }
-
-        if (buildingOccludedMaterial == null)
-        {
-            Debug.LogError("[GameSceneController] buildingOccludedMaterial 참조가 비어 있습니다.", this);
             valid = false;
         }
 
@@ -82,8 +70,7 @@ public sealed class GameSceneController : MonoBehaviour
 
         try
         {
-            _gameplayRoot.Initialize(
-                _session, config, crowdCountTextStyle, mainCamera, cityRoot, buildingOccludedMaterial);
+            _gameplayRoot.Initialize(_session, config, mainCamera, cityRoot);
         }
         catch
         {

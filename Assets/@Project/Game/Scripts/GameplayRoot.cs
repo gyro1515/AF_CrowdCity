@@ -40,10 +40,8 @@ public sealed class GameplayRoot : MonoBehaviour
     public void Initialize(
         GameSession session,
         GameConfigSO config,
-        TMPTextStyleSO crowdCountTextStyle,
         Camera mainCamera,
-        Transform cityRoot,
-        Material buildingOccludedMaterial)
+        Transform cityRoot)
     {
         if (_initialized)
         {
@@ -65,10 +63,11 @@ public sealed class GameplayRoot : MonoBehaviour
             _hudRoot = LoadRoot<HudRoot>("HudRoot");
 
             // ② 각 root를 고정된 순서로 초기화한다. bus 구독은 전부 여기서 등록된다.
-            _inputRoot.Initialize(config);
+            //    crowdCountTextStyle / buildingOccludedMaterial은 각 root 프리팹에 직렬화 저작돼 있어 여기서 드릴링하지 않는다.
+            _inputRoot.Initialize();
             _crowdRoot.Initialize(config, cityRoot);
-            _cameraRoot.Initialize(mainCamera, config, cityRoot, buildingOccludedMaterial);
-            _hudRoot.Initialize(_session, config, crowdCountTextStyle, mainCamera);
+            _cameraRoot.Initialize(mainCamera, config, cityRoot);
+            _hudRoot.Initialize(_session, config, mainCamera);
 
             // ③ session의 bus 구독을 등록한다.
             _session.Initialize();

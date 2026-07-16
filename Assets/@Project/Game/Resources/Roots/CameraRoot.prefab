@@ -44,3 +44,4 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7a375d5de2de75d44af030f3e6a7edd0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CameraRoot
+  buildingOccludedMaterial: {fileID: 2100000, guid: 21496d1451f02494fbc5a80335defd5a, type: 2}

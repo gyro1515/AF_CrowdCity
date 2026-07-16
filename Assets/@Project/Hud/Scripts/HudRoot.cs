@@ -60,9 +60,12 @@ public sealed class HudRoot : MonoBehaviour
 
     private IGameSessionReadOnly _session;
     private GameConfigSO _config;
-    private TMPTextStyleSO _crowdCountTextStyle;
     private Camera _worldCamera;
     private TMP_FontAsset _fontAsset;
+
+    // 리더 카운트 라벨의 face 색/아웃라인 폭 스타일 원본이다. HudRoot 프리팹에 직렬화 저작되며
+    // (GameSceneSetup이 CrowdCountTextStyle.asset을 배선한다), CreateLabelMaterials가 읽기 전용으로만 소비한다.
+    [SerializeField] private TMPTextStyleSO _crowdCountTextStyle;
 
     // 아래 참조들은 HudRoot 프리팹에 사전 저작된 정적 uGUI 트리(Canvas는 이 컴포넌트가 붙은 프리팹 root 자신)를 가리킨다.
     // 프리팹 인스펙터/Editor 저작(GameSceneSetup)에서 배선되는 자기 자식 뷰 참조이므로 SO 소비자 불변성과 무관하다.
@@ -114,7 +117,6 @@ public sealed class HudRoot : MonoBehaviour
     public void Initialize(
         IGameSessionReadOnly session,
         GameConfigSO config,
-        TMPTextStyleSO crowdCountTextStyle,
         Camera worldCamera)
     {
         if (_initialized || _isShutdown)
@@ -122,9 +124,10 @@ public sealed class HudRoot : MonoBehaviour
             return;
         }
 
-        if (crowdCountTextStyle == null)
+        if (_crowdCountTextStyle == null)
         {
-            throw new ArgumentNullException(nameof(crowdCountTextStyle));
+            throw new InvalidOperationException(
+                "[HudRoot] _crowdCountTextStyle 직렬화 필드가 비어 있습니다(프리팹 배선 누락).");
         }
 
         TMP_FontAsset fontAsset = Resources.Load<TMP_FontAsset>(FontResourcePath);
@@ -151,7 +154,6 @@ public sealed class HudRoot : MonoBehaviour
         _initialized = true;
         _session = session;
         _config = config;
-        _crowdCountTextStyle = crowdCountTextStyle;
         _worldCamera = worldCamera;
         _fontAsset = fontAsset;
         _crowdLabelPrefab = crowdLabelPrefab;
@@ -281,7 +283,6 @@ public sealed class HudRoot : MonoBehaviour
         _markerLayerRect = null;
         _worldCamera = null;
         _config = null;
-        _crowdCountTextStyle = null;
         _fontAsset = null;
         _crowdLabelPrefab = null;
         _rivalMarkerPrefab = null;

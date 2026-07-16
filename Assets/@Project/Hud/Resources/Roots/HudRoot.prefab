@@ -1584,6 +1584,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2d6b94b1b6c6a834abea3151c90faa64, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::HudRoot
+  _crowdCountTextStyle: {fileID: 11400000, guid: 90df816b6c57d496fba85dd6d4794ac5, type: 2}
   _timerText: {fileID: 6554115952986948869}
   _hintGo: {fileID: 940258067995163868}
   _resultOverlayGo: {fileID: 119341035657511197}

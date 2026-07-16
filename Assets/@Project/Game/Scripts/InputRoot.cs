@@ -50,9 +50,9 @@ public sealed class InputRoot : MonoBehaviour
     public event Action RestartTapped;
 
     /// <summary>
-    /// 폴링 상태를 초기화한다. deadzone은 고정 상수라 config에서 읽는 값은 없다.
+    /// 폴링 상태를 초기화한다. deadzone은 고정 상수라 읽어들일 config 값이 없어 매개변수를 받지 않는다.
     /// </summary>
-    public void Initialize(GameConfigSO config)
+    public void Initialize()
     {
         _headingDir = Vector2.zero;
         _hasHeading = false;

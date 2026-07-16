@@ -21,6 +21,12 @@ public static class ResourcePathValidator
     private const string ProjectRootPrefix = "Assets/@Project/";
     private const string RootLoadKeyPrefix = "Roots/";
 
+    // 단일 소비자 asset이 GSC Init 체인 대신 소비 feature root 프리팹에 직렬화 저작됐는지(씬 불필요, AssetDatabase만 사용) 검증한다.
+    private const string CameraRootPrefabPath = "Assets/@Project/Game/Resources/Roots/CameraRoot.prefab";
+    private const string HudRootPrefabPath = "Assets/@Project/Hud/Resources/Roots/HudRoot.prefab";
+    private const string OccludedMaterialPath = "Assets/@Project/City/Materials/City_Occluded.mat";
+    private const string CrowdCountTextStylePath = "Assets/@Project/Hud/CrowdCountTextStyle.asset";
+
     // 5개 로직 root. 런타임(ResourceLoader.LoadRoot&lt;T&gt;)이 클래스 이름으로 "Roots/&lt;이름&gt;"을 로드하므로
     // 프리팹 존재/이름/구조/타입 계약을 여기(씬 불필요, AssetDatabase만 사용)에서 검증해 저렴한 batch 게이트가 덮게 한다.
     private static readonly Type[] LogicRootTypes =
@@ -52,6 +58,7 @@ public static class ResourcePathValidator
         List<string> failures = new List<string>();
         CollectDuplicateLoadKeys(keyToPaths, failures);
         ValidateRootPrefabs(keyToPaths, failures);
+        ValidateMovedSerializedRefs(failures);
 
         if (failures.Count == 0)
         {
@@ -173,6 +180,63 @@ public static class ResourcePathValidator
                 failures.Add(
                     $"root 프리팹 '{name}'의 컴포넌트 타입이 정확히 {name}이(가) 아님({component.GetType().Name})");
             }
+        }
+    }
+
+    // 단일 소비자 asset의 프리팹-로컬 배선(씬 불필요)을 검증한다:
+    // CameraRoot 프리팹의 buildingOccludedMaterial == City_Occluded.mat, HudRoot 프리팹의 _crowdCountTextStyle == CrowdCountTextStyle.asset.
+    private static void ValidateMovedSerializedRefs(List<string> failures)
+    {
+        // buildingOccludedMaterial의 URP 투명/ZWrite/queue/ShadowCaster 계약(material 의미론) 자체는 owner인
+        // CityBuildingsGenerator의 setup 파이프라인(ConvergeOccludedMaterial/MaterialMatches)과
+        // CityBuildingsGeneratorTests.GeneratedAssets_...가 검증한다. 그 MaterialMatches는 private이고
+        // 현재 source plan으로 만든 desired material과의 전체 비교라 이 값싼 씬-독립 게이트에서 깔끔히 재사용할 수 없다.
+        // 따라서 여기서는 프리팹이 그 asset을 가리키는지(경로/식별) 배선만 검증하고 material 의미론 중복 검사는 하지 않는다.
+        CheckPrefabSerializedRef<CameraRoot>(
+            CameraRootPrefabPath, "buildingOccludedMaterial", OccludedMaterialPath, failures);
+        CheckPrefabSerializedRef<HudRoot>(
+            HudRootPrefabPath, "_crowdCountTextStyle", CrowdCountTextStylePath, failures);
+    }
+
+    // 프리팹 root 컴포넌트 T의 objectReference 직렬화 필드가 비어 있지 않고 기대 asset 경로를 가리키는지 검사한다.
+    private static void CheckPrefabSerializedRef<T>(
+        string prefabPath, string fieldName, string expectedAssetPath, List<string> failures)
+        where T : Component
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        if (prefab == null)
+        {
+            failures.Add($"프리팹을 로드하지 못함: {prefabPath}");
+            return;
+        }
+
+        T component = prefab.GetComponent<T>();
+        if (component == null)
+        {
+            failures.Add($"프리팹 '{prefabPath}' root에 {typeof(T).Name} 컴포넌트가 없음");
+            return;
+        }
+
+        SerializedObject serialized = new SerializedObject(component);
+        SerializedProperty property = serialized.FindProperty(fieldName);
+        if (property == null)
+        {
+            failures.Add($"{typeof(T).Name} 직렬화 필드 '{fieldName}'을(를) 찾지 못함");
+            return;
+        }
+
+        UnityEngine.Object value = property.objectReferenceValue;
+        if (value == null)
+        {
+            failures.Add($"{typeof(T).Name} 프리팹 '{fieldName}'이(가) 미배선(null)");
+            return;
+        }
+
+        string actualPath = AssetDatabase.GetAssetPath(value);
+        if (actualPath != expectedAssetPath)
+        {
+            failures.Add(
+                $"{typeof(T).Name} 프리팹 '{fieldName}'이(가) {expectedAssetPath}이(가) 아님(actual={actualPath})");
         }
     }
 

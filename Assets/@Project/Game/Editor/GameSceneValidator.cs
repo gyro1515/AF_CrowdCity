@@ -112,12 +112,12 @@ public static class GameSceneValidator
         }
 
         // 필드가 private이므로 GameSceneSetup과 같은 방식(SerializedObject, 이름 기반)으로 읽는다.
+        // crowdCountTextStyle/buildingOccludedMaterial은 GSC가 아니라 각 root 프리팹에 직렬화 저작되므로
+        // 씬-독립 프리팹-로컬 검사(ResourcePathValidator)가 담당한다. 여기서는 GSC 소유 참조만 검사한다.
         SerializedObject serialized = new SerializedObject(controller);
         Object configRef = GetObjectReference(serialized, "config", failures);
-        Object crowdCountTextStyleRef = GetObjectReference(serialized, "crowdCountTextStyle", failures);
         GetObjectReference(serialized, "mainCamera", failures);
         Object cityRef = GetObjectReference(serialized, "cityRoot", failures);
-        Object occludedMaterialRef = GetObjectReference(serialized, "buildingOccludedMaterial", failures);
 
         // humanPrefab 직렬화 주입 체인은 제거됐다(CrowdRoot가 Resources.Load로 자기 스폰 대상을 소유). 여기서 참조 검사하지 않는다.
 
@@ -131,41 +131,6 @@ public static class GameSceneValidator
         if (configRef != null && configAsset != null && configRef != configAsset)
         {
             failures.Add($"GameSceneController.config가 {ConfigAssetPath} 에셋이 아님");
-        }
-
-        TMPTextStyleSO crowdCountTextStyleAsset =
-            AssetDatabase.LoadAssetAtPath<TMPTextStyleSO>(CrowdCountTextStyleAssetPath);
-        if (crowdCountTextStyleRef != null && crowdCountTextStyleAsset != null &&
-            crowdCountTextStyleRef != crowdCountTextStyleAsset)
-        {
-            failures.Add(
-                $"GameSceneController.crowdCountTextStyle이 {CrowdCountTextStyleAssetPath} 에셋이 아님");
-        }
-
-        Material occludedMaterial = occludedMaterialRef as Material;
-        if (occludedMaterial != null)
-        {
-            if (AssetDatabase.GetAssetPath(occludedMaterial) != CityBuildingsGenerator.OccludedMaterialPath)
-            {
-                failures.Add(
-                    $"GameSceneController.buildingOccludedMaterial이 {CityBuildingsGenerator.OccludedMaterialPath} 에셋이 아님");
-            }
-
-            if (occludedMaterial.shader == null || occludedMaterial.shader.name != UrpLitShaderName ||
-                !occludedMaterial.HasProperty("_Surface") ||
-                !Mathf.Approximately(occludedMaterial.GetFloat("_Surface"), 1f) ||
-                !occludedMaterial.HasProperty(BaseColorProperty) ||
-                Mathf.Abs(occludedMaterial.GetColor(BaseColorProperty).a - 0.25f) > ColorTolerance ||
-                !occludedMaterial.HasProperty("_ZWrite") ||
-                !Mathf.Approximately(occludedMaterial.GetFloat("_ZWrite"), 0f) ||
-                !occludedMaterial.HasProperty("_AlphaClip") ||
-                !Mathf.Approximately(occludedMaterial.GetFloat("_AlphaClip"), 0f) ||
-                occludedMaterial.renderQueue != 3000 ||
-                occludedMaterial.FindPass("ShadowCaster") < 0)
-            {
-                failures.Add(
-                    "buildingOccludedMaterial의 URP Transparent alpha/ZWrite/AlphaClip/queue/ShadowCaster pass 계약이 다름");
-            }
         }
     }
 
