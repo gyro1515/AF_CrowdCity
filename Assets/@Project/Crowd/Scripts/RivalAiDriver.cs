@@ -18,13 +18,13 @@ public sealed class RivalAiDriver
     // 방향 vector가 사실상 0인지 판별하는 임계값(제곱 크기).
     private const float DegenerateSqr = 1e-6f;
 
-    // 최대 agent 수 154(리더 4 + 중립 150). QueryCircle 재사용 buffer가 재할당되지 않도록 여유를 둔다.
-    private const int QueryCapacity = 160;
-
     private readonly int _teamId;
     private readonly GameConfigSO _config;
     private readonly System.Random _random;
-    private readonly List<int> _neutralQuery = new List<int>(QueryCapacity);
+    // QueryCircle 결과 재사용 buffer. 최악의 경우 시야 안에 전체 agent가 들어올 수 있어 전체 agent 수
+    // (리더 1 + 라이벌 + 중립)로 사전할당해 tick 중 List 재할당(hot-path GC alloc)을 없앤다. 과거 상수 160은
+    // 중립 800에서 시야 밀집 시 재할당을 유발했다. 용량만 정하며 질의 결과/순서/판정에는 영향이 없다.
+    private readonly List<int> _neutralQuery;
 
     /// <summary>
     /// 담당 팀 id, 설정 SO, 결정적 seed로 driver를 생성한다.
@@ -35,6 +35,7 @@ public sealed class RivalAiDriver
         _teamId = teamId;
         _config = config;
         _random = new System.Random(seed);
+        _neutralQuery = new List<int>(1 + config.RivalCount + config.NeutralCount);
     }
 
     /// <summary>
@@ -144,7 +145,9 @@ public sealed class RivalAiDriver
             // 시야에 중립이 없으면 기존 heading 유지(fallback: keep heading).
         }
 
-        return ApplyWallAvoidance(self.Leader.transform.position, desiredDeg);
+        float finalDeg = ApplyWallAvoidance(self.Leader.transform.position, desiredDeg);
+        CrowdOracleRecorder.RecordRivalDecision(_teamId, desiredDeg, finalDeg); // 무침습 관찰(Enabled=false면 no-op).
+        return finalDeg;
     }
 
     /// <summary>

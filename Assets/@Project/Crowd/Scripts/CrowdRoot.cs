@@ -25,6 +25,10 @@ public sealed class CrowdRoot : MonoBehaviour
     private const float WanderRayDistance = 1.5f;           // 중립 배회 방향 검사 raycast 거리.
     private const int WanderRepickTries = 8;                // 배회 방향 재선택 시 최대 후보 수.
 
+    // Phase C 단계 2: SDF solver의 벽 standoff 기준 거리. Human.prefab CC 스펙 radius(0.35) + skinWidth(0.08).
+    // per-agent scale(=CC lossyScale=buffer.Scale)로 곱해 CC.Move의 스케일 비례 접촉 거리를 재현한다.
+    private const float WallCollisionClearance = 0.43f;
+
     // 모든 Human(리더/팔로워/중립)이 올라가는 전용 물리 레이어 이름. 유닛끼리 CC 충돌을 끄는 데 쓴다.
     private const string UnitLayerName = "Unit";
 
@@ -41,6 +45,14 @@ public sealed class CrowdRoot : MonoBehaviour
     private GameObject _humanPrefab;
     private SimTuning _tuning;
     private System.Random _rng;
+
+    // Phase C 단계 2: 정적 도시 벽의 read-only SDF. Initialize에서 세션 수명으로 로드(Persistent), Shutdown에서 Dispose한다.
+    // solver 경로(_useSdfSolver ON)만 조회하며, null/미로드면 solver 경로는 CC.Move로 안전 폴백한다.
+    private WallField _wallField;
+
+    // CC.Move(false, 기본·안전 롤백) ↔ 결정적 SDF solver(true) 이동 경로 선택 스위치. 기본 OFF로 두고, 이질감 게이트
+    // 비교/통과 후에만 ON으로 전환한다. serialize해 인스펙터/프리팹에서도 바꿀 수 있고 테스트/하네스는 프로퍼티로 토글한다.
+    [SerializeField] private bool _useSdfSolver;
 
     // 걷기 가능 영역: Ground renderer bounds를 2m 줄인 XZ 사각형.
     private float _regionMinX;
@@ -101,6 +113,17 @@ public sealed class CrowdRoot : MonoBehaviour
     public float RejectionRate { get; private set; }
 
     /// <summary>
+    /// 이동 경로 스위치다. false(기본)면 리더/팔로워/중립 이동에 <c>CharacterController.Move</c>(기존/안전 롤백)를,
+    /// true면 결정적 <see cref="WallSolver"/>(SDF)를 쓴다. WallField 미로드 시 ON이라도 CC.Move로 폴백한다.
+    /// 이질감 게이트 비교/통과 전까지는 OFF를 유지하는 롤백 경로다. 커널 순서/RNG/이벤트 발행에는 영향이 없다.
+    /// </summary>
+    public bool UseSdfSolver
+    {
+        get { return _useSdfSolver; }
+        set { _useSdfSolver = value; }
+    }
+
+    /// <summary>
     /// team id 순서(0=player, 1..=rival)의 CrowdModel 목록이다. SpawnInitial 이전에는 비어 있다.
     /// </summary>
     public IReadOnlyList<CrowdModel> Crowds
@@ -114,6 +137,25 @@ public sealed class CrowdRoot : MonoBehaviour
     public Transform PlayerLeaderTransform
     {
         get { return _playerLeaderTransform; }
+    }
+
+    /// <summary>
+    /// Phase C 단계 0 oracle 스냅샷용 읽기 전용 agent 수다(스폰 이후 buffer.Count, 미스폰 시 0).
+    /// harness/테스트 전용 관찰 API이며 시뮬 상태를 변경하지 않는다.
+    /// </summary>
+    public int OracleAgentCount => _buffer != null ? _buffer.Count : 0;
+
+    /// <summary>
+    /// agent index i의 현재 SoA 스냅샷을 out으로 복사한다(위치는 이번 tick 미러링된 world XZ, team/IsLeader는 commit 후 값).
+    /// 내부 배열 참조를 노출하지 않고 값만 복사하는 읽기 전용 관찰 API다(oracle harness 전용).
+    /// </summary>
+    public void OracleReadAgent(int i, out int id, out int team, out bool isLeader, out Vector2 pos, out float scale)
+    {
+        id = _buffer.Id[i];
+        team = _buffer.Team[i];
+        isLeader = _buffer.IsLeader[i];
+        pos = _buffer.Pos[i];
+        scale = _buffer.Scale[i];
     }
 
     /// <summary>
@@ -211,6 +253,34 @@ public sealed class CrowdRoot : MonoBehaviour
         _rng = new System.Random(config.Seed);
         _countPublisher = EventManager.GetPublisher<CrowdCountChangedEvent>();
         _eliminatedPublisher = EventManager.GetPublisher<CrowdEliminatedEvent>();
+
+        // Phase C 단계 2: 정적 도시 벽의 SDF(WallField)를 세션 수명으로 로드한다(Persistent NativeArray, read-only).
+        // Human prefab과 동일한 self-load 규약(Resources.Load + 피처 소유 상수). solver 스위치(_useSdfSolver) ON일 때만 조회한다.
+        // 로드 실패는 치명적이지 않다: solver 경로가 CC.Move로 폴백하므로 오류만 남기고 계속한다(스위치 OFF 기본 동작 불변).
+        WallSdfAsset wallSdf = Resources.Load<WallSdfAsset>(CrowdResources.WallSdf);
+        if (wallSdf == null)
+        {
+            Debug.LogError(
+                $"[CrowdRoot] WallSdf asset을 Resources에서 로드하지 못했습니다: '{CrowdResources.WallSdf}'. " +
+                "SDF solver 스위치가 켜져도 CC.Move로 폴백합니다.");
+        }
+        else
+        {
+            try
+            {
+                _wallField = new WallField();
+                _wallField.Load(wallSdf);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("[CrowdRoot] WallField 로드에 실패했습니다(SDF solver는 CC.Move로 폴백): " + e);
+                if (_wallField != null)
+                {
+                    _wallField.Dispose();
+                    _wallField = null;
+                }
+            }
+        }
 
         _initialized = true;
     }
@@ -327,7 +397,9 @@ public sealed class CrowdRoot : MonoBehaviour
             _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
             _leaderYawDeg[t] = 0f;
 
-            _crowds.Add(new CrowdModel(t, _config.TeamMaterials[t], leader, index));
+            // followerCapacity = 전체 agent 용량. 한 crowd가 전원을 흡수해도 FollowerAgentIndices/Followers 재할당이 없도록
+            // 넉넉히 사전할당한다(용량만 상향; List 결과/순서/판정 불변). 과거 상수 160은 중립 800에서 tick 중 재할당을 유발했다.
+            _crowds.Add(new CrowdModel(t, _config.TeamMaterials[t], leader, index, _agentCapacity));
             if (t == MatchRules.PlayerTeam)
             {
                 _playerLeaderTransform = leader.transform;
@@ -416,22 +488,44 @@ public sealed class CrowdRoot : MonoBehaviour
             _hasPendingState = false;
         }
 
+        // 아래 CrowdSimProfiler 호출은 무침습 계측이다(기본 Enabled=false → no-op).
+        // 시뮬레이션 값/순서/RNG/이벤트 발행에 영향이 없으며, 켜져 있어도 별도 static 배열에만 기록한다.
+        CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Total);
         if (_matchState == MatchState.Playing)
         {
             // 직전 프레임 RenderInterpolate가 덮어쓴 시각 위치를 논리 위치(_visualCur)로 되돌린다.
             // 이후 모든 transform 읽기/CC.Move/미러링이 항상 논리 위치를 보게 한다(결정성 보장).
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Restore);
             for (int i = 0; i < _buffer.Count; i++) _transformByAgent[i].position = _visualCur[i];
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.Restore);
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Heading);
             UpdateHeadings(dt);                                                          // ②
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.Heading);
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.LeaderMove);
             MoveLeaders(dt);                                                             // ③
-            SteerFollowersAndNeutrals(dt);                                               // ④
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.LeaderMove);
+            SteerFollowersAndNeutrals(dt);                                               // ④ (FollowerSteer/NeutralMove는 내부에서 계측)
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Mirror);
             MirrorPositionsToBuffer();                                                   // ⑤
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.Mirror);
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.GridRebuild);
             _grid.Rebuild(_buffer);                                                      // ⑥
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.GridRebuild);
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Recruit);
             _recruitResolver.Resolve(_buffer, _grid, _tuning.RecruitRadius, _tuning.MaxScale, _recruits);  // ⑦
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.Recruit);
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Combat);
             _combatResolver.Resolve(_buffer, _grid, in _tuning, dt, _combatState, _combatOutcome); // ⑧
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.Combat);
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CommitPublish);
             CommitOutcomes();                                                            // ⑨
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.CommitPublish);
         }
 
+        CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CommitPublish);
         PublishTickEvents();                                                             // ⑩
+        CrowdSimProfiler.End(CrowdSimProfiler.Seg.CommitPublish);
+        CrowdSimProfiler.End(CrowdSimProfiler.Seg.Total);
     }
 
     /// <summary>
@@ -480,6 +574,13 @@ public sealed class CrowdRoot : MonoBehaviour
         }
 
         _shutdown = true;
+
+        // 벽 SDF의 Persistent NativeArray를 해제한다(소유자 lifecycle에서 해제; humanByAgent 미할당 경로에서도 누수 방지).
+        if (_wallField != null)
+        {
+            _wallField.Dispose();
+            _wallField = null;
+        }
 
         if (_humanByAgent == null)
         {
@@ -731,7 +832,9 @@ public sealed class CrowdRoot : MonoBehaviour
             {
                 float rad = yaw * Mathf.Deg2Rad;
                 Vector3 delta = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (speed * dt);
-                _controllerByAgent[index].Move(delta);
+                CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove);
+                ApplyHorizontalMove(index, delta);
+                CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
 
                 // 걷기 가능 영역(중립과 동일한 region) 밖으로 나가지 못하게 XZ를 clamp하고,
                 // 경사/충돌로 생긴 수직 편차를 제거해 Y를 고정한다.
@@ -754,6 +857,7 @@ public sealed class CrowdRoot : MonoBehaviour
     // ④ 팔로워를 가속 제한 arrive 조향으로 리더 뒤 blob에 모으고(CC.Move로 충돌), 중립을 배회시킨다.
     private void SteerFollowersAndNeutrals(float dt)
     {
+        CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.FollowerSteer);
         float sepRadius = _config.SeparationRadius;
         float sepPush = _config.SeparationPush;
         float maxSpeed = _config.FollowerMaxSpeed;
@@ -867,7 +971,9 @@ public sealed class CrowdRoot : MonoBehaviour
                 // CC.Move로 이동해 건물 collider와 충돌시킨다(수평 delta만; Y는 아래에서 다시 고정).
                 Vector2 move = velocity * dt;
                 Vector2 commandedVel = velocity; // Move 직전의 명령 속도(아래 속도 재조정에서 방향 기준으로 사용).
-                _controllerByAgent[index].Move(new Vector3(move.x, 0f, move.y));
+                CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove);
+                ApplyHorizontalMove(index, new Vector3(move.x, 0f, move.y));
+                CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
 
                 Vector3 moved = followerTransform.position;
                 float clampedX = Mathf.Clamp(moved.x, _regionMinX, _regionMaxX);
@@ -922,7 +1028,10 @@ public sealed class CrowdRoot : MonoBehaviour
             }
         }
 
+        CrowdSimProfiler.End(CrowdSimProfiler.Seg.FollowerSteer);
+
         // 중립 배회: 2~5초마다 seeded rng로 방향을 재선택하고 CC.Move로 이동한 뒤 영역 안으로 clamp한다.
+        CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.NeutralMove);
         float wanderSpeed = _config.NeutralWanderSpeed;
         int agentCount = _buffer.Count;
         for (int i = 0; i < agentCount; i++)
@@ -941,7 +1050,9 @@ public sealed class CrowdRoot : MonoBehaviour
             float rad = _wanderHeadingDeg[i] * Mathf.Deg2Rad;
             Transform neutralTransform = _transformByAgent[i];
             _visualPrev[i] = neutralTransform.position; // prev = 이동 전 논리 위치.
-            _controllerByAgent[i].Move(new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (wanderSpeed * dt));
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove);
+            ApplyHorizontalMove(i, new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (wanderSpeed * dt));
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
 
             Vector3 pos = neutralTransform.position;
             float nx = Mathf.Clamp(pos.x, _regionMinX, _regionMaxX);
@@ -954,6 +1065,8 @@ public sealed class CrowdRoot : MonoBehaviour
             _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
             _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
         }
+
+        CrowdSimProfiler.End(CrowdSimProfiler.Seg.NeutralMove);
     }
 
     // 중립의 새 배회 방향을 고른다. 1.5m raycast가 막히는 방향은 기각하고 최대 8회 재시도한다.
@@ -971,11 +1084,39 @@ public sealed class CrowdRoot : MonoBehaviour
             if (!Physics.Raycast(origin, dir, WanderRayDistance))
             {
                 _wanderHeadingDeg[agentIndex] = heading;
+                CrowdOracleRecorder.RecordWanderRepick(agentIndex, attempt + 1, true); // 무침습 관찰(Enabled=false면 no-op).
                 return;
             }
         }
 
         // 모든 후보가 막히면 기존 heading을 유지한다. 다음 repick에서 다시 시도한다.
+        CrowdOracleRecorder.RecordWanderRepick(agentIndex, WanderRepickTries, false); // 무침습 관찰(Enabled=false면 no-op).
+    }
+
+    // 수평 이동을 적용한다: 스위치 OFF(_useSdfSolver=false, 기본)면 CharacterController.Move(기존/안전 롤백),
+    // ON이면 결정적 WallField SDF solver를 쓴다. 두 경로 모두 결과 world 위치를 같은 transform.position에 써서,
+    // 이후의 되읽기 · walkable clamp · Y-pin · 팔로워 되먹임(실제 변위 기반)이 입력만 바뀔 뿐 구조·수식 그대로 동작하게 한다.
+    // solver는 명령 변위가 아니라 실제 해소 위치를 반환하므로 되먹임이 명령 변위로 오염되지 않는다.
+    // WallField 미로드 시(스위치 ON이라도) CC.Move로 폴백해 크래시 대신 기존 동작을 유지한다.
+    private void ApplyHorizontalMove(int index, Vector3 horizontalDelta)
+    {
+        if (_useSdfSolver && _wallField != null && _wallField.IsLoaded)
+        {
+            Transform tr = _transformByAgent[index];
+            Vector3 pos = tr.position;
+            // clearance는 per-agent scale(=CC lossyScale=buffer.Scale) 비례. Y는 그대로 두고 XZ만 해소한다(기존 Y-pin이 뒤에서 고정).
+            float clearance = WallCollisionClearance * _buffer.Scale[index];
+            Vector2 solved = WallSolver.Resolve(
+                _wallField,
+                new Vector2(pos.x, pos.z),
+                new Vector2(horizontalDelta.x, horizontalDelta.z),
+                clearance);
+            tr.position = new Vector3(solved.x, pos.y, solved.y);
+        }
+        else
+        {
+            _controllerByAgent[index].Move(horizontalDelta);
+        }
     }
 
     // ⑤ Unity transform이 저작한 위치를 buffer로 미러링한다(buffer는 team/IsLeader의 최종 권한).

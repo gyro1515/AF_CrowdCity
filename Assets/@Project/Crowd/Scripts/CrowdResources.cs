@@ -7,4 +7,8 @@ public static class CrowdResources
 {
     // Assets/@Project/Crowd/Resources/Crowd/CrowdRoot.prefab 를 가리킨다(확장자/최상위 Resources 접두 생략).
     public const string CrowdRoot = "Crowd/CrowdRoot";
+
+    // Assets/@Project/Crowd/Resources/Crowd/WallSdf.asset(정적 도시 벽 SDF) 를 가리킨다(확장자/최상위 Resources 접두 생략).
+    // 베이커의 편집용 원본은 City/Generated/WallSdf.asset이며, 이 런타임 로드용 사본은 같은 .bytes payload를 공유한다.
+    public const string WallSdf = "Crowd/WallSdf";
 }
