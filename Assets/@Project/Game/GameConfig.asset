@@ -32,7 +32,7 @@ MonoBehaviour:
   sim:
     RecruitRadius: 0.7
     CombatRadius: 0.7
-    LeaderAloneRadius: 25
+    LeaderAloneRadius: 5
     ConvertPerSecond: 40
     PairNormalizer: 15
     RateLimitConversion: 1
