@@ -104,6 +104,8 @@ public sealed class SpatialGrid
             _nextInBucket[i] = _bucketHead[bucket];
             _bucketHead[bucket] = i;
         }
+
+        CrowdSimCounters.CountGridRebuild(_count); // 무침습 계측(Enabled=false면 no-op).
     }
 
     /// <summary>
@@ -121,8 +123,12 @@ public sealed class SpatialGrid
 
         results.Clear();
 
+        // 무침습 계측: 계측 여부를 루프 밖에서 한 번만 읽는다(Enabled=false면 아래 로컬 증가가 사실상 no-op).
+        bool count = CrowdSimCounters.Enabled;
+
         if (_count == 0 || radius < 0f)
         {
+            CrowdSimCounters.CountQuery(0, 0); // 빈 질의도 호출 수로 집계(Enabled=false면 no-op).
             return;
         }
 
@@ -132,6 +138,7 @@ public sealed class SpatialGrid
         int maxCellY = Mathf.FloorToInt((center.y + radius) * _invCellSize);
         float radiusSq = radius * radius;
 
+        int candidateVisits = 0; // cell 매칭 후보(거리 계산 대상) 수. count=false면 증가하지 않는다.
         for (int cellY = minCellY; cellY <= maxCellY; cellY++)
         {
             for (int cellX = minCellX; cellX <= maxCellX; cellX++)
@@ -143,6 +150,11 @@ public sealed class SpatialGrid
                     // agent는 자기 cell 좌표에서만 통과하므로 후보 cell끼리 충돌해도 중복 추가가 없다.
                     if (_cellX[agentIndex] == cellX && _cellY[agentIndex] == cellY)
                     {
+                        if (count)
+                        {
+                            candidateVisits++;
+                        }
+
                         float dx = _pos[agentIndex].x - center.x;
                         float dy = _pos[agentIndex].y - center.y;
                         if (dx * dx + dy * dy <= radiusSq)
@@ -155,6 +167,8 @@ public sealed class SpatialGrid
                 }
             }
         }
+
+        CrowdSimCounters.CountQuery(candidateVisits, results.Count); // 무침습 계측(Enabled=false면 no-op).
     }
 
     private static int HashCell(int cellX, int cellY)

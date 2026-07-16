@@ -34,6 +34,7 @@ public static class CrowdOracleHarness
     public static void RunFromBatch()
     {
         int exitCode = 0;
+        bool counters = false; // -oracleCounters: work counter를 켠 채 오라클을 돌려 계측의 결정성 불변(byte-neutral)을 증명. 기본 OFF.
         try
         {
             string outDir = null;
@@ -43,13 +44,14 @@ public static class CrowdOracleHarness
             bool verify = true;
 
             string[] args = Environment.GetCommandLineArgs();
-            for (int i = 0; i < args.Length - 1; i++)
+            for (int i = 0; i < args.Length; i++)
             {
-                if (args[i] == "-oracleOut") outDir = args[i + 1];
-                else if (args[i] == "-oracleTicks" && int.TryParse(args[i + 1], out int t)) ticks = t;
-                else if (args[i] == "-oracleScales") scales = ParseInts(args[i + 1]);
-                else if (args[i] == "-oracleSeeds") seeds = ParseInts(args[i + 1]);
+                if (args[i] == "-oracleOut" && i + 1 < args.Length) outDir = args[i + 1];
+                else if (args[i] == "-oracleTicks" && i + 1 < args.Length && int.TryParse(args[i + 1], out int t)) ticks = t;
+                else if (args[i] == "-oracleScales" && i + 1 < args.Length) scales = ParseInts(args[i + 1]);
+                else if (args[i] == "-oracleSeeds" && i + 1 < args.Length) seeds = ParseInts(args[i + 1]);
                 else if (args[i] == "-oracleNoVerify") verify = false;
+                else if (args[i] == "-oracleCounters") counters = true;
             }
 
             if (string.IsNullOrEmpty(outDir))
@@ -57,12 +59,21 @@ public static class CrowdOracleHarness
                 outDir = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "phaseC_oracle");
             }
 
+            // work counter를 켠 채로도 same-seed 2× byte-identical이면 계측이 결정성/RNG/순서에 무영향임을 증명한다.
+            CrowdSimCounters.Enabled = counters;
+            CrowdSimCounters.Reset();
+            Debug.Log($"[CrowdOracleHarness] work counters {(counters ? "ON(byte-neutrality 증명)" : "OFF")}");
+
             Run(outDir, ticks, scales, seeds, verify);
         }
         catch (Exception e)
         {
             Debug.LogError("[CrowdOracleHarness] 실패: " + e);
             exitCode = 7;
+        }
+        finally
+        {
+            CrowdSimCounters.Enabled = false; // 계측 플래그 원복(하네스 밖 상태 오염 방지).
         }
 
         EditorApplication.Exit(exitCode);
@@ -140,22 +151,38 @@ public static class CrowdOracleHarness
         GameConfigSO baseConfig, Transform cityRoot, FieldInfo neutralCountField, FieldInfo seedField,
         int scale, int seed, int ticks, string binPath, StreamWriter summary, StreamWriter events)
     {
-        GameConfigSO cfg = UnityEngine.Object.Instantiate(baseConfig);
-        cfg.name = baseConfig.name + $"_oracle_n{scale}_s{seed}";
-        neutralCountField.SetValue(cfg, scale);
-        seedField.SetValue(cfg, seed);
+        // Unity 임시 오브젝트는 try 안에서 생성하고 finally에서 non-null일 때만 파괴한다(로드/인스턴스화/리플렉션 실패 시 누수 방지).
+        GameConfigSO cfg = null;
+        CrowdRoot crowd = null;
 
-        var go = new GameObject($"OracleCrowdRoot_n{scale}_s{seed}");
-        CrowdRoot crowd = go.AddComponent<CrowdRoot>();
-
-        // 이벤트 transcript 버퍼(현재 tick).
+        // 이벤트 transcript 버퍼(현재 tick). 순수 C# delegate라 Unity 오브젝트 누수가 없고, finally가 참조하므로 try 밖에 둔다.
         var tickEvents = new List<int[]>(); // {type, arg0, arg1}
         Action<CrowdCountChangedEvent> onCount = e => tickEvents.Add(new[] { 0, e.CrowdId, e.MemberCount });
         Action<CrowdEliminatedEvent> onElim = e => tickEvents.Add(new[] { 1, e.CrowdId, e.ByCrowdId });
 
         try
         {
+            cfg = UnityEngine.Object.Instantiate(baseConfig);
+            cfg.name = baseConfig.name + $"_oracle_n{scale}_s{seed}";
+            neutralCountField.SetValue(cfg, scale);
+            seedField.SetValue(cfg, seed);
+
+            // live 프리팹을 인스턴스화한다(직렬화 deps + _useSdfSolver=1 이 그대로 넘어온다).
+            // AddComponent<CrowdRoot>()는 직렬화 필드가 비어 Initialize가 하드 페일하고 SDF도 우회한다.
+            CrowdRoot crowdPrefab = ResourceLoader.LoadPrefab<CrowdRoot>();
+            crowd = UnityEngine.Object.Instantiate(crowdPrefab);
+            crowd.gameObject.name = $"OracleCrowdRoot_n{scale}_s{seed}";
+
+            // SDF solver 경로를 명시적으로 켜 SDF ON 결정성 오라클로 만든다. Initialize가 WallField를 로드한다.
+            crowd.UseSdfSolver = true;
             crowd.Initialize(cfg, cityRoot);
+            if (!crowd.IsSdfActive)
+            {
+                throw new InvalidOperationException(
+                    $"[CrowdOracleHarness] n={scale} seed={seed}: SDF solver가 활성이 아닙니다(IsSdfActive=false). " +
+                    "프리팹의 _wallSdfAsset 배선/로드를 확인하세요.");
+            }
+
             crowd.SpawnInitial();
             crowd.OnMatchStateChanged(MatchState.Playing);
             Physics.SyncTransforms();
@@ -169,6 +196,11 @@ public static class CrowdOracleHarness
 
             var prevX = new float[agentCount];
             var prevZ = new float[agentCount];
+
+            // counter가 켜진 경로(-oracleCounters)에서 기록 구간 동안 실제 이동이 SDF로만 가는지 delta로 검증한다
+            // (CrowdProfileHarness와 동일한 CC.Move 폴백 0 하드 페일). 기록 tick을 추가하지 않아 오라클 궤적은 불변이다.
+            long ccBefore = CrowdSimCounters.CcMoveFallbacks;
+            long sdfBefore = CrowdSimCounters.SdfResolves;
 
             using (var bw = new BinaryWriter(File.Open(binPath, FileMode.Create, FileAccess.Write)))
             {
@@ -257,14 +289,27 @@ public static class CrowdOracleHarness
                     }
                 }
             }
+
+            // counter-enabled 경로에서만 검증한다(OFF면 게이트되어 델타가 0이라 무의미). IsSdfActive 단언과 일치하는 이중 방어.
+            if (CrowdSimCounters.Enabled)
+            {
+                long ccDelta = CrowdSimCounters.CcMoveFallbacks - ccBefore;
+                long sdfDelta = CrowdSimCounters.SdfResolves - sdfBefore;
+                if (ccDelta > 0 || sdfDelta <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"[CrowdOracleHarness] n={scale} seed={seed}: SDF 이동 검증 실패 " +
+                        $"(sdfResolves+={sdfDelta}, ccMoveFallbacks+={ccDelta}). SDF ON에서 CC.Move 폴백은 0이어야 한다.");
+                }
+            }
         }
         finally
         {
             CrowdOracleRecorder.Enabled = false;
             EventManager.GetSubscriber<CrowdCountChangedEvent>().Unsubscribe(onCount);
             EventManager.GetSubscriber<CrowdEliminatedEvent>().Unsubscribe(onElim);
-            UnityEngine.Object.DestroyImmediate(go);
-            UnityEngine.Object.DestroyImmediate(cfg);
+            if (crowd != null) UnityEngine.Object.DestroyImmediate(crowd.gameObject);
+            if (cfg != null) UnityEngine.Object.DestroyImmediate(cfg);
         }
     }
 

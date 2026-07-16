@@ -119,6 +119,7 @@ public sealed class RivalAiDriver
         else
         {
             // 중립 밀도: 시야 반경 질의 후 중립별 단위 offset을 합산해 '수가 많은 쪽' 방향을 얻는다.
+            CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.RivalAi); // 무침습 계측(Enabled=false면 no-op).
             grid.QueryCircle(selfPos, _config.AiVisionRadius, _neutralQuery);
             Vector2 densitySum = Vector2.zero;
             for (int i = 0; i < _neutralQuery.Count; i++)

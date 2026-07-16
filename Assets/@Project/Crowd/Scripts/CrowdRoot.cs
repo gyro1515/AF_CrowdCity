@@ -132,6 +132,13 @@ public sealed class CrowdRoot : MonoBehaviour
     }
 
     /// <summary>
+    /// SDF solver 이동 경로가 실제로 활성인지 여부다(스위치 ON + WallField 로드 성공). <see cref="ApplyHorizontalMove"/>의
+    /// SDF 분기 진입 조건과 동일하다. 플래그만이 아니라 WallField가 실제 로드됐는지까지 확인하는 읽기 전용 관찰 API로,
+    /// harness가 SDF ON baseline의 유효성을 단언하는 데 쓴다. 로드/이동 동작을 바꾸지 않는다.
+    /// </summary>
+    public bool IsSdfActive => _useSdfSolver && _wallField != null && _wallField.IsLoaded;
+
+    /// <summary>
     /// team id 순서(0=player, 1..=rival)의 CrowdModel 목록이다. SpawnInitial 이전에는 비어 있다.
     /// </summary>
     public IReadOnlyList<CrowdModel> Crowds
@@ -918,6 +925,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 // 단일 이웃 조회: 같은 팀 이웃만 밀어내 간격을 유지한다. 스케일 인지 간격 때문에 두 유닛이 모두 최대
                 // 스케일일 때의 pairSepRadius(sepRadius*NeutralMaxScale)까지 이웃이 잡히도록 조회 반경을 넓힌다.
                 // 직전 tick의 grid/buffer snapshot을 이웃 기준으로 쓴다.
+                CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.Separation); // 무침습 계측(Enabled=false면 no-op).
                 _grid.QueryCircle(pos, sepRadius * Mathf.Max(1f, _config.NeutralMaxScale), _neighborScratch);
                 Vector2 separation = Vector2.zero;
                 for (int c = 0; c < _neighborScratch.Count; c++)
@@ -1109,6 +1117,7 @@ public sealed class CrowdRoot : MonoBehaviour
     {
         if (_useSdfSolver && _wallField != null && _wallField.IsLoaded)
         {
+            CrowdSimCounters.CountSdfResolve(); // 무침습 계측(Enabled=false면 no-op).
             Transform tr = _transformByAgent[index];
             Vector3 pos = tr.position;
             // clearance는 per-agent scale(=CC lossyScale=buffer.Scale) 비례. Y는 그대로 두고 XZ만 해소한다(기존 Y-pin이 뒤에서 고정).
@@ -1122,6 +1131,7 @@ public sealed class CrowdRoot : MonoBehaviour
         }
         else
         {
+            CrowdSimCounters.CountCcMoveFallback(); // 무침습 계측(Enabled=false면 no-op).
             _controllerByAgent[index].Move(horizontalDelta);
         }
     }

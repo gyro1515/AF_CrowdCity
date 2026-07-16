@@ -70,6 +70,7 @@ public sealed class RecruitResolver
             }
 
             Vector2 neutralPos = pos[i];
+            CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.Recruit); // 무침습 계측(Enabled=false면 no-op).
             grid.QueryCircle(neutralPos, queryRadius, _candidates);
 
             int bestIndex = -1;

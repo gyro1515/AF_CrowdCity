@@ -267,6 +267,7 @@ public sealed class CombatResolver
                 continue;
             }
 
+            CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.Combat); // 무침습 계측(Enabled=false면 no-op).
             grid.QueryCircle(positions[i], queryRadius, _queryResults);
             int foundCount = _queryResults.Count;
             for (int q = 0; q < foundCount; q++)
@@ -290,6 +291,8 @@ public sealed class CombatResolver
                     continue;
                 }
 
+                CrowdSimCounters.CountCombatTouch(); // 무침습 계측: 적 접촉 관계 1건(방향 있음).
+
                 int nearestIndex = i * teamCount + teamJ;
                 if (distSq < _nearestEnemyDistSq[nearestIndex])
                 {
@@ -299,6 +302,7 @@ public sealed class CombatResolver
                 // 접촉 pair는 unordered 쌍당 정확히 한 번만 센다(집합 크기라 열거 순서와 무관하다).
                 if (i < j)
                 {
+                    CrowdSimCounters.CountCombatUniquePair(); // 무침습 계측: 무순서 접촉 member pair 1건.
                     _pairTouchCounts[teamI * teamCount + teamJ]++;
                     _pairTouchCounts[teamJ * teamCount + teamI]++;
                 }
@@ -412,6 +416,7 @@ public sealed class CombatResolver
                     continue;
                 }
 
+                CrowdSimCounters.CountVictims(victimCount); // 무침습 계측: 정렬 투입 victim 수.
                 SortVictimsByDistanceThenId(victimCount, ids);
 
                 // instant(RateLimitConversion=false): 배정된 victim 전원 방출.
@@ -452,6 +457,7 @@ public sealed class CombatResolver
             }
 
             Vector2 leaderPos = positions[a];
+            CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.Leader); // 무침습 계측(Enabled=false면 no-op).
             grid.QueryCircle(leaderPos, leaderQueryRadius, _queryResults);
 
             for (int k = 0; k < teamCount; k++)
@@ -546,6 +552,10 @@ public sealed class CombatResolver
     // Id가 고유해 전순서가 되므로 결과가 agent 삽입 순서와 무관하게 결정된다. 할당 없음.
     private void SortVictimsByDistanceThenId(int count, int[] ids)
     {
+        // 무침습 계측: 비교 여부를 루프 밖에서 한 번만 읽고 로컬로 집계 후 1회만 flush한다(Enabled=false면 no-op).
+        bool countCmp = CrowdSimCounters.Enabled;
+        long comparisons = 0;
+
         for (int i = 1; i < count; i++)
         {
             int candidate = _victimBuffer[i];
@@ -555,6 +565,11 @@ public sealed class CombatResolver
             int j = i - 1;
             while (j >= 0)
             {
+                if (countCmp)
+                {
+                    comparisons++;
+                }
+
                 int placed = _victimBuffer[j];
                 float placedDistSq = _assignedDistSq[placed];
                 if (placedDistSq < candidateDistSq
@@ -569,5 +584,7 @@ public sealed class CombatResolver
 
             _victimBuffer[j + 1] = candidate;
         }
+
+        CrowdSimCounters.AddVictimComparisons(comparisons); // 무침습 계측(Enabled=false면 no-op).
     }
 }
