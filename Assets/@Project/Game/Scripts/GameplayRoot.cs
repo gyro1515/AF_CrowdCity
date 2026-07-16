@@ -54,13 +54,14 @@ public sealed class GameplayRoot : MonoBehaviour
 
         try
         {
-            // ① child root 4개를 스크립트 사전부착 프리팹에서 먼저 전부 Instantiate한다(ResourceLoader.LoadRoot + Instantiate).
+            // ① child root 4개를 스크립트 사전부착 프리팹에서 먼저 전부 Instantiate한다(ResourceLoader.LoadPrefab/LoadUI + Instantiate).
             //    생성 순서는 여기 고정돼 있어 Unity script 실행 순서에 의존하지 않는다. 각 프리팹은 active로 저작돼 있고
             //    Awake/OnEnable이 의존성-free이므로 아래 Initialize(주입) 이전 활성 상태가 안전하다(첫 발행은 SpawnInitial까지 지연).
-            _inputRoot = LoadRoot<InputRoot>("InputRoot");
-            _crowdRoot = LoadRoot<CrowdRoot>("CrowdRoot");
-            _cameraRoot = LoadRoot<CameraRoot>("CameraRoot");
-            _hudRoot = LoadRoot<HudRoot>("HudRoot");
+            //    로직 root(Input/Crowd/Camera)는 Prefabs 카테고리, HUD는 UI 카테고리에서 로드한다.
+            _inputRoot = InstantiateRoot(ResourceLoader.LoadPrefab<InputRoot>(), "InputRoot");
+            _crowdRoot = InstantiateRoot(ResourceLoader.LoadPrefab<CrowdRoot>(), "CrowdRoot");
+            _cameraRoot = InstantiateRoot(ResourceLoader.LoadPrefab<CameraRoot>(), "CameraRoot");
+            _hudRoot = InstantiateRoot(ResourceLoader.LoadUI<HudRoot>(), "HudRoot");
 
             // ② 각 root를 고정된 순서로 초기화한다. bus 구독은 전부 여기서 등록된다.
             //    crowdCountTextStyle / buildingOccludedMaterial은 각 root 프리팹에 직렬화 저작돼 있어 여기서 드릴링하지 않는다.
@@ -88,7 +89,7 @@ public sealed class GameplayRoot : MonoBehaviour
         {
             // 부분 생성/구독 롤백: 소유자(GameplayRoot)의 기존 teardown을 그대로 호출해
             // 등록한 C# binding 해제와 생성한 child root clone 역순 파괴(Hud→Camera→Crowd→Input)를 함께 수행하고 다시 던진다.
-            // (LoadRoot는 프리팹/컴포넌트를 Instantiate 이전에 검사하므로 로드 실패 시 부분 clone이 생기지 않고,
+            // (ResourceLoader는 프리팹/컴포넌트를 Instantiate 이전에 검사하므로 로드 실패 시 부분 clone이 생기지 않고,
             //  각 child root의 Shutdown은 미초기화/중복 호출에도 안전하다.)
             Shutdown();
             throw;
@@ -232,13 +233,12 @@ public sealed class GameplayRoot : MonoBehaviour
         }
     }
 
-    // child root 프리팹을 ResourceLoader.LoadRoot(클래스 이름)로 얻어 이 root 아래에 Instantiate한다.
+    // 호출부가 카테고리별로 미리 로드한 프리팹 컴포넌트를 이 root 아래에 Instantiate하고 이름만 지정한다.
     // 프리팹은 로직 전용(빈 GameObject + 컴포넌트 1개)이라 baked 참조가 없고, 주입은 호출부의 Init(deps)로만 이뤄진다.
-    // 프리팹/컴포넌트 취득 실패 시 ResourceLoader가 명확히 예외를 던진다(Instantiate 전 검사이므로 부분 clone이 남지 않는다).
-    private T LoadRoot<T>(string rootName)
+    // 로드 실패는 호출부의 ResourceLoader가 Instantiate 전에 명확히 예외를 던진다(부분 clone이 남지 않는다).
+    private T InstantiateRoot<T>(T prefabComponent, string rootName)
         where T : Component
     {
-        T prefabComponent = ResourceLoader.LoadRoot<T>();
         T component = Instantiate(prefabComponent, transform, false);
         component.gameObject.name = rootName;
         return component;

@@ -60,10 +60,10 @@ public sealed class GameSceneController : MonoBehaviour
     {
         _session = new GameSession(config);
 
-        // GameplayRoot는 스크립트 사전부착 프리팹을 ResourceLoader.LoadRoot(클래스 이름) + Instantiate로 생성한다(소유권/조립 체인의 시작).
+        // GameplayRoot는 스크립트 사전부착 프리팹을 ResourceLoader.LoadPrefab(클래스 이름) + Instantiate로 생성한다(소유권/조립 체인의 시작).
         // 프리팹은 active로 저작돼 있고 GameplayRoot.Awake/OnEnable은 의존성-free이므로, 배선(Initialize) 이전 활성 상태가 안전하다.
         // 프리팹/컴포넌트 취득 실패 시 ResourceLoader가 명확히 예외를 던진다(Instantiate 전 검사이므로 부분 clone이 남지 않는다).
-        GameplayRoot prefabRoot = ResourceLoader.LoadRoot<GameplayRoot>();
+        GameplayRoot prefabRoot = ResourceLoader.LoadPrefab<GameplayRoot>();
         _gameplayRoot = Instantiate(prefabRoot, transform, false);
         _gameplayRoot.gameObject.name = "GameplayRoot";
         GameObject gameplayRootGo = _gameplayRoot.gameObject;

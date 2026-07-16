@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEditor;
 using UnityEditor.Animations;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -13,15 +14,16 @@ using UnityEngine.UI;
 /// </summary>
 public static class GameSceneValidator
 {
+    private const string ScenePath = "Assets/@Project/Scenes/GameScene.unity";
     private const string ConfigAssetPath = "Assets/@Project/Game/GameConfig.asset";
     private const string CrowdCountTextStyleAssetPath = "Assets/@Project/Hud/CrowdCountTextStyle.asset";
-    // 런타임은 CrowdRoot가 Resources.Load("Human/Human")로 이 prefab을 소유한다. 경로가 일치해야 한다.
-    private const string HumanPrefabPath = "Assets/@Project/Human/Resources/Human/Human.prefab";
-    // HUD 프리팹 3종. HudRoot.cs가 ResourceLoader.LoadRoot / Resources.Load(HudResources.*)로 소유하며 GameSceneSetup.ConvergeHudPrefabs가 저작한다.
-    // HudRoot는 root이므로 Resources/Roots(로드 키 "Roots/HudRoot"), 동적 템플릿은 Resources/Hud에 있다.
-    private const string HudRootPrefabPath = "Assets/@Project/Hud/Resources/Roots/HudRoot.prefab";
-    private const string CrowdLabelPrefabPath = "Assets/@Project/Hud/Resources/Hud/CrowdLabel.prefab";
-    private const string RivalMarkerPrefabPath = "Assets/@Project/Hud/Resources/Hud/RivalMarker.prefab";
+    // 런타임은 CrowdRoot가 직렬화 필드(_humanPrefab)로 이 prefab을 소유한다. 경로가 일치해야 한다.
+    private const string HumanPrefabPath = "Assets/@Project/Human/Prefabs/Human.prefab";
+    // HUD 프리팹 3종. HudRoot는 UI 카테고리(로드 키 "UI/HudRoot")에서 로드하고, 동적 템플릿(CrowdLabel/RivalMarker)은
+    // HudRoot가 직렬화로 소비하므로 Resources 밖 Hud/Prefabs에 있다. GameSceneSetup.ConvergeHudPrefabs가 저작한다.
+    private const string HudRootPrefabPath = "Assets/@Project/Hud/Resources/UI/HudRoot.prefab";
+    private const string CrowdLabelPrefabPath = "Assets/@Project/Hud/Prefabs/CrowdLabel.prefab";
+    private const string RivalMarkerPrefabPath = "Assets/@Project/Hud/Prefabs/RivalMarker.prefab";
     private static readonly Vector2 HudReferenceResolution = new Vector2(1080f, 1920f);
     private const float HudCanvasMatch = 0.5f;
     private const int HudMaxTeams = 4;
@@ -93,6 +95,8 @@ public static class GameSceneValidator
         bool passed = false;
         try
         {
+            // batch에서는 활성 씬에 의존하지 않고 GameScene을 직접 연다(파이프라인 게이트 자체 완결).
+            EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
             passed = Validate();
         }
         finally
@@ -119,7 +123,7 @@ public static class GameSceneValidator
         GetObjectReference(serialized, "mainCamera", failures);
         Object cityRef = GetObjectReference(serialized, "cityRoot", failures);
 
-        // humanPrefab 직렬화 주입 체인은 제거됐다(CrowdRoot가 Resources.Load로 자기 스폰 대상을 소유). 여기서 참조 검사하지 않는다.
+        // humanPrefab은 CrowdRoot 프리팹의 직렬화 필드로 소유하며(ResourcePathValidator가 배선 검사) GSC 참조가 아니다. 여기서 검사하지 않는다.
 
         Transform sceneCity = FindSceneTransform("GameArea", "City");
         if (cityRef != null && sceneCity != null && cityRef != sceneCity)

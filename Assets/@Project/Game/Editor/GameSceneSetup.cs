@@ -136,36 +136,40 @@ public static class GameSceneSetup
     private const string AnimationsFolder = "Assets/@Project/Human/Animations";
     private const string ControllerPath = AnimationsFolder + "/HumanWalk.controller";
     private const string MaterialsFolder = "Assets/@Project/Human/Materials";
-    // Human prefab은 CrowdRoot가 Resources.Load(HumanResources.HumanPrefab="Human/Human")로 소유한다. 경로가 일치해야 한다.
-    private const string ResourcesHumanFolder = "Assets/@Project/Human/Resources/Human";
-    private const string HumanPrefabPath = ResourcesHumanFolder + "/Human.prefab";
-    // 구 경로(Resources 밖). baking 시 신 경로로 이동하고 잔존 시 정리한다(중복 로드 키 방지).
-    private const string LegacyPrefabsFolder = "Assets/@Project/Human/Prefabs";
-    private const string LegacyHumanPrefabPath = LegacyPrefabsFolder + "/Human.prefab";
+    // Human prefab은 CrowdRoot가 직렬화 필드(_humanPrefab)로 소유한다. 경로가 일치해야 한다.
+    private const string HumanPrefabFolder = "Assets/@Project/Human/Prefabs";
+    private const string HumanPrefabPath = HumanPrefabFolder + "/Human.prefab";
+    // 구 경로(Resources 안). baking 시 신 경로(Prefabs)로 이동하고 잔존 시 정리한다(중복 로드 키/유령 자산 방지).
+    private const string LegacyResourcesHumanFolder = "Assets/@Project/Human/Resources/Human";
+    private const string LegacyHumanPrefabPath = LegacyResourcesHumanFolder + "/Human.prefab";
     private const string GameFolder = "Assets/@Project/Game";
     private const string ConfigPath = GameFolder + "/GameConfig.asset";
     private const string HudFolder = "Assets/@Project/Hud";
     private const string CrowdCountTextStylePath = HudFolder + "/CrowdCountTextStyle.asset";
+    // 정적 도시 벽 SDF의 원본 asset. CrowdRoot 프리팹의 _wallSdfAsset 직렬화 필드가 이 정본을 가리킨다(Resources 사본 없음).
+    private const string WallSdfAssetPath = "Assets/@Project/City/Generated/WallSdf.asset";
     private const string WalkName = "HumanWalk";
     private const string UrpLitShaderName = "Universal Render Pipeline/Lit";
     private const string BaseColorProperty = "_BaseColor";
-    // feature root 프리팹(로직 전용: 빈 GameObject + 컴포넌트 1개). 런타임이 ResourceLoader.LoadRoot(클래스 이름)로 소유한다.
-    // 5개 root는 각 피처의 Resources/Roots 하위에 <클래스이름>.prefab로 저작돼 병합 로드 키 "Roots/<클래스이름>"이 된다.
+    // feature root 프리팹(로직 전용: 빈 GameObject + 컴포넌트 1개). 런타임이 ResourceLoader.LoadPrefab/LoadUI(클래스 이름)로 소유한다.
+    // Prefabs 카테고리(GameplayRoot/InputRoot/CameraRoot/CrowdRoot)는 각 피처의 Resources/Prefabs 하위에,
+    // UI 카테고리(HudRoot)는 Resources/UI 하위에 <클래스이름>.prefab로 저작돼 병합 로드 키 "Prefabs/<클래스이름>"/"UI/HudRoot"가 된다.
     // 로직 root 프리팹 경로/이름은 typeof(T).Name에서 파생하므로(ConvergeLogicRootPrefab/VerifyLogicRootPrefab) 로더와 어긋날 수 없다.
-    private const string GameRootsFolder = GameFolder + "/Resources/Roots";
-    private const string CrowdRootsFolder = "Assets/@Project/Crowd/Resources/Roots";
-    private const string HudRootsFolder = HudFolder + "/Resources/Roots";
-    // HUD 동적 템플릿(CrowdLabel/RivalMarker)은 root가 아니므로 Roots가 아닌 Hud/Resources/Hud에 그대로 둔다.
-    private const string HudResourcesFolder = HudFolder + "/Resources/Hud";
-    private const string HudRootPrefabPath = HudRootsFolder + "/" + nameof(HudRoot) + ".prefab";      // 로드 키 Roots/HudRoot
-    private const string CameraRootPrefabPath = GameRootsFolder + "/" + nameof(CameraRoot) + ".prefab"; // 로드 키 Roots/CameraRoot
-    private const string CrowdLabelPrefabPath = HudResourcesFolder + "/CrowdLabel.prefab";            // HudResources.CrowdLabel
-    private const string RivalMarkerPrefabPath = HudResourcesFolder + "/RivalMarker.prefab";          // HudResources.RivalMarker
+    private const string GameRootsFolder = GameFolder + "/Resources/Prefabs";
+    private const string CrowdRootsFolder = "Assets/@Project/Crowd/Resources/Prefabs";
+    private const string HudRootsFolder = HudFolder + "/Resources/UI";
+    // HUD 동적 템플릿(CrowdLabel/RivalMarker)은 MonoBehaviour(HudRoot)가 직렬화로 소비하므로 Resources 밖 Hud/Prefabs에 저작한다.
+    private const string HudPrefabsFolder = HudFolder + "/Prefabs";
+    private const string CrowdRootPrefabPath = CrowdRootsFolder + "/" + nameof(CrowdRoot) + ".prefab";  // 로드 키 Prefabs/CrowdRoot
+    private const string HudRootPrefabPath = HudRootsFolder + "/" + nameof(HudRoot) + ".prefab";        // 로드 키 UI/HudRoot
+    private const string CameraRootPrefabPath = GameRootsFolder + "/" + nameof(CameraRoot) + ".prefab"; // 로드 키 Prefabs/CameraRoot
+    private const string CrowdLabelPrefabPath = HudPrefabsFolder + "/CrowdLabel.prefab";                // HudRoot._crowdLabelPrefab
+    private const string RivalMarkerPrefabPath = HudPrefabsFolder + "/RivalMarker.prefab";              // HudRoot._rivalMarkerPrefab
 
     // ---- HUD uGUI 프리팹 저작 스펙 (pinned) ----
     // HudRoot.cs의 원래 런타임 BuildCanvas/BuildLeaderboard/CreateLabel/CreateRivalMarker가 쓰던 레이아웃 상수를 그대로 옮긴 것이다.
     // 이 값들이 어긋나면 프리팹 배치가 코드 시절과 달라지므로 GameSceneValidator의 HUD 구조 검사와 함께 시각 1:1을 지킨다.
-    private const string HudFontResourcePath = "Fonts & Materials/LiberationSans SDF - Fallback"; // HudRoot.FontResourcePath와 일치.
+    private const string HudFontAssetPath = "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset"; // HudRoot._fontAsset 배선 대상 벤더 폰트.
     private static readonly Vector2 HudReferenceResolution = new Vector2(1080f, 1920f);
     private const float HudCanvasMatch = 0.5f;
     private const float HudRowWidth = 260f;
@@ -274,7 +278,7 @@ public static class GameSceneSetup
             bool sceneChanged = false;
             sceneChanged |= ConvergeHumanAnimator(preflight.HumanBase, animatorController, changed, unchanged);
 
-            // 4b. 완전히 구성된 씬 템플릿을 Resources/Human 하위 prefab asset으로 저장하고(Human.cs/CC baking 포함) 씬 템플릿을 비활성화한다.
+            // 4b. 완전히 구성된 씬 템플릿을 Human/Prefabs 하위 prefab asset으로 저장하고(Human.cs/CC baking 포함) 씬 템플릿을 비활성화한다.
             ConvergeHumanPrefab(preflight.HumanWrapper, ref sceneChanged, changed);
 
             sceneChanged |= ConvergeSceneController(
@@ -1038,12 +1042,12 @@ public static class GameSceneSetup
     private const float ControllerCenterY = 0.9f;
     private const float ControllerSkinWidth = 0.08f;
 
-    // 구성이 끝난 씬 템플릿(GameArea/Human)을 Resources/Human 하위 prefab asset으로 저장하고 씬 템플릿을 비활성화한다.
+    // 구성이 끝난 씬 템플릿(GameArea/Human)을 Human/Prefabs 하위 prefab asset으로 저장하고 씬 템플릿을 비활성화한다.
     // 저장 직전에 (a)Human 컴포넌트와 (b)pinned 스펙 CharacterController(enabled)를 template root에 baking해
     // 런타임 clone이 AddComponent 없이 곧바로 쓰도록 한다. prefab은 매번 같은 경로에 덮어써 수렴시킨다(idempotent).
     private static void ConvergeHumanPrefab(Transform humanWrapper, ref bool sceneChanged, List<string> changed)
     {
-        EnsureFolder(ResourcesHumanFolder);
+        EnsureFolder(HumanPrefabFolder);
 
         GameObject templateGo = humanWrapper.gameObject;
 
@@ -1083,18 +1087,18 @@ public static class GameSceneSetup
         // 구 경로(Resources 밖) 잔존 자산을 정리해 Resources 중복 로드 키/유령 자산을 막는다.
         DeleteLegacyHumanPrefabIfPresent(changed);
 
-        changed.Add("Human.prefab 저장/갱신(Resources/Human) + Human.cs/CharacterController baking + 씬 템플릿 비활성화");
+        changed.Add("Human.prefab 저장/갱신(Human/Prefabs) + Human.cs/CharacterController baking + 씬 템플릿 비활성화");
     }
 
     /// <summary>
-    /// Phase 1 전용: Human.prefab을 Resources/Human 하위로 이전하고 root에 Human.cs + enabled CharacterController(pinned 스펙)를
+    /// Phase 1 전용: Human.prefab을 Human/Prefabs 하위로 이전하고 root에 Human.cs + enabled CharacterController(pinned 스펙)를
     /// baking한다. City/씬/Config 수렴 없이 prefab asset만 직접 갱신하므로 batchmode에서 독립 실행할 수 있다.
     /// 구 경로 prefab이 있으면 guid를 보존해 이동한 뒤 컴포넌트를 baking하고, 구 경로 잔존물을 정리한다. idempotent.
     /// </summary>
     [MenuItem("AF/CrowdCity/Bake Human Prefab (Resources + CC and Human)")]
     public static void BakeHumanPrefab()
     {
-        EnsureFolder(ResourcesHumanFolder);
+        EnsureFolder(HumanPrefabFolder);
 
         // 1. 소스 확정: 신 경로에 없고 구 경로에 있으면 guid를 보존해 이동한다.
         if (AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath) == null)
@@ -1253,14 +1257,14 @@ public static class GameSceneSetup
 
         if (AssetDatabase.DeleteAsset(LegacyHumanPrefabPath))
         {
-            changed.Add("구 Human.prefab(Prefabs/) 삭제");
+            changed.Add("구 Human.prefab(Resources/Human) 삭제");
         }
     }
 
     // ---- 4c. feature root 프리팹 (로직 전용: 빈 GameObject + 컴포넌트 1개) ----
 
     // GameplayRoot/InputRoot/CameraRoot/CrowdRoot는 로직 전용(빈 GO + 컴포넌트 1개) 프리팹으로 load-or-create 수렴한다.
-    // 런타임(GameSceneController/GameplayRoot)이 ResourceLoader.LoadRoot + Instantiate + Init(deps)로 조립한다.
+    // 런타임(GameSceneController/GameplayRoot)이 ResourceLoader.LoadPrefab/LoadUI + Instantiate + Init(deps)로 조립한다.
     // HudRoot는 Canvas/CanvasScaler + 정적 uGUI 트리(타이머·순위표·시작힌트·결과오버레이)를 사전 저작해야 하므로
     // 로직 전용 수렴이 아니라 전용 저작 경로(ConvergeHudPrefabs)를 쓰고 동적 라벨/마커 템플릿 프리팹도 함께 수렴한다.
     private static void ConvergeFeatureRootPrefabs(List<string> changed, List<string> unchanged)
@@ -1271,10 +1275,87 @@ public static class GameSceneSetup
         ConvergeLogicRootPrefab<CrowdRoot>(CrowdRootsFolder, changed, unchanged);
         ConvergeHudPrefabs(changed, unchanged);
 
-        // 단일 소비자 editor-authored asset을 소비 feature root 프리팹의 직렬화 필드로 배선한다(Init 체인 드릴링 제거).
-        // 배선 대상 asset은 프리팹보다 먼저 존재해야 하므로 위 프리팹 수렴 뒤에 실행한다.
+        // 단일 소비자 asset을 소비 feature root 프리팹의 직렬화 필드로 배선한다(Init/직접 런타임 로드 체인 제거).
+        // 배선 대상 asset/프리팹은 이 프리팹 수렴 뒤에 존재해야 하므로 위 프리팹 수렴 뒤에 실행한다.
         WireCameraRootOccludedMaterial(changed, unchanged);
         WireHudRootCrowdCountTextStyle(changed, unchanged);
+        WireCrowdRootHumanPrefab(changed, unchanged);
+        WireCrowdRootWallSdf(changed, unchanged);
+        WireHudRootCrowdLabelPrefab(changed, unchanged);
+        WireHudRootRivalMarkerPrefab(changed, unchanged);
+        WireHudRootFont(changed, unchanged);
+    }
+
+    // CrowdRoot 프리팹의 _humanPrefab 직렬화 필드에 Human 프리팹(Human/Prefabs/Human.prefab)을 배선한다.
+    private static void WireCrowdRootHumanPrefab(List<string> changed, List<string> unchanged)
+    {
+        GameObject human = AssetDatabase.LoadAssetAtPath<GameObject>(HumanPrefabPath);
+        if (human == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] CrowdRoot 프리팹 배선 대상 Human 프리팹이 없습니다: {HumanPrefabPath}. " +
+                "먼저 'AF/CrowdCity/Bake Human Prefab'을 실행하세요.");
+        }
+
+        ConvergePrefabSerializedRef<CrowdRoot>(
+            CrowdRootPrefabPath, "_humanPrefab", human, "CrowdRoot", changed, unchanged);
+    }
+
+    // CrowdRoot 프리팹의 _wallSdfAsset 직렬화 필드에 정본 WallSdf asset(City/Generated/WallSdf.asset)을 배선한다.
+    private static void WireCrowdRootWallSdf(List<string> changed, List<string> unchanged)
+    {
+        WallSdfAsset wallSdf = AssetDatabase.LoadAssetAtPath<WallSdfAsset>(WallSdfAssetPath);
+        if (wallSdf == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] CrowdRoot 프리팹 배선 대상 WallSdf asset이 없습니다: {WallSdfAssetPath}. " +
+                "먼저 'AF/CrowdCity/Bake Wall SDF'를 실행하세요.");
+        }
+
+        ConvergePrefabSerializedRef<CrowdRoot>(
+            CrowdRootPrefabPath, "_wallSdfAsset", wallSdf, "CrowdRoot", changed, unchanged);
+    }
+
+    // HudRoot 프리팹의 _crowdLabelPrefab 직렬화 필드에 CrowdLabel 템플릿 프리팹(Hud/Prefabs)을 배선한다.
+    private static void WireHudRootCrowdLabelPrefab(List<string> changed, List<string> unchanged)
+    {
+        GameObject crowdLabel = AssetDatabase.LoadAssetAtPath<GameObject>(CrowdLabelPrefabPath);
+        if (crowdLabel == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] HudRoot 프리팹 배선 대상 CrowdLabel 프리팹이 없습니다: {CrowdLabelPrefabPath}.");
+        }
+
+        ConvergePrefabSerializedRef<HudRoot>(
+            HudRootPrefabPath, "_crowdLabelPrefab", crowdLabel, "HudRoot", changed, unchanged);
+    }
+
+    // HudRoot 프리팹의 _rivalMarkerPrefab 직렬화 필드에 RivalMarker 템플릿 프리팹(Hud/Prefabs)을 배선한다.
+    private static void WireHudRootRivalMarkerPrefab(List<string> changed, List<string> unchanged)
+    {
+        GameObject rivalMarker = AssetDatabase.LoadAssetAtPath<GameObject>(RivalMarkerPrefabPath);
+        if (rivalMarker == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] HudRoot 프리팹 배선 대상 RivalMarker 프리팹이 없습니다: {RivalMarkerPrefabPath}.");
+        }
+
+        ConvergePrefabSerializedRef<HudRoot>(
+            HudRootPrefabPath, "_rivalMarkerPrefab", rivalMarker, "HudRoot", changed, unchanged);
+    }
+
+    // HudRoot 프리팹의 _fontAsset 직렬화 필드에 벤더 TMP 폰트(이동하지 않고 GUID 참조)를 배선한다.
+    private static void WireHudRootFont(List<string> changed, List<string> unchanged)
+    {
+        TMP_FontAsset font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(HudFontAssetPath);
+        if (font == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] HudRoot 프리팹 배선 대상 TMP 폰트가 없습니다: {HudFontAssetPath}.");
+        }
+
+        ConvergePrefabSerializedRef<HudRoot>(
+            HudRootPrefabPath, "_fontAsset", font, "HudRoot", changed, unchanged);
     }
 
     // CameraRoot 프리팹의 buildingOccludedMaterial 직렬화 필드에 City 생성물 material(City_Occluded.mat)을 배선한다.
@@ -1359,16 +1440,16 @@ public static class GameSceneSetup
     }
 
     // HUD 프리팹 3종(HudRoot Canvas 트리 + CrowdLabel/RivalMarker 동적 템플릿)을 load-or-create 수렴한다.
-    // HudRoot.cs가 Resources.Load(HudResources.*)로 소유하는 자산이며, 저작 레이아웃은 HudRoot.cs의 옛 Build* 상수를 1:1로 옮긴 것이다.
+    // HudRoot는 UI 카테고리(Resources/UI), 동적 템플릿은 Resources 밖 Hud/Prefabs에 저작하며, 레이아웃은 HudRoot.cs의 옛 Build* 상수를 1:1로 옮긴 것이다.
     private static void ConvergeHudPrefabs(List<string> changed, List<string> unchanged)
     {
-        EnsureFolder(HudResourcesFolder);
+        EnsureFolder(HudPrefabsFolder);
 
-        TMP_FontAsset font = Resources.Load<TMP_FontAsset>(HudFontResourcePath);
+        TMP_FontAsset font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(HudFontAssetPath);
         if (font == null)
         {
             throw new InvalidOperationException(
-                "[GameSceneSetup] HUD TMP 폰트 에셋을 찾지 못했습니다: Resources/" + HudFontResourcePath);
+                "[GameSceneSetup] HUD TMP 폰트 에셋을 찾지 못했습니다: " + HudFontAssetPath);
         }
 
         ConvergeHudRootPrefab(font, changed, unchanged);
@@ -1557,7 +1638,7 @@ public static class GameSceneSetup
     {
         EnsureFolder(folder);
 
-        // 프리팹 파일명/root 이름은 typeof(T).Name에서 파생한다(로더 키 "Roots/<클래스이름>"와 어긋날 수 없다).
+        // 프리팹 파일명/root 이름은 typeof(T).Name에서 파생한다(Prefabs 카테고리 로더 키 "Prefabs/<클래스이름>"와 어긋날 수 없다; UI 카테고리 HudRoot는 ConvergeHudPrefabs가 저작).
         string rootName = typeof(T).Name;
         string prefabPath = folder + "/" + rootName + ".prefab";
 
@@ -1612,6 +1693,11 @@ public static class GameSceneSetup
             CameraRootPrefabPath, "buildingOccludedMaterial", CityBuildingsGenerator.OccludedMaterialPath);
         VerifyPrefabSerializedRef<HudRoot>(
             HudRootPrefabPath, "_crowdCountTextStyle", CrowdCountTextStylePath);
+        VerifyPrefabSerializedRef<CrowdRoot>(CrowdRootPrefabPath, "_humanPrefab", HumanPrefabPath);
+        VerifyPrefabSerializedRef<CrowdRoot>(CrowdRootPrefabPath, "_wallSdfAsset", WallSdfAssetPath);
+        VerifyPrefabSerializedRef<HudRoot>(HudRootPrefabPath, "_crowdLabelPrefab", CrowdLabelPrefabPath);
+        VerifyPrefabSerializedRef<HudRoot>(HudRootPrefabPath, "_rivalMarkerPrefab", RivalMarkerPrefabPath);
+        VerifyPrefabSerializedRef<HudRoot>(HudRootPrefabPath, "_fontAsset", HudFontAssetPath);
 
         Debug.Log(
             "[BakeFeatureRootPrefabs] PASS — GameplayRoot/InputRoot/CameraRoot/CrowdRoot/HudRoot 프리팹 저작 완료. " +

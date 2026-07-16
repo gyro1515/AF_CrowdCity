@@ -1584,6 +1584,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 2d6b94b1b6c6a834abea3151c90faa64, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::HudRoot
+  _fontAsset: {fileID: 11400000, guid: 2e498d1c8094910479dc3e1b768306a4, type: 2}
   _crowdCountTextStyle: {fileID: 11400000, guid: 90df816b6c57d496fba85dd6d4794ac5, type: 2}
   _timerText: {fileID: 6554115952986948869}
   _hintGo: {fileID: 940258067995163868}
@@ -1607,6 +1608,8 @@ MonoBehaviour:
   - {fileID: 5139767525238840699}
   - {fileID: 4160124314350940129}
   - {fileID: 7856564248053132311}
+  _crowdLabelPrefab: {fileID: 1636230937289292719, guid: 2d6eb30af25965e4f9d8e3e657a605d9, type: 3}
+  _rivalMarkerPrefab: {fileID: 8152651559067934976, guid: 814b0b9c1750d2b43bd9657f4715dc0a, type: 3}
 --- !u!1 &6880745944900733379
 GameObject:
   m_ObjectHideFlags: 0

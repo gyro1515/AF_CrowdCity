@@ -44,7 +44,6 @@ public sealed class HudRoot : MonoBehaviour
 {
     private const int MaxTeams = 4;
     private const float DimAlpha = 0.35f;
-    private const string FontResourcePath = "Fonts & Materials/LiberationSans SDF - Fallback";
 
     // Overlay 리더 라벨이 리더 머리 위로 떠서 투영될 월드 오프셋이다(프리팹 저작 대상 아님 — 런타임 투영 전용).
     private static readonly Vector3 LabelOffset = new Vector3(0f, 2.2f, 0f);
@@ -61,7 +60,9 @@ public sealed class HudRoot : MonoBehaviour
     private IGameSessionReadOnly _session;
     private GameConfigSO _config;
     private Camera _worldCamera;
-    private TMP_FontAsset _fontAsset;
+
+    // 라벨/마커 TMP 폰트. 벤더 자산(TextMesh Pro Resources)을 프리팹에 직렬화 참조하며 GameSceneSetup이 배선한다.
+    [SerializeField] private TMP_FontAsset _fontAsset;
 
     // 리더 카운트 라벨의 face 색/아웃라인 폭 스타일 원본이다. HudRoot 프리팹에 직렬화 저작되며
     // (GameSceneSetup이 CrowdCountTextStyle.asset을 배선한다), CreateLabelMaterials가 읽기 전용으로만 소비한다.
@@ -80,9 +81,10 @@ public sealed class HudRoot : MonoBehaviour
     [SerializeField] private Image[] _rowSwatches;
     [SerializeField] private TextMeshProUGUI[] _rowCounts;
 
-    // 동적 라벨/마커 템플릿 프리팹(개수가 팀 수에 따라 가변이라 정적화 불가). 런타임 Resources.Load + Instantiate로 복제한다.
-    private GameObject _crowdLabelPrefab;
-    private GameObject _rivalMarkerPrefab;
+    // 동적 라벨/마커 템플릿 프리팹(개수가 팀 수에 따라 가변이라 정적화 불가). 프리팹에 직렬화 저작되며 GameSceneSetup이 배선하고,
+    // 런타임에는 Instantiate로 복제한다.
+    [SerializeField] private GameObject _crowdLabelPrefab;
+    [SerializeField] private GameObject _rivalMarkerPrefab;
 
     private readonly int[] _rowTeam = new int[MaxTeams];
     private readonly int[] _rowCount = new int[MaxTeams];
@@ -130,34 +132,28 @@ public sealed class HudRoot : MonoBehaviour
                 "[HudRoot] _crowdCountTextStyle 직렬화 필드가 비어 있습니다(프리팹 배선 누락).");
         }
 
-        TMP_FontAsset fontAsset = Resources.Load<TMP_FontAsset>(FontResourcePath);
-        if (fontAsset == null)
+        if (_fontAsset == null)
         {
             throw new InvalidOperationException(
-                "[HudRoot] TMP font asset을 찾을 수 없습니다: Resources/" + FontResourcePath);
+                "[HudRoot] _fontAsset 직렬화 필드가 비어 있습니다(프리팹 배선 누락).");
         }
 
-        GameObject crowdLabelPrefab = Resources.Load<GameObject>(HudResources.CrowdLabel);
-        if (crowdLabelPrefab == null)
+        if (_crowdLabelPrefab == null)
         {
             throw new InvalidOperationException(
-                "[HudRoot] CrowdLabel 프리팹을 찾을 수 없습니다: Resources/" + HudResources.CrowdLabel);
+                "[HudRoot] _crowdLabelPrefab 직렬화 필드가 비어 있습니다(프리팹 배선 누락).");
         }
 
-        GameObject rivalMarkerPrefab = Resources.Load<GameObject>(HudResources.RivalMarker);
-        if (rivalMarkerPrefab == null)
+        if (_rivalMarkerPrefab == null)
         {
             throw new InvalidOperationException(
-                "[HudRoot] RivalMarker 프리팹을 찾을 수 없습니다: Resources/" + HudResources.RivalMarker);
+                "[HudRoot] _rivalMarkerPrefab 직렬화 필드가 비어 있습니다(프리팹 배선 누락).");
         }
 
         _initialized = true;
         _session = session;
         _config = config;
         _worldCamera = worldCamera;
-        _fontAsset = fontAsset;
-        _crowdLabelPrefab = crowdLabelPrefab;
-        _rivalMarkerPrefab = rivalMarkerPrefab;
         CreateLabelMaterials();
 
         // 정적 uGUI 트리는 프리팹에 저작돼 있고 참조는 직렬화로 주입된다. 과거 BuildLeaderboard가 하던

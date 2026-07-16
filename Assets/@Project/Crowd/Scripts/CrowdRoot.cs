@@ -42,9 +42,17 @@ public sealed class CrowdRoot : MonoBehaviour
     };
 
     private GameConfigSO _config;
-    private GameObject _humanPrefab;
+
+    // CrowdRoot가 자기 스폰 대상(Human clone)을 소유한다. 프리팹에 직렬화 저작되며 GameSceneSetup이 배선한다.
+    // 상위(GameplayRoot/GameSceneController)의 humanPrefab 주입 체인은 없다. 미배선이면 Initialize가 즉시 예외를 던진다(하드 페일).
+    [SerializeField] private GameObject _humanPrefab;
+
     private SimTuning _tuning;
     private System.Random _rng;
+
+    // Phase C 단계 2: 정적 도시 벽의 read-only SDF asset(City/Generated/WallSdf.asset). 프리팹에 직렬화 저작되며 GameSceneSetup이 배선한다.
+    // 미배선(null)이면 solver 경로는 CC.Move로 안전 폴백한다(하드 페일 아님).
+    [SerializeField] private WallSdfAsset _wallSdfAsset;
 
     // Phase C 단계 2: 정적 도시 벽의 read-only SDF. Initialize에서 세션 수명으로 로드(Persistent), Shutdown에서 Dispose한다.
     // solver 경로(_useSdfSolver ON)만 조회하며, null/미로드면 solver 경로는 CC.Move로 안전 폴백한다.
@@ -199,13 +207,12 @@ public sealed class CrowdRoot : MonoBehaviour
 
         _config = config;
 
-        // CrowdRoot가 자기 스폰 대상을 소유한다. 상위(GameplayRoot/GameSceneController)의 humanPrefab 주입 체인은 제거됐다.
-        _humanPrefab = Resources.Load<GameObject>(HumanResources.HumanPrefab);
+        // CrowdRoot가 자기 스폰 대상을 소유한다(프리팹 직렬화 필드). 미배선이면 즉시 예외(하드 페일)로 스폰 불가를 알린다.
         if (_humanPrefab == null)
         {
             throw new InvalidOperationException(
-                $"[CrowdRoot] Human prefab을 Resources에서 로드하지 못했습니다: '{HumanResources.HumanPrefab}'. " +
-                "GameSceneSetup으로 prefab을 Resources/Human 하위에 baking하세요.");
+                "[CrowdRoot] _humanPrefab 직렬화 필드가 비어 있습니다(프리팹 배선 누락). " +
+                "GameSceneSetup으로 CrowdRoot 프리팹의 _humanPrefab을 배선하세요.");
         }
 
         _tuning = config.Sim;
@@ -255,13 +262,13 @@ public sealed class CrowdRoot : MonoBehaviour
         _eliminatedPublisher = EventManager.GetPublisher<CrowdEliminatedEvent>();
 
         // Phase C 단계 2: 정적 도시 벽의 SDF(WallField)를 세션 수명으로 로드한다(Persistent NativeArray, read-only).
-        // Human prefab과 동일한 self-load 규약(Resources.Load + 피처 소유 상수). solver 스위치(_useSdfSolver) ON일 때만 조회한다.
-        // 로드 실패는 치명적이지 않다: solver 경로가 CC.Move로 폴백하므로 오류만 남기고 계속한다(스위치 OFF 기본 동작 불변).
-        WallSdfAsset wallSdf = Resources.Load<WallSdfAsset>(CrowdResources.WallSdf);
+        // asset은 프리팹 직렬화 필드(_wallSdfAsset)로 소유한다. solver 스위치(_useSdfSolver) ON일 때만 조회한다.
+        // 미배선(null)은 치명적이지 않다: solver 경로가 CC.Move로 폴백하므로 오류만 남기고 계속한다(스위치 OFF 기본 동작 불변).
+        WallSdfAsset wallSdf = _wallSdfAsset;
         if (wallSdf == null)
         {
             Debug.LogError(
-                $"[CrowdRoot] WallSdf asset을 Resources에서 로드하지 못했습니다: '{CrowdResources.WallSdf}'. " +
+                "[CrowdRoot] _wallSdfAsset 직렬화 필드가 비어 있습니다(프리팹 배선 누락). " +
                 "SDF solver 스위치가 켜져도 CC.Move로 폴백합니다.");
         }
         else

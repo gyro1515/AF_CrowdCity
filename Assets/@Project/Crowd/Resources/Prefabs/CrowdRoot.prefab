@@ -44,4 +44,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3ce8f086496d5254da465136200c1d11, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CrowdRoot
+  _humanPrefab: {fileID: 4557897642118330164, guid: 303a7c17cbf54bd4aa58b274fa7e7b66, type: 3}
+  _wallSdfAsset: {fileID: 11400000, guid: b0329e7883d2d474b9cf535ecdfab991, type: 2}
   _useSdfSolver: 1

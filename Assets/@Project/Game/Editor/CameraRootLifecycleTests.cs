@@ -114,12 +114,12 @@ public sealed class CameraRootLifecycleTests
     {
         // Batch B: 단일 소비자 asset이 GSC Init 체인 대신 소비 feature root 프리팹에 직렬화 저작됐는지 검증한다(읽기 전용).
         AssertPrefabRefPath(
-            "Assets/@Project/Game/Resources/Roots/CameraRoot.prefab",
+            "Assets/@Project/Game/Resources/Prefabs/CameraRoot.prefab",
             typeof(CameraRoot),
             "buildingOccludedMaterial",
             "Assets/@Project/City/Materials/City_Occluded.mat");
         AssertPrefabRefPath(
-            "Assets/@Project/Hud/Resources/Roots/HudRoot.prefab",
+            "Assets/@Project/Hud/Resources/UI/HudRoot.prefab",
             typeof(HudRoot),
             "_crowdCountTextStyle",
             "Assets/@Project/Hud/CrowdCountTextStyle.asset");
