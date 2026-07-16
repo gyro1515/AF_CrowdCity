@@ -17,8 +17,9 @@ public static class GameSceneValidator
     private const string CrowdCountTextStyleAssetPath = "Assets/@Project/Hud/CrowdCountTextStyle.asset";
     // 런타임은 CrowdRoot가 Resources.Load("Human/Human")로 이 prefab을 소유한다. 경로가 일치해야 한다.
     private const string HumanPrefabPath = "Assets/@Project/Human/Resources/Human/Human.prefab";
-    // HUD 프리팹 3종. HudRoot.cs가 Resources.Load(HudResources.*)로 소유하며 GameSceneSetup.ConvergeHudPrefabs가 저작한다.
-    private const string HudRootPrefabPath = "Assets/@Project/Hud/Resources/Hud/HudRoot.prefab";
+    // HUD 프리팹 3종. HudRoot.cs가 ResourceLoader.LoadRoot / Resources.Load(HudResources.*)로 소유하며 GameSceneSetup.ConvergeHudPrefabs가 저작한다.
+    // HudRoot는 root이므로 Resources/Roots(로드 키 "Roots/HudRoot"), 동적 템플릿은 Resources/Hud에 있다.
+    private const string HudRootPrefabPath = "Assets/@Project/Hud/Resources/Roots/HudRoot.prefab";
     private const string CrowdLabelPrefabPath = "Assets/@Project/Hud/Resources/Hud/CrowdLabel.prefab";
     private const string RivalMarkerPrefabPath = "Assets/@Project/Hud/Resources/Hud/RivalMarker.prefab";
     private static readonly Vector2 HudReferenceResolution = new Vector2(1080f, 1920f);

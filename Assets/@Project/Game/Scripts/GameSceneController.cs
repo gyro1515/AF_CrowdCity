@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -73,26 +72,13 @@ public sealed class GameSceneController : MonoBehaviour
     {
         _session = new GameSession(config);
 
-        // GameplayRoot는 스크립트 사전부착 프리팹을 Resources.Load + Instantiate로 생성한다(소유권/조립 체인의 시작).
+        // GameplayRoot는 스크립트 사전부착 프리팹을 ResourceLoader.LoadRoot(클래스 이름) + Instantiate로 생성한다(소유권/조립 체인의 시작).
         // 프리팹은 active로 저작돼 있고 GameplayRoot.Awake/OnEnable은 의존성-free이므로, 배선(Initialize) 이전 활성 상태가 안전하다.
-        GameObject prefab = Resources.Load<GameObject>(GameResources.GameplayRoot);
-        if (prefab == null)
-        {
-            throw new InvalidOperationException(
-                $"[GameSceneController] GameplayRoot 프리팹을 Resources에서 로드하지 못했습니다: '{GameResources.GameplayRoot}'. " +
-                "GameSceneSetup으로 feature root 프리팹을 baking하세요.");
-        }
-
-        GameObject gameplayRootGo = Instantiate(prefab, transform, false);
-        gameplayRootGo.name = "GameplayRoot";
-        _gameplayRoot = gameplayRootGo.GetComponent<GameplayRoot>();
-        if (_gameplayRoot == null)
-        {
-            // 방금 만든 clone을 파괴하고 실패한다(부분 생성 상태로 씬에 남지 않게).
-            Destroy(gameplayRootGo);
-            throw new InvalidOperationException(
-                $"[GameSceneController] GameplayRoot 프리팹 '{GameResources.GameplayRoot}' 루트에 GameplayRoot 컴포넌트가 없습니다.");
-        }
+        // 프리팹/컴포넌트 취득 실패 시 ResourceLoader가 명확히 예외를 던진다(Instantiate 전 검사이므로 부분 clone이 남지 않는다).
+        GameplayRoot prefabRoot = ResourceLoader.LoadRoot<GameplayRoot>();
+        _gameplayRoot = Instantiate(prefabRoot, transform, false);
+        _gameplayRoot.gameObject.name = "GameplayRoot";
+        GameObject gameplayRootGo = _gameplayRoot.gameObject;
 
         try
         {

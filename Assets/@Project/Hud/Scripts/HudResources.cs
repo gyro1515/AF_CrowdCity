@@ -5,10 +5,6 @@
 /// </summary>
 public static class HudResources
 {
-    // Assets/@Project/Hud/Resources/Hud/HudRoot.prefab 를 가리킨다(확장자/최상위 Resources 접두 생략).
-    // 이 프리팹에는 Canvas/CanvasScaler와 타이머·순위표·시작힌트·결과오버레이 정적 uGUI 트리가 사전 저작돼 있다.
-    public const string HudRoot = "Hud/HudRoot";
-
     // 동적 리더 라벨 템플릿(팀당 1). HudRoot가 Instantiate 후 팀 아웃라인 material/텍스트만 주입한다.
     public const string CrowdLabel = "Hud/CrowdLabel";
 

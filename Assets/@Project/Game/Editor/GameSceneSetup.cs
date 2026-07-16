@@ -153,18 +153,17 @@ public static class GameSceneSetup
     private const string WalkName = "HumanWalk";
     private const string UrpLitShaderName = "Universal Render Pipeline/Lit";
     private const string BaseColorProperty = "_BaseColor";
-    // feature root 프리팹(로직 전용: 빈 GameObject + 컴포넌트 1개). 런타임이 Resources.Load로 소유한다.
-    // 경로 세그먼트는 각 피처 폴더명이며, 런타임 상수(GameResources/CrowdResources/HudResources)의 로드 키와 반드시 일치해야 한다.
-    private const string GameResourcesGameFolder = GameFolder + "/Resources/Game";
-    private const string CrowdResourcesFolder = "Assets/@Project/Crowd/Resources/Crowd";
+    // feature root 프리팹(로직 전용: 빈 GameObject + 컴포넌트 1개). 런타임이 ResourceLoader.LoadRoot(클래스 이름)로 소유한다.
+    // 5개 root는 각 피처의 Resources/Roots 하위에 <클래스이름>.prefab로 저작돼 병합 로드 키 "Roots/<클래스이름>"이 된다.
+    // 로직 root 프리팹 경로/이름은 typeof(T).Name에서 파생하므로(ConvergeLogicRootPrefab/VerifyLogicRootPrefab) 로더와 어긋날 수 없다.
+    private const string GameRootsFolder = GameFolder + "/Resources/Roots";
+    private const string CrowdRootsFolder = "Assets/@Project/Crowd/Resources/Roots";
+    private const string HudRootsFolder = HudFolder + "/Resources/Roots";
+    // HUD 동적 템플릿(CrowdLabel/RivalMarker)은 root가 아니므로 Roots가 아닌 Hud/Resources/Hud에 그대로 둔다.
     private const string HudResourcesFolder = HudFolder + "/Resources/Hud";
-    private const string GameplayRootPrefabPath = GameResourcesGameFolder + "/GameplayRoot.prefab"; // GameResources.GameplayRoot
-    private const string InputRootPrefabPath = GameResourcesGameFolder + "/InputRoot.prefab";       // GameResources.InputRoot
-    private const string CameraRootPrefabPath = GameResourcesGameFolder + "/CameraRoot.prefab";     // GameResources.CameraRoot
-    private const string CrowdRootPrefabPath = CrowdResourcesFolder + "/CrowdRoot.prefab";          // CrowdResources.CrowdRoot
-    private const string HudRootPrefabPath = HudResourcesFolder + "/HudRoot.prefab";                // HudResources.HudRoot
-    private const string CrowdLabelPrefabPath = HudResourcesFolder + "/CrowdLabel.prefab";          // HudResources.CrowdLabel
-    private const string RivalMarkerPrefabPath = HudResourcesFolder + "/RivalMarker.prefab";        // HudResources.RivalMarker
+    private const string HudRootPrefabPath = HudRootsFolder + "/" + nameof(HudRoot) + ".prefab";      // 로드 키 Roots/HudRoot
+    private const string CrowdLabelPrefabPath = HudResourcesFolder + "/CrowdLabel.prefab";            // HudResources.CrowdLabel
+    private const string RivalMarkerPrefabPath = HudResourcesFolder + "/RivalMarker.prefab";          // HudResources.RivalMarker
 
     // ---- HUD uGUI 프리팹 저작 스펙 (pinned) ----
     // HudRoot.cs의 원래 런타임 BuildCanvas/BuildLeaderboard/CreateLabel/CreateRivalMarker가 쓰던 레이아웃 상수를 그대로 옮긴 것이다.
@@ -1281,15 +1280,15 @@ public static class GameSceneSetup
     // ---- 4c. feature root 프리팹 (로직 전용: 빈 GameObject + 컴포넌트 1개) ----
 
     // GameplayRoot/InputRoot/CameraRoot/CrowdRoot는 로직 전용(빈 GO + 컴포넌트 1개) 프리팹으로 load-or-create 수렴한다.
-    // 런타임(GameSceneController/GameplayRoot)이 Resources.Load + Instantiate + Init(deps)로 조립한다.
+    // 런타임(GameSceneController/GameplayRoot)이 ResourceLoader.LoadRoot + Instantiate + Init(deps)로 조립한다.
     // HudRoot는 Canvas/CanvasScaler + 정적 uGUI 트리(타이머·순위표·시작힌트·결과오버레이)를 사전 저작해야 하므로
     // 로직 전용 수렴이 아니라 전용 저작 경로(ConvergeHudPrefabs)를 쓰고 동적 라벨/마커 템플릿 프리팹도 함께 수렴한다.
     private static void ConvergeFeatureRootPrefabs(List<string> changed, List<string> unchanged)
     {
-        ConvergeLogicRootPrefab<GameplayRoot>(GameResourcesGameFolder, GameplayRootPrefabPath, "GameplayRoot", changed, unchanged);
-        ConvergeLogicRootPrefab<InputRoot>(GameResourcesGameFolder, InputRootPrefabPath, "InputRoot", changed, unchanged);
-        ConvergeLogicRootPrefab<CameraRoot>(GameResourcesGameFolder, CameraRootPrefabPath, "CameraRoot", changed, unchanged);
-        ConvergeLogicRootPrefab<CrowdRoot>(CrowdResourcesFolder, CrowdRootPrefabPath, "CrowdRoot", changed, unchanged);
+        ConvergeLogicRootPrefab<GameplayRoot>(GameRootsFolder, changed, unchanged);
+        ConvergeLogicRootPrefab<InputRoot>(GameRootsFolder, changed, unchanged);
+        ConvergeLogicRootPrefab<CameraRoot>(GameRootsFolder, changed, unchanged);
+        ConvergeLogicRootPrefab<CrowdRoot>(CrowdRootsFolder, changed, unchanged);
         ConvergeHudPrefabs(changed, unchanged);
     }
 
@@ -1316,6 +1315,8 @@ public static class GameSceneSetup
     // 이미 Canvas가 저작된 프리팹이면 건드리지 않는다(idempotent).
     private static void ConvergeHudRootPrefab(TMP_FontAsset font, List<string> changed, List<string> unchanged)
     {
+        EnsureFolder(HudRootsFolder);
+
         GameObject existing = AssetDatabase.LoadAssetAtPath<GameObject>(HudRootPrefabPath);
         if (existing != null && existing.GetComponent<HudRoot>() != null && existing.GetComponent<Canvas>() != null)
         {
@@ -1485,10 +1486,14 @@ public static class GameSceneSetup
     // 로직 전용 root 프리팹 하나를 수렴한다. 이미 컴포넌트 T가 부착된 prefab이 있으면 건드리지 않고, 없거나 손상되면
     // 임시 GameObject(빈 GO + T)를 만들어 SaveAsPrefabAsset으로 덮어쓴 뒤 임시 GO를 즉시 DestroyImmediate한다.
     private static void ConvergeLogicRootPrefab<T>(
-        string folder, string prefabPath, string rootName, List<string> changed, List<string> unchanged)
+        string folder, List<string> changed, List<string> unchanged)
         where T : Component
     {
         EnsureFolder(folder);
+
+        // 프리팹 파일명/root 이름은 typeof(T).Name에서 파생한다(로더 키 "Roots/<클래스이름>"와 어긋날 수 없다).
+        string rootName = typeof(T).Name;
+        string prefabPath = folder + "/" + rootName + ".prefab";
 
         GameObject existing = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
         if (existing != null && existing.GetComponent<T>() != null)
@@ -1530,11 +1535,11 @@ public static class GameSceneSetup
         AssetDatabase.Refresh();
 
         // 결과 확인(실패 시 예외로 명확히 알린다). 각 prefab에 해당 컴포넌트가 부착됐는지 검사한다.
-        VerifyLogicRootPrefab<GameplayRoot>(GameplayRootPrefabPath);
-        VerifyLogicRootPrefab<InputRoot>(InputRootPrefabPath);
-        VerifyLogicRootPrefab<CameraRoot>(CameraRootPrefabPath);
-        VerifyLogicRootPrefab<CrowdRoot>(CrowdRootPrefabPath);
-        VerifyLogicRootPrefab<HudRoot>(HudRootPrefabPath);
+        VerifyLogicRootPrefab<GameplayRoot>(GameRootsFolder);
+        VerifyLogicRootPrefab<InputRoot>(GameRootsFolder);
+        VerifyLogicRootPrefab<CameraRoot>(GameRootsFolder);
+        VerifyLogicRootPrefab<CrowdRoot>(CrowdRootsFolder);
+        VerifyLogicRootPrefab<HudRoot>(HudRootsFolder);
 
         Debug.Log(
             "[BakeFeatureRootPrefabs] PASS — GameplayRoot/InputRoot/CameraRoot/CrowdRoot/HudRoot 프리팹 저작 완료. " +
@@ -1558,9 +1563,11 @@ public static class GameSceneSetup
         }
     }
 
-    private static void VerifyLogicRootPrefab<T>(string prefabPath)
+    private static void VerifyLogicRootPrefab<T>(string folder)
         where T : Component
     {
+        // 검증 경로도 typeof(T).Name에서 파생해 baker/loader와 동일 키를 쓴다.
+        string prefabPath = folder + "/" + typeof(T).Name + ".prefab";
         GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
         if (prefab == null || prefab.GetComponent<T>() == null)
         {
