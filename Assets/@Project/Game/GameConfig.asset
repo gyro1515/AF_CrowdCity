@@ -14,25 +14,25 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GameConfigSO
   matchSeconds: 120
   rivalCount: 3
-  neutralCount: 800
+  neutralCount: 500
   seed: 12345
   leaderSpeed: 5
   followerMaxSpeed: 10
   turnRateDegPerSec: 720
   slotSpacing: 1
-  separationRadius: 2
-  separationPush: 3
+  separationRadius: 3
+  separationPush: 1
   groundY: 0.5
-  followerCohesionGain: 0.8
-  followerArriveRadius: 2
+  followerCohesionGain: 1
+  followerArriveRadius: 1
   followerArriveRadiusPerSqrtMember: 1
-  followerMaxAccel: 40
-  followerTrailingOffset: 0.4
+  followerMaxAccel: 100
+  followerTrailingOffset: 0.2
   followerBlockedDamping: 0
   sim:
     RecruitRadius: 0.7
     CombatRadius: 0.7
-    LeaderAloneRadius: 25
+    LeaderAloneRadius: 5
     ConvertPerSecond: 40
     PairNormalizer: 15
     RateLimitConversion: 1
