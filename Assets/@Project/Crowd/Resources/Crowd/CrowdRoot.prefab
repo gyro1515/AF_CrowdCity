@@ -44,3 +44,4 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3ce8f086496d5254da465136200c1d11, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CrowdRoot
+  _useSdfSolver: 1
