@@ -1,5 +1,13 @@
 # Crowd Sim CPU 최적화 — 실행 핸드오프 (콜드스타트용)
 
+## 🔄 다른 PC 재개 마커 (2026-07-17 업데이트)
+- **기준 커밋(baseline HEAD): `fb14a41`** — `origin/feat/crowd-sdf-perf` 에 push 완료. 다른 PC에서는 `git pull` (branch `feat/crowd-sdf-perf`)로 전부 수신됨. 로컬 미커밋/stash 없음 → 유실 없음.
+- **레이(`Physics.Raycast`) 사용 현황 = 벽 전용으로 이미 정리된 상태(커밋됨).** 두 곳뿐: `Assets/@Project/Crowd/Scripts/RivalAiDriver.cs`(`ApplyWallAvoidance`/`ProbeClearance`, 벽 회피)와 `Assets/@Project/Crowd/Scripts/CrowdRoot.cs:1099`(`RepickWanderHeading`, wander 방향 벽 판정). 둘 다 벽/장애물 판정용.
+- **크라우드-크라우드(에이전트 간) 판정은 레이가 아니라 `SpatialGrid.QueryCircle` 경로** (separation=`CrowdRoot.cs:929`, recruit=`RecruitResolver.cs:74`, combat=`CombatResolver.cs:271/461`). → "레이가 crowd에도 돌아 Update를 잡아먹던" 이슈는 **커밋된 코드 기준 재현되지 않음**(이미 해결된 것으로 판단). 진행중 수정본·stash 없음(클린 트리).
+- **다음 작업(사용자 의도) = Burst 컴파일러 + Job 시스템 = 계획서 §3 `M-sim-2`(=M2).** 3분할: M2-a(Native SoA) → M2-b(Burst canonical) → M2-c(IJobParallelFor).
+- **단, 계획/게이트상 M2 선행 조건:** `M-sim-0` 실측(아직 미실행, 베이스라인 산출물 미커밋) → `M-sim-1`(grid 쿼리 밀도 캡핑). 사용자 의도(바로 Burst)와 계획 순서(측정 먼저)가 갈리는 지점 — 재개 시 확정 필요.
+- ⚠ **메모리(로컬 `~/.claude`)는 PC 간 동기화 안 됨.** 이 문서(git 추적)가 PC 간 유일한 인수인계 소스.
+
 > **이 문서의 용도**: 별도 세션(대화 컨텍스트 없음)이 이 문서 하나로 crowd sim CPU 최적화 작업을 **바로 시작**할 수 있게 하는 진입점이다. 상세 설계는 [`SIM_OPT_PLAN.md`](SIM_OPT_PLAN.md)에 있다. 이 문서는 "어떻게 부팅하고 무엇부터 하는가"만 담는다.
 > **선행 조건**: 사용자의 별도 구조 리팩토링이 **완료된 뒤** 시작한다. 리팩토링은 `Crowd/Core` + `CrowdRoot`를 전부 건드리므로, 이 계획은 라인이 아니라 **책임 단위로 rebase**한다.
 
