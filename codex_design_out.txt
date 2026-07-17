@@ -1,0 +1,1183 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.3
+--------
+workdir: D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f6730-bbf2-7350-8433-8d83d70c79b7
+--------
+user
+너는 유니티 시니어 퍼포먼스 엔지니어다. AF_CrowdCity(브랜치 Refactor_PrefabTreeStruct_260715)의 crowd 시뮬레이션 병목을 캐시 친화적으로 재설계하는 설계안을 작성하라. 다음 코드를 정독하라: Game/Scripts/GameplayRoot.cs, Crowd/Scripts/CrowdRoot.cs, Crowd/Core/(AgentBuffer/CombatResolver/RecruitResolver/FollowerSteering/MatchRules/SimTuning/SpatialGrid).
+배경: neutralCount 기본 800. 약한 CPU에선 500도 버벅, 300은 원활. 병목 99%가 GameplayRoot.Update()의 crowd 연산. 목표는 Update crowd 연산을 완전 캐시 친화적으로 재구조화(unsafe struct SoA 배열 순회, 또는 DOTS; AoS/SoA 적합하면 멀티스레드 IJobParallelFor 허용, 필요시 UniTask). 최우선 제약은 결정론·동작 동일성(EditMode CombatResolver 26/26·RecruitResolver 6/6 유지, RejectionRate/스냅샷 동일, rng 소비 순서·CheckSphere·이벤트 발행 순서 불변). 환경: Unity 6000.3.9f1, Burst 1.8.28/Collections 2.6.2/Mathematics 1.3.3 설치(URP 전이 의존성), Jobs/Entities/UniTask 미설치, allowUnsafeCode=0, IL2CPP(Android), .NET Standard 2.1.
+설계안에 포함하라: (1)병목 진단(무거운 연산·복잡도·캐시 비친화 원인), (2)데이터 레이아웃 재설계(AoS→SoA/NativeArray/unsafe struct, 선형 접근, 할당 제거), (3)연산 커널 재설계(Burst 적용 범위, IJob vs IJobParallelFor, 멀티스레드 시 결정론 위험 평가), (4)결정론 보존 전략(현재 불변식 유지, Burst float 결정론), (5)접근법 선택+근거(Jobs+Burst+NativeArray vs DOTS vs 순수 unsafe배열; 이 프로젝트에 권장안과 이유; UniTask 필요성), (6)필요 패키지/설정(manifest, allowUnsafeCode, asmdef), (7)헤드리스 성능 측정(Update 연산 시간 ms/tick을 batchmode Stopwatch로 측정 가능한지, neutralCount 스케일별 전/후 비교, 안정적 60fps 최대 neutralCount 추정법), (8)단계적 구현 계획+각 단계 결정론 게이트, (9)리스크.
+결론을 [권장 접근법+근거]/[병목 진단]/[데이터 레이아웃]/[커널·멀티스레드]/[결정론 전략]/[필요 패키지]/[성능 측정법]/[구현 단계]/[리스크] 섹션으로 명확히 제시하라.
+codex
+요청하신 설계 검토는 프로젝트 규칙에 따라 서브에이전트에게 코드 정독·병목 분석·검증 가능성 조사를 분리 위임하겠습니다. 저는 결과를 성공 기준(동작·결정론 완전 동일, 단계별 게이트, 실제 패키지 상태 반영)에 맞춰 종합하겠습니다.
+codex
+분석 범위는 세 갈래입니다: 현재 프레임 파이프라인과 불변식, 데이터/커널 아키텍처와 프로젝트 설정, 그리고 헤드리스 벤치마크·단계별 회귀 게이트입니다. 설계안은 구현 변경 없이 현재 코드의 실제 호출 순서와 파일 근거를 기준으로 작성합니다.
+collab: Wait
+2026-07-15T19:11:34.046731Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+
+2026-07-15T19:11:45.520264Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.7 seconds
+Output:
+
+2026-07-15T19:11:47.929961Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+231:
+232:        if (!_initialized)
+233:        {
+234:            throw new InvalidOperationException("CrowdRoot.SpawnInitial은 Initialize 이후에 호출해야 합니다.");
+235:        }
+236:
+237:        if (_spawned)
+238:        {
+239:            return;
+240:        }
+241:
+242:        // ---- 1) 모든 배치 좌표를 Instantiate 이전에 계산한다 ----
+243:        Vector3[] leaderSpots = new Vector3[_teamCount];
+244:        leaderSpots[0] = ResolveLeaderSpot(RegionPoint(0.5f, 0.5f));
+245:        for (int t = 1; t < _teamCount; t++)
+246:        {
+247:            Vector2 corner = RivalCornerLerp[t - 1];
+248:            leaderSpots[t] = ResolveLeaderSpot(RegionPoint(corner.x, corner.y));
+249:        }
+250:
+251:        int neutralCount = _config.NeutralCount;
+252:        Vector3[] neutralSpots = new Vector3[Mathf.Max(1, neutralCount)];
+253:        float[] neutralHeadings = new float[Mathf.Max(1, neutralCount)];
+254:        float[] neutralTimers = new float[Mathf.Max(1, neutralCount)];
+255:        int placedNeutrals = 0;
+256:        int totalAttempts = 0;
+257:        int rejectedAttempts = 0;
+258:        int skippedNeutrals = 0;
+259:
+260:        for (int n = 0; n < neutralCount; n++)
+261:        {
+262:            // 이 중립이 스폰 시 받을 최종 스케일. instantiate에서 쓰는 nextId(=_teamCount + placedNeutrals)와 같은 id라 값이 일치한다.
+263:            // 큰 중립이 지오메트리에 겹쳐 스폰되지 않도록 clearance 검사 반경을 스케일에 비례해 키운다(스케일 1이면 기존과 byte-identical).
+264:            float neutralScale = ComputeNeutralScale(_config.Seed, _teamCount + placedNeutrals);
+265:            float checkRadius = SpawnCheckRadius * neutralScale;
+266:            bool placed = false;
+267:            for (int attempt = 0; attempt < NeutralAttemptMax; attempt++)
+268:            {
+269:                totalAttempts++;
+270:                float x = Mathf.Lerp(_regionMinX, _regionMaxX, (float)_rng.NextDouble());
+271:                float z = Mathf.Lerp(_regionMinZ, _regionMaxZ, (float)_rng.NextDouble());
+272:                Vector3 candidate = new Vector3(x, _groundY, z);
+273:                if (IsSpotValid(candidate, checkRadius))
+274:                {
+275:                    neutralSpots[placedNeutrals] = candidate;
+276:                    neutralHeadings[placedNeutrals] = (float)(_rng.NextDouble() * 360.0);
+277:                    neutralTimers[placedNeutrals] = Mathf.Lerp(
+278:                        _config.WanderRepickMinSeconds, _config.WanderRepickMaxSeconds, (float)_rng.NextDouble());
+279:                    placedNeutrals++;
+280:                    placed = true;
+281:                    break;
+282:                }
+283:
+284:                rejectedAttempts++;
+285:            }
+286:
+287:            if (!placed)
+288:            {
+289:                skippedNeutrals++;
+290:            }
+291:        }
+292:
+293:        RejectionRate = totalAttempts > 0 ? (float)rejectedAttempts / totalAttempts : 0f;
+294:        if (skippedNeutrals > 0)
+295:        {
+296:            Debug.LogWarning(
+297:                $"[CrowdRoot] 중립 {skippedNeutrals}명이 {NeutralAttemptMax}회 시도 후에도 유효 위치를 찾지 못해 생략되었습니다. " +
+298:                $"RejectionRate={RejectionRate:F2}");
+299:        }
+300:
+301:        // ---- 2) 리더 Instantiate + CrowdModel 생성 (team id 오름차순 = agent id 오름차순) ----
+302:        int nextId = 0;
+303:        for (int t = 0; t < _teamCount; t++)
+304:        {
+305:            Vector3 spot = leaderSpots[t];
+306:            Human leader = SpawnClone(spot, "Human_Leader_" + t);
+307:
+308:            // Init/CC 취득은 buffer 등록(_buffer.Add) 이전에 끝낸다. 실패 시 미등록 clone을 파괴하고 다시 던진다.
+309:            CharacterController controller;
+310:            try
+311:            {
+312:                leader.Init(_config.TeamMaterials[t], true);
+313:                controller = GetBakedController(leader);
+314:            }
+315:            catch
+316:            {
+317:                Destroy(leader.gameObject);
+318:                throw;
+319:            }
+320:
+321:            int index = _buffer.Add(nextId, t, true, new Vector2(spot.x, spot.z));
+322:            nextId++;
+323:
+324:            _humanByAgent[index] = leader;
+325:            _transformByAgent[index] = leader.transform;
+326:            _controllerByAgent[index] = controller;
+327:            _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
+328:            _leaderYawDeg[t] = 0f;
+329:
+330:            _crowds.Add(new CrowdModel(t, _config.TeamMaterials[t], leader, index));
+331:            if (t == MatchRules.PlayerTeam)
+332:            {
+333:                _playerLeaderTransform = leader.transform;
+334:            }
+335:        }
+336:
+337:        // ---- 3) 중립 Instantiate ----
+338:        Material neutralMaterial = _config.TeamMaterials[4];
+339:        for (int n = 0; n < placedNeutrals; n++)
+340:        {
+341:            Vector3 spot = neutralSpots[n];
+342:            Human neutral = SpawnClone(spot, "Human_Neutral_" + n);
+343:
+344:            // Init/스케일/CC 취득은 buffer 등록(_buffer.Add) 이전에 끝낸다. 실패 시 미등록 clone을 파괴하고 다시 던진다.
+345:            float scale;
+346:            CharacterController controller;
+347:            try
+348:            {
+349:                neutral.Init(neutralMaterial, false);
+350:
+351:                // 결정적 해시 기반 split 분포로 스케일을 준다: baselineChance 확률로 정확히 1.0, 나머지는 1.1~neutralMaxScale
+352:                // 큰 버킷에서 0.1 단위로 균일 양자화해 뽑아 큰 개체를 희소화한다(ComputeNeutralScale 참고).
+353:                // 시뮬레이션 RNG(_rng)를 소비하지 않아 배회/시뮬레이션 draw 순서가 그대로 유지된다. 발/피벗이 바닥에 있어
+354:                // 스케일이 접지를 보존하고, CharacterController 충돌 캡슐도 lossyScale로 함께 스케일되므로 상수를 따로 스케일하지 않는다.
+355:                // 이 단일 원천이 localScale과 buffer.Scale에 모두 흘러간다.
+356:                scale = ComputeNeutralScale(_config.Seed, nextId);
+357:                neutral.transform.localScale = Vector3.one * scale;
+358:
+359:                controller = GetBakedController(neutral);
+360:            }
+361:            catch
+362:            {
+363:                Destroy(neutral.gameObject);
+364:                throw;
+365:            }
+366:
+367:            // scale을 buffer의 단일 진실 원천에 기록한다(kernel의 스케일 인지 접촉/영입/분리가 buffer.Scale을 읽는다).
+368:            // 영입/팀 변경으로도 스케일은 불변이라 이후 갱신 없음.
+369:            int index = _buffer.Add(nextId, AgentBuffer.NeutralTeam, false, new Vector2(spot.x, spot.z), scale);
+370:            nextId++;
+371:
+372:            _humanByAgent[index] = neutral;
+373:            _transformByAgent[index] = neutral.transform;
+374:            _controllerByAgent[index] = controller;
+375:            _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
+376:            _wanderHeadingDeg[index] = neutralHeadings[n];
+377:            _wanderTimer[index] = neutralTimers[n];
+378:        }
+379:
+380:        // 첫 tick의 AI/조향이 유효한 이웃 정보를 읽도록 grid를 한 번 채워 둔다.
+381:        _grid.Rebuild(_buffer);
+382:
+383:        _spawned = true;
+384:
+385:        // ---- 4) 첫 coalesced 인원 수 publish (모두 -1 → 1로 바뀌므로 전 팀 발행) ----
+386:        PublishTickEvents();
+387:    }
+388:
+389:    /// <summary>
+390:    /// GameplayRoot가 매 sim step 전달하는 player의 목표 heading을 저장한다.
+391:    /// hasHeading이 false면 player 리더는 이동하지 않는다(첫 드래그 이전).
+392:    /// </summary>
+393:    public void SetPlayerHeading(Vector2 dir, bool hasHeading)
+394:    {
+395:        _playerHeadingDir = dir;
+396:        _playerHasHeading = hasHeading;
+397:    }
+398:
+399:    /// <summary>
+400:    /// 고정 step 시뮬레이션 1회를 수행한다. 단계 순서는 pinned 계약을 따른다:
+
+2026-07-15T19:11:50.704456Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+399:    /// <summary>
+400:    /// 고정 step 시뮬레이션 1회를 수행한다. 단계 순서는 pinned 계약을 따른다:
+401:    /// ①pending 상태 소비 → ②heading(플레이어/AI) → ③리더 CC.Move(고정 Y) → ④팔로워 조향+중립 배회
+402:    /// → ⑤위치 미러링 → ⑥grid 재구축 → ⑦recruit → ⑧combat → ⑨원자적 commit → ⑩coalesced publish.
+403:    /// Playing이 아니면(②~⑨)를 건너뛰어 월드를 동결한다. 이벤트 발행은 모든 변경 이후 마지막에만 일어난다.
+404:    /// </summary>
+405:    public void SimTick(float dt)
+406:    {
+407:        if (!_spawned || _shutdown)
+408:        {
+409:            return;
+410:        }
+411:
+412:        // ① 이벤트 handler가 세워 둔 pending 상태를 tick 시작 시점에만 반영한다(재진입 계약).
+413:        if (_hasPendingState)
+414:        {
+415:            _matchState = _pendingState;
+416:            _hasPendingState = false;
+417:        }
+418:
+419:        if (_matchState == MatchState.Playing)
+420:        {
+421:            // 직전 프레임 RenderInterpolate가 덮어쓴 시각 위치를 논리 위치(_visualCur)로 되돌린다.
+422:            // 이후 모든 transform 읽기/CC.Move/미러링이 항상 논리 위치를 보게 한다(결정성 보장).
+423:            for (int i = 0; i < _buffer.Count; i++) _transformByAgent[i].position = _visualCur[i];
+424:            UpdateHeadings(dt);                                                          // ②
+425:            MoveLeaders(dt);                                                             // ③
+426:            SteerFollowersAndNeutrals(dt);                                               // ④
+427:            MirrorPositionsToBuffer();                                                   // ⑤
+428:            _grid.Rebuild(_buffer);                                                      // ⑥
+429:            _recruitResolver.Resolve(_buffer, _grid, _tuning.RecruitRadius, _tuning.MaxScale, _recruits);  // ⑦
+430:            _combatResolver.Resolve(_buffer, _grid, in _tuning, dt, _combatState, _combatOutcome); // ⑧
+431:            CommitOutcomes();                                                            // ⑨
+432:        }
+433:
+434:        PublishTickEvents();                                                             // ⑩
+435:    }
+436:
+437:    /// <summary>
+438:    /// 렌더 프레임마다 논리 위치 prev→cur를 alpha로 보간해 transform.position만 덮어쓴다(시각 전용, 회전 미보간).
+439:    /// GameplayRoot가 accumulator 루프 종료 후에만 호출한다. 다음 SimTick 시작의 restore가 논리 위치로 되돌리므로
+440:    /// 커널/미러는 항상 논리 위치만 본다. prev==cur이면 무해하다.
+441:    /// </summary>
+442:    public void RenderInterpolate(float alpha)
+443:    {
+444:        if (_buffer == null || _transformByAgent == null || _shutdown)
+445:        {
+446:            return;
+447:        }
+448:
+449:        // Playing이 아니면 tick이 prev/cur를 더 이상 갱신하지 않아 alpha가 마지막 tick의 prev→cur 구간을 계속 sawtooth해 무리가 진동한다. 논리 위치(_visualCur)로 스냅해 정적으로 고정한다(시각 전용).
+450:        if (_matchState != MatchState.Playing)
+451:        {
+452:            for (int i = 0; i < _buffer.Count; i++) _transformByAgent[i].position = _visualCur[i];
+453:            return;
+454:        }
+455:
+456:        for (int i = 0; i < _buffer.Count; i++)
+457:        {
+458:            _transformByAgent[i].position = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
+459:        }
+460:    }
+461:
+462:    /// <summary>
+463:    /// GameSession 상태 변화 알림을 받는다. pending 플래그만 세우며 즉시 아무것도 변경하지 않는다.
+464:    /// pending 값은 다음 SimTick 시작 시점에 소비된다(bus 재진입 안전 계약).
+465:    /// </summary>
+466:    public void OnMatchStateChanged(MatchState s)
+467:    {
+468:        _pendingState = s;
+469:        _hasPendingState = true;
+470:    }
+471:
+472:    /// <summary>
+473:    /// 생성한 모든 Human clone을 파괴한다. prefab asset은 절대 파괴하지 않으며 여러 번 호출해도 안전하다.
+474:    /// </summary>
+475:    public void Shutdown()
+476:    {
+477:        if (_shutdown)
+478:        {
+479:            return;
+480:        }
+481:
+482:        _shutdown = true;
+483:
+484:        if (_humanByAgent == null)
+485:        {
+486:            return;
+487:        }
+488:
+489:        // clone만 파괴한다. _humanByAgent에는 prefab asset이 절대 들어가지 않는다.
+490:        for (int i = 0; i < _humanByAgent.Length; i++)
+491:        {
+492:            Human human = _humanByAgent[i];
+493:            if (human != null)
+494:            {
+495:                Destroy(human.gameObject);
+496:            }
+497:
+498:            _humanByAgent[i] = null;
+499:            _transformByAgent[i] = null;
+500:            _controllerByAgent[i] = null;
+501:        }
+502:
+503:        _playerLeaderTransform = null;
+504:    }
+505:
+506:    private void OnDestroy()
+507:    {
+508:        // 안전망: 정상 경로에서는 GameplayRoot.Shutdown이 이미 해제했다.
+509:        Shutdown();
+510:    }
+511:
+512:    // ---- 스폰/배치 내부 구현 ----
+513:
+514:    // cityRoot의 "Ground" 자식 renderer bounds를 2m 줄여 걷기 가능 영역을 계산한다. fallback 없음.
+515:    private void ComputeWalkableRegion(Transform cityRoot)
+516:    {
+517:        Transform ground = cityRoot.Find("Ground");
+518:        if (ground == null)
+519:        {
+520:            throw new InvalidOperationException(
+521:                $"CrowdRoot: cityRoot '{cityRoot.name}' 아래에서 'Ground' 자식을 찾지 못했습니다. " +
+522:                "스폰 영역 계산에 Ground renderer가 필수이며 fallback은 없습니다.");
+523:        }
+524:
+525:        Renderer[] renderers = ground.GetComponentsInChildren<Renderer>();
+526:        if (renderers == null || renderers.Length == 0)
+527:        {
+528:            throw new InvalidOperationException(
+529:                "CrowdRoot: 'Ground' 아래에 Renderer가 없습니다. 스폰 영역 계산에 Ground renderer bounds가 필수입니다.");
+530:        }
+531:
+532:        Bounds bounds = renderers[0].bounds;
+533:        for (int i = 1; i < renderers.Length; i++)
+534:        {
+535:            bounds.Encapsulate(renderers[i].bounds);
+536:        }
+537:
+538:        _regionMinX = bounds.min.x + RegionShrinkMeters;
+539:        _regionMaxX = bounds.max.x - RegionShrinkMeters;
+540:        _regionMinZ = bounds.min.z + RegionShrinkMeters;
+541:        _regionMaxZ = bounds.max.z - RegionShrinkMeters;
+542:        // Y는 config에서 명시적으로 받는다. bounds.max.y는 메시 두께/융기 지오메트리 때문에 걷기 표면을 넘어서고 Ground에 collider가 없어 raycast 보정도 불가하다.
+543:        _groundY = _config.GroundY;
+544:    }
+545:
+546:    // 영역 내 정규화 좌표(tx, tz)를 world 좌표로 바꾼다.
+547:    private Vector3 RegionPoint(float tx, float tz)
+548:    {
+
+2026-07-15T19:11:54.825440Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.5 seconds
+Output:
+rg: Assets/@Project/Crowd/Tests/Editor/*.cs: IO error for operation on Assets/@Project/Crowd/Tests/Editor/*.cs: 파일 이름, 디렉터리 이름 또는 볼륨 레이블 구문이 잘못되었습니다. (os error 123)
+
+2026-07-15T19:12:37.113334Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+
+codex
+현재 세 분석 모두 진행 중입니다. 특히 `GameplayRoot.Update`의 정확한 연산·이벤트 순서와 기존 테스트가 실제로 무엇을 고정하는지까지 대조하고 있어, 권장안에서 “병렬화 가능한 계산”과 “순차 커밋해야 하는 의미론”을 분리해 제시하겠습니다.
+collab: Wait
+collab: Wait
+collab: Wait
+codex
+## [권장 접근법+근거]
+
+권장안은 **기존 GameObject/CharacterController 경계를 유지한 Jobs + Burst + Persistent NativeArray SoA 하이브리드**다.
+
+핵심은 DOTS 전환이 아니라 다음 경계를 명확히 나누는 것이다.
+
+```text
+직전 tick 스냅샷
+  → Burst 계산 커널
+  → main-thread CharacterController/Physics 적용
+  → 실제 위치 NativeArray 반영
+  → grid/recruit/combat Burst 커널
+  → main-thread 순차 commit
+  → 기존 순서로 이벤트 발행
+```
+
+이유는 다음과 같다.
+
+- [AgentBuffer.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/AgentBuffer.cs:19)는 이미 `Id/Team/IsLeader/Pos/Scale`별 managed SoA다. 따라서 단순한 AoS→SoA 변환이 아니라, Unity 오브젝트 접근 분리와 `NativeArray`/Burst 커널화가 실제 개선점이다.
+- DOTS/Entities는 chunk SoA 장점보다 `Human`, `CharacterController`, PhysX, authoring, 이벤트 브리지를 전부 바꿔야 하는 비용과 동작 불일치 위험이 더 크다.
+- raw unsafe pointer SoA는 이미 SoA인 현재 구조에서 bounds-check 제거 이상의 이익이 제한적이다. lifetime·alias·IL2CPP 위험만 커진다.
+- UniTask는 CPU SIMD나 데이터 병렬화 도구가 아니다. fixed tick의 완료 시점과 예외 경로만 복잡하게 하므로 필요 없다.
+- `CharacterController.Move` 자체까지 제거하면 더 큰 개선 가능성이 있지만, 충돌·depenetration·blocked damping 결과가 바뀐다. 이는 현재 “동작 동일성”과 양립하지 않으므로 별도 프로젝트로 취급해야 한다.
+
+제안 Decision Log는 다음과 같다.
+
+```text
+1. Target feature owner: CrowdRoot / Crowd feature
+2. New file location: Assets/@Project/Crowd/Core 및 Crowd/Scripts 내부
+3. State location: RuntimeModel 성격의 Persistent NativeArray; SO/SaveData 사용 안 함
+4. Communication method: CrowdRoot 직접 호출 + 기존 C# 이벤트 발행
+5. Affected files: CrowdRoot, AgentBuffer, SpatialGrid, RecruitResolver,
+   CombatResolver, CrowdModel, 관련 EditMode/benchmark tests
+```
+
+## [병목 진단]
+
+현재 [GameplayRoot.Update()](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:156)는 0.02초 fixed tick을 프레임당 최대 4회 실행한다. backlog가 생기면 crowd 전체 연산이 한 프레임에 최대 4배 반복된다.
+
+[SimTick](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Scripts/CrowdRoot.cs:405)의 현재 계약은 다음 순서다.
+
+```text
+pending state 소비
+→ Transform을 현재 sim 위치로 복원
+→ heading 갱신
+→ leader 이동
+→ follower/neutral 이동
+→ Transform 위치를 AgentBuffer에 mirror
+→ grid rebuild
+→ recruit resolve
+→ combat resolve
+→ recruit/combat/elimination commit
+→ count/elimination 이벤트 발행
+```
+
+주요 병목 후보는 다음과 같다.
+
+1. Unity native 경계 왕복
+
+- tick 시작마다 모든 `Transform.position`을 `_visualCur`로 복원한다.
+- neutral 800 초기 상태에서는 매 tick 거의 800회의 `CharacterController.Move`, Transform read/write/clamp, heading/Animator 갱신이 발생한다.
+- 이동 후 다시 모든 Transform을 읽어 AgentBuffer로 복사한다.
+- render frame마다 다시 모든 Transform에 보간 위치를 쓴다.
+
+이 부분은 O(N)이지만 캐시 친화적인 배열 연산이 아니라 managed reference → Unity native object를 계속 따라가는 호출이다. 현재 조건에서는 최초로 계측해야 할 구간이다.
+
+2. SpatialGrid의 연결 리스트 접근
+
+[SpatialGrid.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/SpatialGrid.cs:86)는 매 tick:
+
+- hash table 전체 clear
+- position 재복사
+- bucket head와 linked list 구축
+- query마다 `_bucketHead → _nextInBucket` 산발 접근
+- 후보를 `List<int>`에 기록한 후 다시 SoA 배열 조회
+
+를 수행한다.
+
+질의 비용은 대략 `O(N·k)`다. 고정 맵에서 N이 증가하면 평균 후보 수 `k`도 밀도에 비례하므로 실질적으로 `O(N²/area)`에 가까워진다. 300은 원활하지만 500부터 급격히 나빠지는 현상과 부합한다.
+
+3. Resolver와 commit의 숨은 고비용
+
+- Recruit: 전체 scan + neutral별 grid query.
+- Combat: `O(N·teamCount)`, non-neutral grid query, pair별 agent scan.
+- victim insertion sort는 최악 O(v²)다.
+- 전향 시 원래 팀의 follower 목록을 선형 탐색해 제거하므로 mass conversion에서 최악 O(N²)가 된다.
+- 팀 follower list와 Rival AI query list 초기 capacity가 160이라, 800명 구성에서는 gameplay 도중 resize/GC가 발생할 수 있다.
+- `RecruitResolver` 후보 배열도 첫 resolve에서 한 번 resize될 수 있다.
+
+반면 [FollowerSteering.SlotOffset](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/FollowerSteering.cs:16)는 production hot path에서 호출되지 않는다. `MatchRules`와 `SimTuning`도 crowd tick의 주 병목이 아니다.
+
+## [데이터 레이아웃]
+
+### 1. Persistent Native SoA
+
+CrowdRoot가 다음 배열의 lifetime을 소유하고 `Initialize → Dispose/OnDestroy`로 관리한다.
+
+```text
+NativeArray<int>    Id
+NativeArray<int>    Team
+NativeArray<byte>   Flags          // leader, active 등
+NativeArray<float2> Position
+NativeArray<float>  Scale
+NativeArray<float2> Velocity
+NativeArray<float>  WanderHeading
+NativeArray<float>  WanderTimer
+NativeArray<float2> VisualPrev
+NativeArray<float2> VisualCur
+```
+
+- agent index는 lifetime 동안 안정적으로 유지한다.
+- capacity만큼 `Allocator.Persistent`로 한 번 할당한다.
+- tick 안에서는 resize, `new List`, LINQ, boxing을 금지한다.
+- Unity 오브젝트는 `Transform[]`, `CharacterController[]`, `Human[]` bridge 배열로만 남긴다.
+- hot kernel은 Unity 오브젝트 배열을 전혀 참조하지 않는다.
+
+초기에는 기존 `AgentBuffer`와 Native SoA를 나란히 유지해 golden 검증한다. 검증 후 Native SoA를 단일 source of truth로 승격한다.
+
+### 2. follower 목록
+
+팀별 follower 순서 자체가 동작 계약이므로 무작정 agent-index 순으로 재정렬하면 안 된다.
+
+권장 구조는 팀별 fixed-capacity contiguous slab과 다음 보조 배열이다.
+
+```text
+FollowerIndices[team * capacity + slot]
+FollowerCount[team]
+FollowerSlotByAgent[agent]
+```
+
+이 구조에서 기존 `List`의 append와 swap-remove를 정확히 재현하면서 제거를 O(1)로 만들 수 있다. elimination의 “index 0 제거 후 swap” 순서 역시 그대로 모사해야 한다.
+
+### 3. Flattened cell grid
+
+현재 hash-linked grid를 다음 CSR형 구조로 바꾼다.
+
+```text
+CellCounts[cell]
+CellOffsets[cell + 1]
+CellWriteCursor[cell]
+AgentIndices[agentCount]
+```
+
+Rebuild는 `count → prefix sum → fill`의 O(N+C) 선형 접근이다. query는 각 cell의 연속된 `AgentIndices` 범위만 돈다.
+
+단, 기존 반환 순서를 반드시 재현해야 한다.
+
+```text
+cellY 오름차순
+→ cellX 오름차순
+→ 같은 cell 안에서는 agent index 내림차순
+```
+
+현재 head-prepend 때문에 같은 cell은 내림차순이다. separation float 합산 순서가 바뀌면 위치 snapshot도 달라질 수 있다.
+
+후보를 `List<int>`에 담지 말고 커널이 cell range를 직접 순회하도록 한다.
+
+## [커널·멀티스레드]
+
+Burst 대상과 메인 스레드 대상을 구분한다.
+
+| 단계 | 실행 방식 | 이유 |
+|---|---|---|
+| Grid count/prefix/fill | 우선 단일 `IJob` | 동일 cell 순서 보존 |
+| Follower desired velocity/separation | `IJobParallelFor` 가능 | agent별 독립 output |
+| Neutral 기본 이동 벡터 | 병렬 가능 | RNG 만료 처리 제외 |
+| Recruit claimant 계산 | 병렬 가능 | neutral별 독립 slot |
+| Recruit 결과 compact | 단일 `IJob` | neutral index 순서 유지 |
+| Combat nearest/agent-local 계산 | 병렬 가능 | agent별 고정 output |
+| Pair reduction/accumulator | 단일 `IJob` | 고정 pair 순서 필요 |
+| Conversion/victim emit | 단일 `IJob` | 결과 발행 순서 필요 |
+| RNG/Physics/CC.Move | 메인 스레드 직렬 | 호출·소비 순서 계약 |
+| Commit/event publish | 메인 스레드 직렬 | 관찰 가능한 순서 계약 |
+
+`IJobParallelFor`에서는 각 index가 자신의 output slot만 써야 한다. 다음은 금지한다.
+
+- `NativeList.ParallelWriter`로 conversion/recruit 순서 없이 append
+- atomic grid insert
+- 공유 RNG
+- `NativeParallelHashMap` 열거 순서 의존
+- float atomic/reduction
+- worker에서 EventBus publish
+
+병렬 결과는 agent별 고정 slot에 쓴 뒤 단일 job이 agent/team 오름차순으로 compact한다.
+
+또한 job을 잘게 쪼개 즉시 `Schedule().Complete()`하면 scheduling 비용이 이득을 상쇄할 수 있다. 가능한 한 커널을 fusion하고, 직렬 Burst 단계는 작은 N에서 `IJob.Run()`과 schedule을 모두 계측해 선택한다.
+
+중요한 스냅샷 경계도 유지해야 한다.
+
+- follower/AI steering은 직전 tick 말의 grid를 읽는다.
+- 모든 movement가 끝난 뒤 grid를 rebuild한다.
+- Recruit와 Combat은 동일한 이동 후/pre-commit snapshot을 읽는다.
+- 같은 tick에 recruit된 neutral은 같은 tick combat에 참여하지 않는다.
+
+## [결정론 전략]
+
+결정론 게이트는 기존 resolver 테스트만으로 충분하지 않다.
+
+### 반드시 고정할 불변식
+
+- `GameplayRoot`의 0.02초 tick, 최대 4 step, 잔여 accumulator 처리.
+- spawn의 leader/player/team 순서.
+- neutral attempt마다 RNG x→z→`CheckSphere`, 성공 시에만 heading→timer draw.
+- neutral scale hash가 RNG를 소비하지 않는 점.
+- wander의 agent index 오름차순, timer draw 후 최대 8회의 heading draw→Raycast.
+- AI team 순서와 center→left→right ray 순서.
+- grid cell/agent 열거 순서.
+- recruit 결과의 neutral index 순서와 `(distanceSq, Id)` tie-break.
+- combat pair/team 순서, strict larger-team 규칙, accumulator 순서.
+- victim `(distance, Id)` 정렬.
+- recruit→combat conversion→elimination commit 순서.
+- count event team 오름차순.
+- elimination event player 우선→rival team 오름차순.
+
+### Golden trace
+
+동일 seed, config clone, heading input trace, `dt=0.02`로 `{0, 300, 500, 800}` 및 복수 seed를 실행한다. 매 tick 다음을 기록한다.
+
+- `id/team/isLeader/position/scale`
+- velocity, wander heading/timer
+- combat accumulator
+- ordered recruit/conversion/elimination 결과
+- `RejectionRate`, total/rejected/skipped/placed
+- RNG draw 종류·순번·raw bits
+- `CheckSphere`/Raycast 입력과 결과
+- `CharacterController.Move` 입력과 실제 위치
+- 이벤트 `(tick, sequence, type, team, payload)`
+
+float는 허용오차가 아니라 `SingleToInt32Bits`로 비교하고 전체 hash와 최초 불일치 필드를 출력한다.
+
+### Burst float
+
+`[BurstCompile(FloatMode = FloatMode.Strict, FloatPrecision = FloatPrecision.Standard)]`에서 시작하고 fast math는 금지한다. 기존 괄호와 합산 순서도 유지한다.
+
+다만 Strict도 다음을 보장하지 않는다.
+
+- x64 Editor와 ARM64 Android 간 bitwise 동일성
+- Mono와 IL2CPP 간 동일성
+- `Mathf`를 `math.*`로 바꾼 경우의 초월함수 동일성
+- PhysX/CharacterController의 플랫폼 간 동일성
+
+따라서 계약은 우선 “동일 Unity/Burst 버전, 동일 target architecture에서 리팩터 전후 bit-exact”로 정의해야 한다. Android와 Editor 사이까지 bit-exact가 필수라면 고정소수점/정수 시뮬레이션이 필요하며, 이는 현재 동작 동일성 범위를 넘어선다.
+
+## [필요 패키지]
+
+현재 확인된 상태는 다음과 같다.
+
+- Unity 6000.3.9f1
+- Burst 1.8.28
+- Collections 2.6.2
+- Mathematics 1.3.3
+- 세 패키지는 [packages-lock.json](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/packages-lock.json:12)에 URP 전이 의존성으로 존재
+- [manifest.json](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/manifest.json:2)에는 직접 선언되지 않음
+- Entities/UniTask 없음
+- Android IL2CPP
+- 프로젝트와 Core asmdef 모두 unsafe 비활성
+
+권장 설정은 다음과 같다.
+
+- `com.unity.burst: 1.8.28`
+- `com.unity.collections: 2.6.2`
+- `com.unity.mathematics: 1.3.3`
+
+위 버전을 manifest 직접 dependency로 pin한다. URP 의존성이 바뀌어도 crowd 기능의 필수 패키지가 사라지지 않게 하기 위해서다.
+
+별도 `com.unity.jobs` 또는 Entities 패키지는 필요 없다. `IJob`/`IJobParallelFor`는 현재 Unity job system과 Collections 기반으로 사용할 수 있다.
+
+[Core asmdef](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef:4)에 `Unity.Burst`, `Unity.Collections`, `Unity.Mathematics` 참조를 추가한다.
+
+`NativeArray`와 Burst만으로는 unsafe가 필요 없으므로 다음은 유지한다.
+
+```text
+Project allowUnsafeCode = 0
+Core asmdef allowUnsafeCode = false
+```
+
+Profiler가 특정 inner loop의 bounds/alias 비용을 실제 병목으로 입증한 경우에만 별도 좁은 runtime asmdef를 만들고 그 assembly에만 unsafe를 허용한다.
+
+## [성능 측정법]
+
+`-batchmode -nographics`에서 `Stopwatch.GetTimestamp()`를 이용한 ms/tick 측정은 가능하다. 단 Editor batchmode가 게임 플레이를 자동 실행해 주는 것은 아니므로 전용 runner가 필요하다.
+
+권장 실행 형태:
+
+```text
+Unity.exe -batchmode -nographics
+-projectPath <project>
+-executeMethod CrowdPerformanceBatch.Run
+-crowdCounts 100,300,500,800,1000,1200
+-warmupTicks 300
+-measureTicks 2000
+-repetitions 5
+-output <json>
+-quit
+```
+
+측정 조건:
+
+- 실제 config asset을 수정하지 않고 `GameConfigSO`를 메모리 clone한다.
+- 코드 기본값은 800이지만 현재 `GameConfig.asset` 값은 310이므로 CLI override를 사용한다.
+- spawn, domain load, 최초 Burst compile은 측정에서 제외한다.
+- 200~500 warmup tick 후 2,000 tick을 측정한다.
+- 매 tick timestamp만 배열에 기록하고 JSON/log는 종료 후 한 번만 출력한다.
+- 동일 seed와 input trace로 이전/변경 commit을 각각 5회 측정한다.
+- `mean/median/p95/p99/max ms/tick`, ticks/s, agent-ticks/s, GC alloc/tick을 기록한다.
+- total SimTick 외에 restore, movement, mirror, grid, recruit, combat, commit, publish, render 단계를 분리한다.
+- full evolving simulation과 동일 snapshot을 반복하는 kernel microbenchmark를 모두 둔다.
+
+60fps 추정은 fixed simulation이 50Hz라는 점을 반영한다.
+
+```text
+필수 tick 조건:
+T_tick_p95 < 20ms
+
+평균 60fps 조건:
+B_other_mean + (50 / 60) × T_tick_mean < 16.667ms
+
+보수적 tail 조건:
+B_other_p99 + T_tick_p99 < 16.667ms
+```
+
+한 프레임에 2~4 tick이 몰리는 backlog 프레임 빈도도 별도로 기록해야 한다.
+
+Batchmode 결과는 회귀 추세용이다. 최종 최대 neutralCount는 약한 Android IL2CPP 실기기에서:
+
+1. 100명 간격으로 통과 구간 bracket
+2. 25~50명 단위 binary search
+3. 5~10분 thermal steady-state
+4. 3회 반복 중 가장 낮은 통과 count 채택
+
+으로 정한다. 비용이 밀도에 따라 비선형이므로 먼 구간을 단일 선형식으로 외삽해서는 안 된다.
+
+## [구현 단계]
+
+1. 기준선과 계측 구축
+
+- 기존 EditMode: Combat 26, Recruit 6, Grid/Steering 3, MatchRules 8.
+- full-tick golden, RNG, Physics, event transcript 추가.
+- phase Stopwatch와 Android ProfilerMarker 추가.
+- 게이트: 동일 입력 3회 trace bit-exact, GC/tick 확인.
+
+2. 할당과 capacity 정리
+
+- resolver scratch, follower list, Rival AI query capacity를 agent capacity 기준으로 선할당.
+- 새로운 동적 resize가 없도록 한다.
+- 게이트: 모든 golden 동일, steady-state GC 0 B/tick.
+
+3. Native SoA mirror 도입
+
+- 기존 managed 경로를 유지하면서 NativeArray에 동일 데이터를 기록.
+- 우선 직렬 managed kernel로 결과 비교.
+- 게이트: 모든 필드 raw-bit 동일.
+
+4. Flattened grid 도입
+
+- 단일-thread rebuild/query부터 구현.
+- 기존 cell/agent 순서를 그대로 재현.
+- brute-force query와 기존 grid 양쪽 결과 비교.
+- 게이트: query 순서와 full simulation trace 동일.
+
+5. Recruit/Combat 단일-thread Burst화
+
+- fixed-capacity 결과 buffer 사용.
+- 기존 resolver와 dual-run 비교.
+- 게이트: 26/26·6/6 및 ordered outcomes bit-exact.
+
+6. Steering precompute 병렬화
+
+- follower별 snapshot 계산만 `IJobParallelFor`.
+- RNG, Physics, `CharacterController.Move`, Transform clamp는 메인 스레드 기존 순서.
+- 게이트: Move 입력/출력과 full-tick trace 동일.
+
+7. 제한적 Combat 병렬화
+
+- agent-local nearest/assignment만 병렬화.
+- pair reduction, accumulator, victim sort, emit은 직렬 유지.
+- 결과는 agent index 기준으로 compact.
+- 게이트: worker count/batch size를 바꿔도 동일 hash.
+
+8. commit 구조 최적화
+
+- follower slot map으로 기존 swap-remove/append 순서를 정확히 모사.
+- 게이트: mass conversion/elimination 전용 golden 추가.
+
+9. Android IL2CPP 검증
+
+- Burst AOT 활성 확인.
+- Persistent NativeArray leak 검사.
+- 낮은 사양 ARM64 실기기에서 thermal benchmark.
+- bit mismatch가 생긴 단계는 성능과 무관하게 롤백한다.
+
+## [리스크]
+
+- 실제 99% 안에서 `CharacterController.Move`, Transform/Animator 경계가 대부분이면 Burst 수학 커널만으로 얻을 수 있는 개선에는 상한이 있다.
+- render interpolation이 CharacterController root Transform을 움직였다가 다음 tick에 복원하는 구조는 PhysX transform/broadphase 비용을 만들 가능성이 높다. phase 계측 없이 단정하면 안 된다.
+- CSR grid가 현재 열거 순서를 조금이라도 바꾸면 separation float 합산과 snapshot이 달라진다.
+- 작은 job의 schedule/complete 비용이 계산 이득보다 클 수 있다.
+- Burst Strict는 플랫폼 간 bitwise 결정론을 보장하지 않는다.
+- victim insertion sort를 O(v log v)로 바꿀 경우 완전한 `(distanceSq, Id)` total order와 기존 output을 별도 검증해야 한다.
+- atomic append, shared RNG, hash-container iteration을 사용하면 scheduler에 따라 결과가 달라진다.
+- DOTS/Unity Physics 또는 custom movement로 전환하면 현재 collision 동작 동일성을 유지하기 어렵다.
+- EditMode resolver 테스트만으로 movement, spawn, RNG, Physics, commit 및 이벤트 순서는 보호되지 않는다.
+
+변경 파일은 없다. 지정 파일과 관련 설정·테스트를 읽기 전용으로 조사했으며, 현재 테스트 메서드 수가 Combat 26개·Recruit 6개임은 확인했지만 이번 설계 조사에서는 Unity Test Runner를 실행하지 않았다.
+tokens used
+40,355
+## [권장 접근법+근거]
+
+권장안은 **기존 GameObject/CharacterController 경계를 유지한 Jobs + Burst + Persistent NativeArray SoA 하이브리드**다.
+
+핵심은 DOTS 전환이 아니라 다음 경계를 명확히 나누는 것이다.
+
+```text
+직전 tick 스냅샷
+  → Burst 계산 커널
+  → main-thread CharacterController/Physics 적용
+  → 실제 위치 NativeArray 반영
+  → grid/recruit/combat Burst 커널
+  → main-thread 순차 commit
+  → 기존 순서로 이벤트 발행
+```
+
+이유는 다음과 같다.
+
+- [AgentBuffer.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/AgentBuffer.cs:19)는 이미 `Id/Team/IsLeader/Pos/Scale`별 managed SoA다. 따라서 단순한 AoS→SoA 변환이 아니라, Unity 오브젝트 접근 분리와 `NativeArray`/Burst 커널화가 실제 개선점이다.
+- DOTS/Entities는 chunk SoA 장점보다 `Human`, `CharacterController`, PhysX, authoring, 이벤트 브리지를 전부 바꿔야 하는 비용과 동작 불일치 위험이 더 크다.
+- raw unsafe pointer SoA는 이미 SoA인 현재 구조에서 bounds-check 제거 이상의 이익이 제한적이다. lifetime·alias·IL2CPP 위험만 커진다.
+- UniTask는 CPU SIMD나 데이터 병렬화 도구가 아니다. fixed tick의 완료 시점과 예외 경로만 복잡하게 하므로 필요 없다.
+- `CharacterController.Move` 자체까지 제거하면 더 큰 개선 가능성이 있지만, 충돌·depenetration·blocked damping 결과가 바뀐다. 이는 현재 “동작 동일성”과 양립하지 않으므로 별도 프로젝트로 취급해야 한다.
+
+제안 Decision Log는 다음과 같다.
+
+```text
+1. Target feature owner: CrowdRoot / Crowd feature
+2. New file location: Assets/@Project/Crowd/Core 및 Crowd/Scripts 내부
+3. State location: RuntimeModel 성격의 Persistent NativeArray; SO/SaveData 사용 안 함
+4. Communication method: CrowdRoot 직접 호출 + 기존 C# 이벤트 발행
+5. Affected files: CrowdRoot, AgentBuffer, SpatialGrid, RecruitResolver,
+   CombatResolver, CrowdModel, 관련 EditMode/benchmark tests
+```
+
+## [병목 진단]
+
+현재 [GameplayRoot.Update()](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:156)는 0.02초 fixed tick을 프레임당 최대 4회 실행한다. backlog가 생기면 crowd 전체 연산이 한 프레임에 최대 4배 반복된다.
+
+[SimTick](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Scripts/CrowdRoot.cs:405)의 현재 계약은 다음 순서다.
+
+```text
+pending state 소비
+→ Transform을 현재 sim 위치로 복원
+→ heading 갱신
+→ leader 이동
+→ follower/neutral 이동
+→ Transform 위치를 AgentBuffer에 mirror
+→ grid rebuild
+→ recruit resolve
+→ combat resolve
+→ recruit/combat/elimination commit
+→ count/elimination 이벤트 발행
+```
+
+주요 병목 후보는 다음과 같다.
+
+1. Unity native 경계 왕복
+
+- tick 시작마다 모든 `Transform.position`을 `_visualCur`로 복원한다.
+- neutral 800 초기 상태에서는 매 tick 거의 800회의 `CharacterController.Move`, Transform read/write/clamp, heading/Animator 갱신이 발생한다.
+- 이동 후 다시 모든 Transform을 읽어 AgentBuffer로 복사한다.
+- render frame마다 다시 모든 Transform에 보간 위치를 쓴다.
+
+이 부분은 O(N)이지만 캐시 친화적인 배열 연산이 아니라 managed reference → Unity native object를 계속 따라가는 호출이다. 현재 조건에서는 최초로 계측해야 할 구간이다.
+
+2. SpatialGrid의 연결 리스트 접근
+
+[SpatialGrid.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/SpatialGrid.cs:86)는 매 tick:
+
+- hash table 전체 clear
+- position 재복사
+- bucket head와 linked list 구축
+- query마다 `_bucketHead → _nextInBucket` 산발 접근
+- 후보를 `List<int>`에 기록한 후 다시 SoA 배열 조회
+
+를 수행한다.
+
+질의 비용은 대략 `O(N·k)`다. 고정 맵에서 N이 증가하면 평균 후보 수 `k`도 밀도에 비례하므로 실질적으로 `O(N²/area)`에 가까워진다. 300은 원활하지만 500부터 급격히 나빠지는 현상과 부합한다.
+
+3. Resolver와 commit의 숨은 고비용
+
+- Recruit: 전체 scan + neutral별 grid query.
+- Combat: `O(N·teamCount)`, non-neutral grid query, pair별 agent scan.
+- victim insertion sort는 최악 O(v²)다.
+- 전향 시 원래 팀의 follower 목록을 선형 탐색해 제거하므로 mass conversion에서 최악 O(N²)가 된다.
+- 팀 follower list와 Rival AI query list 초기 capacity가 160이라, 800명 구성에서는 gameplay 도중 resize/GC가 발생할 수 있다.
+- `RecruitResolver` 후보 배열도 첫 resolve에서 한 번 resize될 수 있다.
+
+반면 [FollowerSteering.SlotOffset](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/FollowerSteering.cs:16)는 production hot path에서 호출되지 않는다. `MatchRules`와 `SimTuning`도 crowd tick의 주 병목이 아니다.
+
+## [데이터 레이아웃]
+
+### 1. Persistent Native SoA
+
+CrowdRoot가 다음 배열의 lifetime을 소유하고 `Initialize → Dispose/OnDestroy`로 관리한다.
+
+```text
+NativeArray<int>    Id
+NativeArray<int>    Team
+NativeArray<byte>   Flags          // leader, active 등
+NativeArray<float2> Position
+NativeArray<float>  Scale
+NativeArray<float2> Velocity
+NativeArray<float>  WanderHeading
+NativeArray<float>  WanderTimer
+NativeArray<float2> VisualPrev
+NativeArray<float2> VisualCur
+```
+
+- agent index는 lifetime 동안 안정적으로 유지한다.
+- capacity만큼 `Allocator.Persistent`로 한 번 할당한다.
+- tick 안에서는 resize, `new List`, LINQ, boxing을 금지한다.
+- Unity 오브젝트는 `Transform[]`, `CharacterController[]`, `Human[]` bridge 배열로만 남긴다.
+- hot kernel은 Unity 오브젝트 배열을 전혀 참조하지 않는다.
+
+초기에는 기존 `AgentBuffer`와 Native SoA를 나란히 유지해 golden 검증한다. 검증 후 Native SoA를 단일 source of truth로 승격한다.
+
+### 2. follower 목록
+
+팀별 follower 순서 자체가 동작 계약이므로 무작정 agent-index 순으로 재정렬하면 안 된다.
+
+권장 구조는 팀별 fixed-capacity contiguous slab과 다음 보조 배열이다.
+
+```text
+FollowerIndices[team * capacity + slot]
+FollowerCount[team]
+FollowerSlotByAgent[agent]
+```
+
+이 구조에서 기존 `List`의 append와 swap-remove를 정확히 재현하면서 제거를 O(1)로 만들 수 있다. elimination의 “index 0 제거 후 swap” 순서 역시 그대로 모사해야 한다.
+
+### 3. Flattened cell grid
+
+현재 hash-linked grid를 다음 CSR형 구조로 바꾼다.
+
+```text
+CellCounts[cell]
+CellOffsets[cell + 1]
+CellWriteCursor[cell]
+AgentIndices[agentCount]
+```
+
+Rebuild는 `count → prefix sum → fill`의 O(N+C) 선형 접근이다. query는 각 cell의 연속된 `AgentIndices` 범위만 돈다.
+
+단, 기존 반환 순서를 반드시 재현해야 한다.
+
+```text
+cellY 오름차순
+→ cellX 오름차순
+→ 같은 cell 안에서는 agent index 내림차순
+```
+
+현재 head-prepend 때문에 같은 cell은 내림차순이다. separation float 합산 순서가 바뀌면 위치 snapshot도 달라질 수 있다.
+
+후보를 `List<int>`에 담지 말고 커널이 cell range를 직접 순회하도록 한다.
+
+## [커널·멀티스레드]
+
+Burst 대상과 메인 스레드 대상을 구분한다.
+
+| 단계 | 실행 방식 | 이유 |
+|---|---|---|
+| Grid count/prefix/fill | 우선 단일 `IJob` | 동일 cell 순서 보존 |
+| Follower desired velocity/separation | `IJobParallelFor` 가능 | agent별 독립 output |
+| Neutral 기본 이동 벡터 | 병렬 가능 | RNG 만료 처리 제외 |
+| Recruit claimant 계산 | 병렬 가능 | neutral별 독립 slot |
+| Recruit 결과 compact | 단일 `IJob` | neutral index 순서 유지 |
+| Combat nearest/agent-local 계산 | 병렬 가능 | agent별 고정 output |
+| Pair reduction/accumulator | 단일 `IJob` | 고정 pair 순서 필요 |
+| Conversion/victim emit | 단일 `IJob` | 결과 발행 순서 필요 |
+| RNG/Physics/CC.Move | 메인 스레드 직렬 | 호출·소비 순서 계약 |
+| Commit/event publish | 메인 스레드 직렬 | 관찰 가능한 순서 계약 |
+
+`IJobParallelFor`에서는 각 index가 자신의 output slot만 써야 한다. 다음은 금지한다.
+
+- `NativeList.ParallelWriter`로 conversion/recruit 순서 없이 append
+- atomic grid insert
+- 공유 RNG
+- `NativeParallelHashMap` 열거 순서 의존
+- float atomic/reduction
+- worker에서 EventBus publish
+
+병렬 결과는 agent별 고정 slot에 쓴 뒤 단일 job이 agent/team 오름차순으로 compact한다.
+
+또한 job을 잘게 쪼개 즉시 `Schedule().Complete()`하면 scheduling 비용이 이득을 상쇄할 수 있다. 가능한 한 커널을 fusion하고, 직렬 Burst 단계는 작은 N에서 `IJob.Run()`과 schedule을 모두 계측해 선택한다.
+
+중요한 스냅샷 경계도 유지해야 한다.
+
+- follower/AI steering은 직전 tick 말의 grid를 읽는다.
+- 모든 movement가 끝난 뒤 grid를 rebuild한다.
+- Recruit와 Combat은 동일한 이동 후/pre-commit snapshot을 읽는다.
+- 같은 tick에 recruit된 neutral은 같은 tick combat에 참여하지 않는다.
+
+## [결정론 전략]
+
+결정론 게이트는 기존 resolver 테스트만으로 충분하지 않다.
+
+### 반드시 고정할 불변식
+
+- `GameplayRoot`의 0.02초 tick, 최대 4 step, 잔여 accumulator 처리.
+- spawn의 leader/player/team 순서.
+- neutral attempt마다 RNG x→z→`CheckSphere`, 성공 시에만 heading→timer draw.
+- neutral scale hash가 RNG를 소비하지 않는 점.
+- wander의 agent index 오름차순, timer draw 후 최대 8회의 heading draw→Raycast.
+- AI team 순서와 center→left→right ray 순서.
+- grid cell/agent 열거 순서.
+- recruit 결과의 neutral index 순서와 `(distanceSq, Id)` tie-break.
+- combat pair/team 순서, strict larger-team 규칙, accumulator 순서.
+- victim `(distance, Id)` 정렬.
+- recruit→combat conversion→elimination commit 순서.
+- count event team 오름차순.
+- elimination event player 우선→rival team 오름차순.
+
+### Golden trace
+
+동일 seed, config clone, heading input trace, `dt=0.02`로 `{0, 300, 500, 800}` 및 복수 seed를 실행한다. 매 tick 다음을 기록한다.
+
+- `id/team/isLeader/position/scale`
+- velocity, wander heading/timer
+- combat accumulator
+- ordered recruit/conversion/elimination 결과
+- `RejectionRate`, total/rejected/skipped/placed
+- RNG draw 종류·순번·raw bits
+- `CheckSphere`/Raycast 입력과 결과
+- `CharacterController.Move` 입력과 실제 위치
+- 이벤트 `(tick, sequence, type, team, payload)`
+
+float는 허용오차가 아니라 `SingleToInt32Bits`로 비교하고 전체 hash와 최초 불일치 필드를 출력한다.
+
+### Burst float
+
+`[BurstCompile(FloatMode = FloatMode.Strict, FloatPrecision = FloatPrecision.Standard)]`에서 시작하고 fast math는 금지한다. 기존 괄호와 합산 순서도 유지한다.
+
+다만 Strict도 다음을 보장하지 않는다.
+
+- x64 Editor와 ARM64 Android 간 bitwise 동일성
+- Mono와 IL2CPP 간 동일성
+- `Mathf`를 `math.*`로 바꾼 경우의 초월함수 동일성
+- PhysX/CharacterController의 플랫폼 간 동일성
+
+따라서 계약은 우선 “동일 Unity/Burst 버전, 동일 target architecture에서 리팩터 전후 bit-exact”로 정의해야 한다. Android와 Editor 사이까지 bit-exact가 필수라면 고정소수점/정수 시뮬레이션이 필요하며, 이는 현재 동작 동일성 범위를 넘어선다.
+
+## [필요 패키지]
+
+현재 확인된 상태는 다음과 같다.
+
+- Unity 6000.3.9f1
+- Burst 1.8.28
+- Collections 2.6.2
+- Mathematics 1.3.3
+- 세 패키지는 [packages-lock.json](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/packages-lock.json:12)에 URP 전이 의존성으로 존재
+- [manifest.json](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/manifest.json:2)에는 직접 선언되지 않음
+- Entities/UniTask 없음
+- Android IL2CPP
+- 프로젝트와 Core asmdef 모두 unsafe 비활성
+
+권장 설정은 다음과 같다.
+
+- `com.unity.burst: 1.8.28`
+- `com.unity.collections: 2.6.2`
+- `com.unity.mathematics: 1.3.3`
+
+위 버전을 manifest 직접 dependency로 pin한다. URP 의존성이 바뀌어도 crowd 기능의 필수 패키지가 사라지지 않게 하기 위해서다.
+
+별도 `com.unity.jobs` 또는 Entities 패키지는 필요 없다. `IJob`/`IJobParallelFor`는 현재 Unity job system과 Collections 기반으로 사용할 수 있다.
+
+[Core asmdef](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef:4)에 `Unity.Burst`, `Unity.Collections`, `Unity.Mathematics` 참조를 추가한다.
+
+`NativeArray`와 Burst만으로는 unsafe가 필요 없으므로 다음은 유지한다.
+
+```text
+Project allowUnsafeCode = 0
+Core asmdef allowUnsafeCode = false
+```
+
+Profiler가 특정 inner loop의 bounds/alias 비용을 실제 병목으로 입증한 경우에만 별도 좁은 runtime asmdef를 만들고 그 assembly에만 unsafe를 허용한다.
+
+## [성능 측정법]
+
+`-batchmode -nographics`에서 `Stopwatch.GetTimestamp()`를 이용한 ms/tick 측정은 가능하다. 단 Editor batchmode가 게임 플레이를 자동 실행해 주는 것은 아니므로 전용 runner가 필요하다.
+
+권장 실행 형태:
+
+```text
+Unity.exe -batchmode -nographics
+-projectPath <project>
+-executeMethod CrowdPerformanceBatch.Run
+-crowdCounts 100,300,500,800,1000,1200
+-warmupTicks 300
+-measureTicks 2000
+-repetitions 5
+-output <json>
+-quit
+```
+
+측정 조건:
+
+- 실제 config asset을 수정하지 않고 `GameConfigSO`를 메모리 clone한다.
+- 코드 기본값은 800이지만 현재 `GameConfig.asset` 값은 310이므로 CLI override를 사용한다.
+- spawn, domain load, 최초 Burst compile은 측정에서 제외한다.
+- 200~500 warmup tick 후 2,000 tick을 측정한다.
+- 매 tick timestamp만 배열에 기록하고 JSON/log는 종료 후 한 번만 출력한다.
+- 동일 seed와 input trace로 이전/변경 commit을 각각 5회 측정한다.
+- `mean/median/p95/p99/max ms/tick`, ticks/s, agent-ticks/s, GC alloc/tick을 기록한다.
+- total SimTick 외에 restore, movement, mirror, grid, recruit, combat, commit, publish, render 단계를 분리한다.
+- full evolving simulation과 동일 snapshot을 반복하는 kernel microbenchmark를 모두 둔다.
+
+60fps 추정은 fixed simulation이 50Hz라는 점을 반영한다.
+
+```text
+필수 tick 조건:
+T_tick_p95 < 20ms
+
+평균 60fps 조건:
+B_other_mean + (50 / 60) × T_tick_mean < 16.667ms
+
+보수적 tail 조건:
+B_other_p99 + T_tick_p99 < 16.667ms
+```
+
+한 프레임에 2~4 tick이 몰리는 backlog 프레임 빈도도 별도로 기록해야 한다.
+
+Batchmode 결과는 회귀 추세용이다. 최종 최대 neutralCount는 약한 Android IL2CPP 실기기에서:
+
+1. 100명 간격으로 통과 구간 bracket
+2. 25~50명 단위 binary search
+3. 5~10분 thermal steady-state
+4. 3회 반복 중 가장 낮은 통과 count 채택
+
+으로 정한다. 비용이 밀도에 따라 비선형이므로 먼 구간을 단일 선형식으로 외삽해서는 안 된다.
+
+## [구현 단계]
+
+1. 기준선과 계측 구축
+
+- 기존 EditMode: Combat 26, Recruit 6, Grid/Steering 3, MatchRules 8.
+- full-tick golden, RNG, Physics, event transcript 추가.
+- phase Stopwatch와 Android ProfilerMarker 추가.
+- 게이트: 동일 입력 3회 trace bit-exact, GC/tick 확인.
+
+2. 할당과 capacity 정리
+
+- resolver scratch, follower list, Rival AI query capacity를 agent capacity 기준으로 선할당.
+- 새로운 동적 resize가 없도록 한다.
+- 게이트: 모든 golden 동일, steady-state GC 0 B/tick.
+
+3. Native SoA mirror 도입
+
+- 기존 managed 경로를 유지하면서 NativeArray에 동일 데이터를 기록.
+- 우선 직렬 managed kernel로 결과 비교.
+- 게이트: 모든 필드 raw-bit 동일.
+
+4. Flattened grid 도입
+
+- 단일-thread rebuild/query부터 구현.
+- 기존 cell/agent 순서를 그대로 재현.
+- brute-force query와 기존 grid 양쪽 결과 비교.
+- 게이트: query 순서와 full simulation trace 동일.
+
+5. Recruit/Combat 단일-thread Burst화
+
+- fixed-capacity 결과 buffer 사용.
+- 기존 resolver와 dual-run 비교.
+- 게이트: 26/26·6/6 및 ordered outcomes bit-exact.
+
+6. Steering precompute 병렬화
+
+- follower별 snapshot 계산만 `IJobParallelFor`.
+- RNG, Physics, `CharacterController.Move`, Transform clamp는 메인 스레드 기존 순서.
+- 게이트: Move 입력/출력과 full-tick trace 동일.
+
+7. 제한적 Combat 병렬화
+
+- agent-local nearest/assignment만 병렬화.
+- pair reduction, accumulator, victim sort, emit은 직렬 유지.
+- 결과는 agent index 기준으로 compact.
+- 게이트: worker count/batch size를 바꿔도 동일 hash.
+
+8. commit 구조 최적화
+
+- follower slot map으로 기존 swap-remove/append 순서를 정확히 모사.
+- 게이트: mass conversion/elimination 전용 golden 추가.
+
+9. Android IL2CPP 검증
+
+- Burst AOT 활성 확인.
+- Persistent NativeArray leak 검사.
+- 낮은 사양 ARM64 실기기에서 thermal benchmark.
+- bit mismatch가 생긴 단계는 성능과 무관하게 롤백한다.
+
+## [리스크]
+
+- 실제 99% 안에서 `CharacterController.Move`, Transform/Animator 경계가 대부분이면 Burst 수학 커널만으로 얻을 수 있는 개선에는 상한이 있다.
+- render interpolation이 CharacterController root Transform을 움직였다가 다음 tick에 복원하는 구조는 PhysX transform/broadphase 비용을 만들 가능성이 높다. phase 계측 없이 단정하면 안 된다.
+- CSR grid가 현재 열거 순서를 조금이라도 바꾸면 separation float 합산과 snapshot이 달라진다.
+- 작은 job의 schedule/complete 비용이 계산 이득보다 클 수 있다.
+- Burst Strict는 플랫폼 간 bitwise 결정론을 보장하지 않는다.
+- victim insertion sort를 O(v log v)로 바꿀 경우 완전한 `(distanceSq, Id)` total order와 기존 output을 별도 검증해야 한다.
+- atomic append, shared RNG, hash-container iteration을 사용하면 scheduler에 따라 결과가 달라진다.
+- DOTS/Unity Physics 또는 custom movement로 전환하면 현재 collision 동작 동일성을 유지하기 어렵다.
+- EditMode resolver 테스트만으로 movement, spawn, RNG, Physics, commit 및 이벤트 순서는 보호되지 않는다.
+
+변경 파일은 없다. 지정 파일과 관련 설정·테스트를 읽기 전용으로 조사했으며, 현재 테스트 메서드 수가 Combat 26개·Recruit 6개임은 확인했지만 이번 설계 조사에서는 Unity Test Runner를 실행하지 않았다.

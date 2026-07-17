@@ -1,0 +1,23 @@
+# Phase C 단계 1 — Wall SDF validator
+# generated: 2026-07-17 03:29:44
+# asset: Assets/@Project/City/Generated/WallSdf.asset
+# grid: cols=928 rows=914 cells=848192 cell=0.1m origin=(-46.4,-45.7) yBand=[0.8,3.2] maxDist=2.5 bias=0.05
+# integrity(asset): colliders=40 tris=7288 sourceHash=7F057660 payloadCrc=7E69735B schema=1
+
+[PASS] hash 안정성(재베이크 2회 동일) :: r1=7F057660/7E69735B r2=7F057660/7E69735B
+[PASS] asset이 재베이크와 일치(결정성) :: asset=7F057660/7E69735B rebake=7F057660/7E69735B
+[PASS] collider 수 = 40 :: actual=40
+[PASS] 그리드가 walkable region 커버 :: regionX=[-46.4,46.4] regionZ=[-45.7,45.7] gridX=[-46.4,46.4] gridZ=[-45.7,45.7]
+[PASS] 내부(벽) 비율 sanity(0<frac<0.5) :: insideFrac=0.1789 (151739/848192)
+[PASS] 개활(Phi>cr_max) 비율(>0.5) :: cr_max=0.645m openFrac=0.6862
+[PASS] region 중심 개활(Phi>cr_max) :: phiCenter=1.4664 cr_max=0.645
+[PASS] WallField 로드/조회 sanity :: IsLoaded=True center=(0,0) Phi=1.4664 grad=(-0.3747,-0.9271) | nearWall=(-21.65,-42.75) Phi=-0.0123 grad=(-0.5263,-0.8503)
+[PASS] WallField Dispose 후 IsLoaded=false :: IsLoaded=False
+
+## collider별 내부 셀 수(leak 진단; footprint AABB 내 inside 셀)
+  [Parks] insideCells=102383 footprint=82.6608x59.2005m
+  [StreetProps] insideCells=151285 footprint=84.9736x84.945m
+  [Vehicles] insideCells=128237 footprint=75.5356x82.6568m
+[PASS] 결합 프롭 3종 모두 존재/누수 없음(inside>0) :: combinedFound=3 zeroInsideProps=0 zeroInsideBuildings=0
+
+## RESULT: PASS

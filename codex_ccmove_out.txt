@@ -1,0 +1,1590 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.3
+--------
+workdir: D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f6823-bda5-73b3-bf03-b99f3fee4b3b
+--------
+user
+너는 유니티 시니어 물리/퍼포먼스 엔지니어다. AF_CrowdCity(브랜치 Refactor_PrefabTreeStruct_260715)에서 CharacterController.Move를 커널 내 결정적 경량 충돌로 대체하는 구체 설계를 작성하라. 사용자는 "장애물(벽)에 잘 막히고 이질감이 없어야" 성능 우선 대체를 승인했다.
+확정 사실: CC.Move의 실효 기능은 도시 벽(건물 37개+Parks/Vehicles/StreetProps, non-convex MeshCollider) 캡슐 sweep 차단+depenetration+벽 슬라이딩+skinWidth 0.08 standoff뿐이다. 유닛끼리 충돌은 Physics.IgnoreLayerCollision(Unit,Unit)로 이미 무시(분리는 커널 steering 담당). 지면 collider 없음(Y=groundY 강제), slopeLimit/stepOffset 무효. CC 스펙: radius0.35/height1.8/center(0,0.9,0)/skinWidth0.08/minMoveDistance0.001, 이동은 y=0 delta. 프로파일: CC.Move가 SimTick 94%(n800), 중립 wander 84%, 순수 커널 1.1%. 관련 코드: Crowd/Scripts/CrowdRoot.cs(이동/조향 MoveLeaders/SteerFollowersAndNeutrals/중립wander/ComputeWalkableRegion), Crowd/Core/, Game/Scripts/GameplayRoot.cs, City/Editor/CityBuildingsGenerator.cs(건물 MeshCollider). 환경: Burst1.8.28/Collections2.6.2/Mathematics1.3.3(transitive), Jobs/Entities/UniTask 없음, allowUnsafeCode=0, IL2CPP(Android).
+설계하라: (1)정적 벽 충돌 표현(2D SDF/거리장 grid vs 셀점유 vs batch CapsuleCast; 결정적·경량 최적안+근거), (2)이동 해소(벽 sweep 차단+depenetration+슬라이딩 접선투영+skinWidth standoff+minMoveDistance 임계 재현, 팔로워 실제변위 되먹임 유지), (3)이질감 최소화(오픈 near-identical, 벽근처 CC.Move 근접, 남는 차이 정직히), (4)결정론(PhysX 제거→완전 결정적, FloatMode, 조회순서; 커널 골든 26/26·6/6 보존, 전체 위치 스냅샷은 새 baseline 재정의 승인됨, rng/이벤트 순서 불변), (5)성능(정적 SDF read-only→IJobParallelFor+Burst 병렬화, 94% 제거 대비 조회비용, 800@60fps 도달 가능성), (6)필요 패키지/설정(manifest, allowUnsafeCode, SDF 베이크 Editor vs 런타임), (7)실측 검증 설계(동일시드 CC.Move유지 vs 대체 위치스냅샷 비교: 오픈/벽근처 버킷 평균·최대 편차 m, 발산곡선, 게임결과 다수시드 일치율; 게이트 통과 기준 수치 제시), (8)단계적 구현+각 게이트, (9)리스크+조건미달 롤백.
+결론을 [권장 벽충돌 표현+근거]/[이동 해소]/[이질감 최소화]/[결정론]/[성능·800도달]/[필요 패키지]/[실측 게이트 기준]/[구현 단계]/[리스크·롤백] 섹션으로 제시하라.
+2026-07-15T23:36:45.191607Z ERROR codex_models_manager::manager: failed to refresh available models: timeout waiting for child process to exit
+codex
+요청하신 범위는 코드 수정 없이, 현재 브랜치와 실제 구현 관례를 근거로 한 설계 문서입니다. 성공 기준은 ① 기존 이동·조향·팔로워 피드백 경로를 정확히 짚고, ② PhysX 의존을 제거한 결정적 벽 충돌 알고리즘을 수치까지 구체화하며, ③ 800개체/60fps 가능성을 과장 없이 평가하고, ④ CC.Move 대비 A/B 게이트와 실패 시 롤백 조건을 명시하는 것입니다.
+
+AGENTS.md의 운영 규칙에 따라 저는 조율·판정만 맡고, 코드/프로젝트 조사와 알고리즘·검증 검토는 서로 독립된 담당에게 배정하겠습니다. 결과가 모이면 요청하신 9개 섹션으로 통합하겠습니다.
+codex
+현재 세 축을 병렬 검토 중입니다.
+
+- 프로젝트 조사: 실제 호출 지점, 데이터 흐름, 패키지·설정·테스트 근거
+- 충돌 해소: SDF 표현, sweep/depenetration/slide/standoff의 수학적 계약
+- 성능·검증: Burst 잡 구조, Android IL2CPP 결정론, 정량 A/B 게이트와 롤백
+
+핵심 설계 쟁점은 단순 “점유 셀 충돌”이 아니라, `radius 0.35 + skinWidth 0.08`의 유효 반경을 연속 거리 질의로 재현하면서 코너와 얇은 장애물에서 tunneling을 막는 것입니다. 이 부분은 보수적 sweep과 고정 반복 수까지 명시해 결론 내리겠습니다.
+collab: Wait
+2026-07-15T23:37:17.450579Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.8 seconds
+Output:
+
+collab: Wait
+2026-07-15T23:37:28.833825Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.7 seconds
+Total output lines: 346
+Output:
+.\CLAUDE.md:47:- First determine whether the current folder root is `Assets/_Project` or `Assets/Game`, and follow the existing root and naming.
+.\CLAUDE.md:162:- Prefer IDs, coordinates, enums, numbers, and immutable snapshots.
+.\CLAUDE.md:182:- If the implementation cannot safely handle subscription or unsubscription during dispatch, copy the subscriber list into a snapshot before publishing.
+.\CLAUDE.md:274:- **Baked physics & determinism exception.** Baked colliders/`CharacterController` are live the instant they are Instantiated, so place no physics step or overlap query between Instantiate and Init (all spawn-placement checks run before Instantiate). Bake determinism-pinned specs (e.g. CC radius/height/center/skinWidth) into the prefab, but verify the values only with an Editor validator (constant match) — never repair them at runtime. The pure-C# simulation kernel (`Crowd/Core`) is exempt from prefab rules.
+.\AGENTS.md:98:- First determine whether the current folder root is `Assets/_Project` or `Assets/Game`, and follow the existing root and naming.
+.\AGENTS.md:213:- Prefer IDs, coordinates, enums, numbers, and immutable snapshots.
+.\AGENTS.md:233:- If the implementation cannot safely handle subscription or unsubscription during dispatch, copy the subscriber list into a snapshot before publishing.
+.\UnityArchitectureGuide\TEAM_ARCHITECTURE_GUIDE.md:270:| 매 프레임 대량 데이터가 흐른다 | EventBus 금지, 같은 기능 내부 직접 참조 또는 read-only Runtime/Snapshot 고려 |
+.\UnityArchitectureGuide\TEAM_ARCHITECTURE_GUIDE.md:363:- dispatch 중 구독/해제가 일어나도 안전한 구현이 아니라면 publish 전에 subscriber 목록을 snapshot으로 복사한다.
+.\UnityArchitectureGuide\TEAM_ARCHITECTURE_GUIDE.md:365:- payload는 ID, enum, 숫자, 좌표, immutable snapshot만 담는다.
+.\UnityArchitectureGuide\TEAM_ARCHITECTURE_GUIDE.md:415:Payload에는 받는 쪽이 알아야 할 사실만 담는다. ID, 좌표, enum, 숫자, immutable snapshot을 우선한다.
+.\UnityArchitectureGuide\TEAM_ARCHITECTURE_GUIDE.md:841:기본 위치는 해당 기능의 `README.md` 하단이다. 기능 README가 없거나 여러 기능에 걸친 결정이면 `Docs/UnityArchitectureGuide/DECISIONS.md` 또는 PR 설명에 남긴다.
+.\UnityArchitectureGuide\AI_WORKING_RULES.md:25:- 위치가 애매하면 `rg --files`, 주변 폴더 구조, 기존 네임스페이스, asmdef를 확인한 뒤 결정한다.
+.\UnityArchitectureGuide\AI_WORKING_RULES.md:132:- ID, 좌표, enum, 숫자, immutable snapshot 위주로 담는다.
+.\UnityArchitectureGuide\AI_WORKING_RULES.md:143:- 이벤트 위치는 "누가 듣는가"가 아니라 "어느 도메인에서 발생한 사건인가"로 결정한다.
+.\UnityArchitectureGuide\AI_WORKING_RULES.md:152:- dispatch 중 구독/해제가 일어나도 안전한 구현이 아니라면, publish 전에 subscriber 목록을 snapshot으로 복사한다.
+.\Assets\TutorialInfo\Scripts\Readme.cs.meta:9:  icon: {fileID: 2800000, guid: a186f8a87ca4f4d3aa864638ad5dfb65, type: 3}
+.\Assets\TutorialInfo\Layout.wlt:190:  m_MaxSize: {x: 18008, y: 14042}
+.\ProjectSettings\DynamicsManager.asset:33:  m_EnableEnhancedDeterminism: 0
+.\codex_design_out.txt:15:배경: neutralCount 기본 800. 약한 CPU에선 500도 버벅, 300은 원활. 병목 99%가 GameplayRoot.Update()의 crowd 연산. 목표는 Update crowd 연산을 완전 캐시 친화적으로 재구조화(unsafe struct SoA 배열 순회, 또는 DOTS; AoS/SoA 적합하면 멀티스레드 IJobParallelFor 허용, 필요시 UniTask). 최우선 제약은 결정론·동작 동일성(EditMode CombatResolver 26/26·RecruitResolver 6/6 유지, RejectionRate/스냅샷 동일, rng 소비 순서·CheckSphere·이벤트 발행 순서 불변). 환경: Unity 6000.3.9f1, Burst 1.8.28/Collections 2.6.2/Mathematics 1.3.3 설치(URP 전이 의존성), Jobs/Entities/UniTask 미설치, allowUnsafeCode=0, IL2CPP(Android), .NET Standard 2.1.
+.\codex_design_out.txt:16:설계안에 포함하라: (1)병목 진단(무거운 연산·복잡도·캐시 비친화 원인), (2)데이터 레이아웃 재설계(AoS→SoA/NativeArray/unsafe struct, 선형 접근, 할당 제거), (3)연산 커널 재설계(Burst 적용 범위, IJob vs IJobParallelFor, 멀티스레드 시 결정론 위험 평가), (4)결정론 보존 전략(현재 불변식 유지, Burst float 결정론), (5)접근법 선택+근거(Jobs+Burst+NativeArray vs DOTS vs 순수 unsafe배열; 이 프로젝트에 권장안과 이유; UniTask 필요성), (6)필요 패키지/설정(manifest, allowUnsafeCode, asmdef), (7)헤드리스 성능 측정(Update 연산 시간 ms/tick을 batchmode Stopwatch로 측정 가능한지, neutralCount 스케일별 전/후 비교, 안정적 60fps 최대 neutralCount 추정법), (8)단계적 구현 계획+각 단계 결정론 게이트, (9)리스크.
+.\codex_design_out.txt:17:결론을 [권장 접근법+근거]/[병목 진단]/[데이터 레이아웃]/[커널·멀티스레드]/[결정론 전략]/[필요 패키지]/[성능 측정법]/[구현 단계]/[리스크] 섹션으로 명확히 제시하라.
+.\codex_design_out.txt:19:요청하신 설계 검토는 프로젝트 규칙에 따라 서브에이전트에게 코드 정독·병목 분석·검증 가능성 조사를 분리 위임하겠습니다. 저는 결과를 성공 기준(동작·결정론 완전 동일, 단계별 게이트, 실제 패키지 상태 반영)에 맞춰 종합하겠습니다.
+.\codex_design_out.txt:154:351:                // 결정적 해시 기반 split 분포로 스케일을 준다: baselineChance 확률로 정확히 1.0, 나머지는 1.1~neutralMaxScale
+.\codex_design_out.txt:231:422:            // 이후 모든 transform 읽기/CC.Move/미러링이 항상 논리 위치를 보게 한다(결정성 보장).
+.\codex_design_out.txt:381:직전 tick 스냅샷
+.\codex_design_out.txt:434:- neutral 800 초기 상태에서는 매 tick 거의 800회의 `CharacterController.Move`, Transform read/write/clamp, heading/Animator 갱신이 발생한다.
+.\codex_design_out.txt:460:- 팀 follower list와 Rival AI query list 초기 capacity가 160이라, 800명 구성에서는 gameplay 도중 resize/GC가 발생할 수 있다.
+.\codex_design_out.txt:490:초기에는 기존 `AgentBuffer`와 Native SoA를 나란히 유지해 golden 검증한다. 검증 후 Native SoA를 단일 source of truth로 승격한다.
+.\codex_design_out.txt:527:현재 head-prepend 때문에 같은 cell은 내림차순이다. separation float 합산 순서가 바뀌면 위치 snapshot도 달라질 수 있다.
+.\codex_design_out.txt:561:중요한 스냅샷 경계도 유지해야 한다.
+.\codex_design_out.txt:565:- Recruit와 Combat은 동일한 이동 후/pre-commit snapshot을 읽는다.
+.\codex_design_out.txt:568:## [결정론 전략]
+.\codex_design_out.txt:570:결정론 게이트는 기존 resolver 테스트만으로 충분하지 않다.
+.\codex_design_out.txt:588:### Golden trace
+.\codex_design_out.txt:590:동일 seed, config clone, heading input trace, `dt=0.02`로 `{0, 300, 500, 800}` 및 복수 seed를 실행한다. 매 tick 다음을 기록한다.
+.\codex_design_out.txt:662:-crowdCounts 100,300,500,800,1000,1200
+.\codex_design_out.txt:673:- 코드 기본값은 800이지만 현재 `GameConfig.asset` 값은 310이므로 CLI override를 사용한다.
+.\codex_design_out.txt:680:- full evolving simulation과 동일 snapshot을 반복하는 kernel microbenchmark를 모두 둔다.
+.\codex_design_out.txt:711:- full-tick golden, RNG, Physics, event transcript 추가.
+.\codex_design_out.txt:719:- 게이트: 모든 golden 동일, steady-state GC 0 B/tick.
+.\codex_design_out.txt:738:- 게이트: 26/26·6/6 및 ordered outcomes bit-exact.
+.\codex_design_out.txt:742:- follower별 snapshot 계산만 `IJobParallelFor`.
+.\codex_design_out.txt:756:- 게이트: mass conversion/elimination 전용 golden 추가.
+.\codex_design_out.txt:769:- CSR grid가 현재 열거 순서를 조금이라도 바꾸면 separation float 합산과 snapshot이 달라진다.
+.\codex_design_out.txt:771:- Burst Strict는 플랫폼 간 bitwise 결정론을 보장하지 않는다.
+.\codex_design_out.txt:787:직전 tick 스냅샷
+.\codex_design_out.txt:840:- neutral 800 초기 상태에서는 매 tick 거의 800회의 `CharacterController.Move`, Transform read/write/clamp, heading/Animator 갱신이 발생한다.
+.\codex_design_out.txt:866:- 팀 follower list와 Rival AI query list 초기 capacity가 160이라, 800명 구성에서는 gameplay 도중 resize/GC가 발생할 수 있다.
+.\codex_design_out.txt:896:초기에는 기존 `AgentBuffer`와 Native SoA를 나란히 유지해 golden 검증한다. 검증 후 Native SoA를 단일 source of truth로 승격한다.
+.\codex_design_out.txt:933:현재 head-prepend 때문에 같은 cell은 내림차순이다. separation float 합산 순서가 바뀌면 위치 snapshot도 달라질 수 있다.
+.\codex_design_out.txt:967:중요한 스냅샷 경계도 유지해야 한다.
+.\codex_design_out.txt:971:- Recruit와 Combat은 동일한 이동 후/pre-commit snapshot을 읽는다.
+.\codex_design_out.txt:974:## [결정론 전략]
+.\codex_design_out.txt:976:결정론 게이트는 기존 resolver 테스트만으로 충분하지 않다.
+.\codex_design_out.txt:994:### Golden trace
+.\codex_design_out.txt:996:동일 seed, config clone, heading input trace, `dt=0.02`로 `{0, 300, 500, 800}` 및 복수 seed를 실행한다. 매 tick 다음을 기록한다.
+.\codex_design_out.txt:1068:-crowdCounts 100,300,500,800,1000,1200
+.\codex_design_out.txt:1079:- 코드 기본값은 800이지만 현재 `GameConfig.asset` 값은 310이므로 CLI override를 사용한다.
+.\codex_design_out.txt:1086:- full evolving simulation과 동일 snapshot을 반복하는 kernel microbenchmark를 모두 둔다.
+.\codex_design_out.txt:1117:- full-tick golden, RNG, Physics, event transcript 추가.
+.\codex_design_out.txt:1125:- 게이트: 모든 golden 동일, steady-state GC 0 B/tick.
+.\codex_design_out.txt:1144:- 게이트: 26/26·6/6 및 ordered outcomes bit-exact.
+.\codex_design_out.txt:1148:- follower별 snapshot 계산만 `IJobParallelFor`.
+.\codex_design_out.txt:1162:- 게이트: mass conversion/elimination 전용 golden 추가.
+.\codex_design_out.txt:1175:- CSR grid가 현재 열거 순서를 조금이라도 바꾸면 separation float 합산과 snapshot이 달라진다.
+.\codex_design_out.txt:1177:- Burst Strict는 플랫폼 간 bitwise 결정론을 보장하지 않는다.
+.\codex_design_out2.txt:15:배경: neutralCount 기본 800. 약한 CPU에선 500도 버벅, 300은 원활. 병목 99%가 GameplayRoot.Update()의 crowd 연산. 목표는 Update crowd 연산을 완전 캐시 친화적으로 재구조화(unsafe struct SoA 배열 순회, 또는 DOTS; AoS/SoA 적합하면 멀티스레드 IJobParallelFor 허용, 필요시 UniTask). 최우선 제약은 결정론·동작 동일성(EditMode CombatResolver 26/26·RecruitResolver 6/6 유지, RejectionRate/스냅샷 동일, rng 소비 순서·CheckSphere·이벤트 발행 순서 불변). 환경: Unity 6000.3.9f1, Burst 1.8.28/Collections 2.6.2/Mathematics 1.3.3 설치(URP 전이 의존성), Jobs/Entities/UniTask 미설치, allowUnsafeCode=0, IL2CPP(Android), .NET Standard 2.1.
+.\codex_design_out2.txt:16:설계안에 포함하라: (1)병목 진단(무거운 연산·복잡도·캐시 비친화 원인; CharacterController.Move/Transform 패스 비중도 평가), (2)데이터 레이아웃 재설계(현재 AoS/SoA 판별 후 NativeArray/unsafe struct, 선형 접근, 할당 제거), (3)연산 커널 재설계(Burst 적용 범위, IJob vs IJobParallelFor, 멀티스레드 시 결정론 위험 평가), (4)결정론 보존 전략(현재 불변식 유지, Burst FloatMode), (5)접근법 선택+근거(Jobs+Burst+NativeArray vs DOTS vs 순수 unsafe배열; 권장안과 이유; UniTask 필요성), (6)필요 패키지/설정(manifest, allowUnsafeCode, asmdef), (7)헤드리스 성능 측정(Update 연산 시간 ms/tick을 batchmode Stopwatch로 측정 가능한지, neutralCount 스케일별 전/후 비교, 안정적 60fps 최대 neutralCount 추정법), (8)단계적 구현 계획+각 단계 결정론 게이트, (9)리스크.
+.\codex_design_out2.txt:17:결론을 [권장 접근법+근거]/[병목 진단]/[데이터 레이아웃]/[커널·멀티스레드]/[결정론 전략]/[필요 패키지]/[성능 측정법]/[구현 단계]/[리스크] 섹션으로 명확히 제시하라.
+.\codex_design_out2.txt:19:요청하신 범위는 구현이 아니라 설계 검토로 진행하겠습니다. 프로젝트 규칙에 따라 저는 성공 기준과 결론 통합만 맡고, 코드 정독·병목 분석·검증 가능성 조사는 서로 분리된 에이전트에게 위임하겠습니다. 핵심 성공 기준은 “현재 실행 순서와 RNG/물리 질의를 건드리지 않는 단계”와 “병렬화 가능한 순수 커널”을 명확히 분리하고, 각 단계마다 기존 테스트와 스냅샷 게이트를 정의하는 것입니다.
+.\codex_design_out2.txt:120:- First determine whether the current folder root is `Assets/_Project` or `Assets/Game`, and follow the existing root and naming.
+.\codex_design_out2.txt:235:- Prefer IDs, coordinates, enums, numbers, and immutable snapshots.
+.\codex_design_out2.txt:255:- If the implementation cannot safely handle subscription or unsubscription during dispatch, copy the subscriber list into a snapshot before publishing.
+.\codex_design_out2.txt:397:  • Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+.\codex_design_out2.txt:399:  • 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+.\codex_design_out2.txt:401:현재 세 갈래로 확인 중입니다: 프레임 오케스트레이션과 Unity API 경계, 코어 버퍼/리졸버의 메모리 접근 및 순서 의존성, 그리고 패키지·asmdef·배치모드 측정 가능성입니다. 설계안에서는 실제 코드에서 확인된 사실과 아직 프로파일러/기기 측정이 필요한 추정을 구분해 쓰겠습니다.
+.\codex_design_out2.txt:445:  → Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+.\codex_design_out2.txt:447:  • 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+.\codex_design_out2.txt:472:첫 조사 결과, 수치 상태는 이미 “관리형 SoA에 가까운 혼합 구조”이고 tick 중 상시 GC는 주병목이 아닙니다. 더 큰 구조적 비용은 800개 기준 매 tick 전원 `CharacterController.Move`, Transform 복원/재읽기, 회전·Animator 갱신, 그리고 매 렌더 프레임 보간 Transform 쓰기입니다. 따라서 권장안은 NativeArray 전환만이 아니라 Unity API 브리지의 횟수와 단계 경계를 보존하면서 수치 커널을 분리하는 방향이 될 가능성이 큽니다.
+.\codex_design_out2.txt:475:  → Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+.\codex_design_out2.txt:477:  • 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+.\codex_design_out2.txt:485:  ✓ Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+.\codex_design_out2.txt:487:  ✓ 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+.\codex_design_out2.txt:507:| DOTS/Entities | 비권장. `CharacterController`, `Human`, Transform, 이벤트를 그대로 job화할 수 없어 사실상 전체 표현 계층 재작성이다. 결정론 위험도 가장 크다. |
+.\codex_design_out2.txt:511:중요한 한계가 있습니다. 수치 커널만 Burst화해도 `CharacterController.Move`와 Transform/Animator 브리지가 현재 비용의 큰 비중이라면 800개 목표를 달성하지 못할 수 있습니다. 그런 경우 다음 단계는 DOTS가 아니라 **시뮬레이션 Transform과 보간용 Visual Transform 분리** 또는 neutral의 충돌 모델 변경인데, 후자는 현재 동작 동일성 제약과 충돌하므로 별도 승인이 필요합니다.
+.\codex_design_out2.txt:521:   CombatResolver, Core asmdef, 관련 EditMode 테스트 및 신규 golden/performance harness
+.\codex_design_out2.txt:544:이 순서는 의미론의 일부입니다. 특히 Rival AI와 follower separation은 이동 전 snapshot을 읽고, Recruit/Combat은 모든 이동이 끝난 뒤 재구축한 최신 snapshot을 읽습니다.
+.\codex_design_out2.txt:559:neutral 800 기준의 대략적인 호출량은 50Hz에서 다음 수준입니다.
+.\codex_design_out2.txt:577:GC 측면에서는 대부분 초기 capacity가 확보돼 있습니다. 다만 `CrowdModel.FollowerCapacity`와 `RivalAiDriver._neutralQuery`가 160이어서 neutral 800에서는 런타임 성장 재할당과 복사가 발생할 수 있습니다.
+.\codex_design_out2.txt:660:메인: job 입력 snapshot 확정
+.\codex_design_out2.txt:693:이 단계는 단일 스레드여도 Burst와 연속 메모리 덕분에 현재 managed/hash-chain 구현보다 빨라질 수 있으며 결정론 위험이 가장 낮습니다.
+.\codex_design_out2.txt:714:Recruit와 Combat contact를 한 번의 pair traversal로 융합하는 최적화는 가능하지만 **첫 구현에서는 제외**해야 합니다. 별도 커널이 완전히 일치하고 프로파일링상 반복 query가 남은 병목일 때만 추가합니다.
+.\codex_design_out2.txt:716:# [결정론 전략]
+.\codex_design_out2.txt:721:- 이동 전 snapshot과 이동 후 snapshot의 사용 경계
+.\codex_design_out2.txt:722:- spawn 위치를 모든 Instantiate 전에 결정하는 순서
+.\codex_design_out2.txt:737:Core Resolver에는 현재 production RNG, Physics, 이벤트가 없습니다. 따라서 snapshot 경계를 유지한 채 Core만 옮기면 RejectionRate와 RNG를 직접 변경하지 않습니다.
+.\codex_design_out2.txt:755:- x64와 Android ARM64 golden을 별도로 보관
+.\codex_design_out2.txt:759:`FloatMode.Deterministic`는 이번 1차 baseline으로 권장하지 않습니다. 기존 managed 결과와 같아지는 옵션이 아니며, 64-bit 플랫폼 제약과 별도 golden 재설정 문제가 있습니다.
+.\codex_design_out2.txt:817:neutralCount: 100, 300, 500, 800, 1200
+.\codex_design_out2.txt:819:seed/input/snapshot: 고정
+.\codex_design_out2.txt:852:| 800 |  |  |  |  |  |  |  |
+.\codex_design_out2.txt:879:현재 데이터만으로 “800이 60fps를 보장한다”는 수치를 산출할 수는 없습니다.
+.\codex_design_out2.txt:883:## 0. Baseline 고정
+.\codex_design_out2.txt:886:- legacy full-state snapshot 생성
+.\codex_design_out2.txt:888:- N=100/300/500/800 baseline 저장
+.\codex_design_out2.txt:892:- CombatResolver 26/26
+.\codex_design_out2.txt:893:- RecruitResolver 6/6
+.\codex_design_out2.txt:896:- 동일 seed의 RejectionRate와 초기 배치 snapshot 동일
+.\codex_design_out2.txt:906:- 전체 snapshot 동일
+.\codex_design_out2.txt:932:- Resolver 32개 테스트 및 golden snapshot 동일
+.\codex_design_out2.txt:942:- Burst off/on byte snapshot 동일
+.\codex_design_out2.txt:943:- Android ARM64 AOT에서 같은 golden 확인
+.\codex_design_out2.txt:975:- collider/grounding/displacement snapshot 동일
+.\codex_design_out2.txt:978:- Android 기기 프로파일에서 실제 이득 확인
+.\codex_design_out2.txt:984:프로파일러로 필요성이 입증된 경우에만:
+.\codex_design_out2.txt:991:각 변경은 독립 golden 게이트를 통과해야 하며 여러 최적화를 한 단계에서 섞지 않습니다.
+.\codex_design_out2.txt:995:- `CharacterController.Move`, Transform, Animator 비중이 크면 Burst 숫자 커널만으로 800 목표를 달성하지 못할 수 있습니다.
+.\codex_design_out2.txt:996:- Unity PhysX 결과는 Editor x64와 Android ARM64 사이의 bitwise cross-platform 결정론을 보장하지 않습니다.
+.\codex_design_out2.txt:1004:- 현재 테스트는 resolver 결과를 잘 검증하지만 RNG 소비, ordered grid query, event sequence, full-state float bits까지 고정하지는 않습니다. 병렬화 전에 golden har…252144 tokens truncated…ea8b0a69c8f83766a5f5347392e23180c0000000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d20140700000000000000000000000000000000000000000000000000000000000000000000000001080d11171c1f22272b2d2f3c4855626f7b88939393867a6d6053473a2e2d2a25211f1b15100b0500000000000000000000000000000000000000000000010e1b2734414e5a6774818d9aa7a89b8f8275675d51453c352f2f2e2b2620180f0600000000000000000000000000000000000004101d2935404b55626e7b88949faba89b8e8175685d525c6674808d9aa7ab9f95887c6f62554b4035291d110400000000000000000000000000000000020f1b2835424e5b6875818e9ba8a99c8f8276695c4f4336291c100300000000000000060b0e10111313131313130f0e0c0904000000000000000000000003070b0d0e13131313131312110f0c0701000000000000000000000004080a0b1313131313131308070502000000000000000000000000000000000000000916222e3a46515b62656c6c6c6c6c6c6c6c6c6c74818d9a93867a6d6c6c6c6c6c6c6c6c6c6c6c6c74818e9a9286796d6c6c6c6c6c6c67645c52473c3024170b000f1c2835414e5a6670767979797979798693a0ada6998c8079797979797979797976695e53463a2d2114070000000000000000000b17222d38414d57606d78839099a3aea2988e81756b61554b40342a27333f49535f6a73808d96a1ada49a9184796d60584e42382d22170b03000000000000000000000000000613202c3945515d6776838f9ca9a096877a6e6154474c566774808d9aa9988b7f72655466737f8c99aa998c7f7266544a4854616e7b8796a0a89c8f8275665c5145382c1f1306000000000000000000000000000000000000020b17212935414c56606b73808d95a0a7a09da0a79d938a7e70685e53493f33271e150b0000000000000000000000000000000000000000000000000000000000000000040e1a26313c45515c67707d89939e999083786d60574d42362a1f160c010000000000000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b00000000030b17222d38424b555d676d78818b9298a0a69f97928880786e69605950483f362d231a0e04000000000000000000000000000000000000000000000000000000000814212e3b4754616e7b8798a3aeaa9d9084776a574d42362a1e12050000000005111d2935414c566a7783909daaafa399877b6e6154483b2e21150800000005111e2a36414c5664707d8a96a1adada1978c7f72695e53493f3628231c140c0a060300000000000306090e1419222b343e45515d67717e8a96a0acab9f94887c6f62544b4034281c100400000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d2014070000000000000000000000000000000000000000000000000000000000000000000000060b13191c23282b2d3337393b3e4855626f7b88959f93867a6d6053473e3b3a36312e2b26201c170e09030000000000000000000000000000000000000000000c1825323f4b5865727e8b98a6ac9f92857a6d60574d45413f3b3a37312a21180e03000000000000000000000000000000000006131f2c3945515d6774808d9aa6aca096897d7063564c54626f7b88959faba79a8d8174675d5145392c20150a00000000000000000000000000000000020e1b2835414e5b6874818e9ba7a89c8f8275695c4f4236291c0f030000000000040b12171b1d1e2020202020201c1b19150f09020000000000000001080e13171a1a2020202020201f1e1b18130c050000000000000000050c11141717202020202020201514120e0903000000000000000000000000000000000006121e29343f4951565860606060606060606064717e8b979a897d70636060606060606060606065717e8b9899897c6f6360606060605a58524a41362b1f1408000d1925323d49545e66696c6c6c6c6d7a8693a0ada6998c80736c6c6c6c6c6c6c6c6c5e574d42362a1e12050000000000000000040f1b27333f49535f69727f8c95a0aba79f92857b6e61594f43392f22222d38414e58606d7984919ea6aca0958c80736a5f544a3f33281f1409000000000000000000000000000714202d3a4753606d7a86929faa9d918477685e52464a5764707d8a99a49b8f8275655c6676828f9ca298897c6f62564946525e697784919eaa9f9285796d6053463a2d2013090000000000000000000000000000000000000a141d29333b45525d68707d87939fa69f959095a0a59e92857a6e655b50443c30271d120700000000000000000000000000000000000000000000000000000000000000000915202834404b55606b75818e97a0958c7f72695e52463e31281d12070000000000000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b000000000006111c262f3a434b555d666d747f8691969ea5a19a938d827b706b615a50483f352b20160c020000000000000000000000000000000000000000000000000000000713202d3a4653606d7986929facab9f928578695e52463a2d201407000000000713202d3946525d687885929eabac9f9286796d6053463a2d2013070000000714202d3946525e6876828f9ca8b2ab9e9185796d60574d41382d2417110a02000000000000000000000002091019222935404b55606c7884919dabb0a69a8e8174665c5145382c1f130600000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d201407000000000000000000000000000000000000000000000000000000000000000000020a11171e24292e34383a3f4446484b4d55626f7b8895a093867a6d60534d4a4846423c3b37322d28221a150e0600000000000000000000000000000000000000000815222f3b4855626e7b88949faba2988b7f72695f57514c4c4847423c332a20150900000000000000000000000000000000000714202d3a4753606d7985929fabab9e9184786c605346535f6a7683909daaab9f92857a6d6053473d32271b0f01000000000000000000000000000000010e1b2834414e5b6774818e9aa7a89b8e8275685b4f4235281c0f0200000000050e161d23272a2b2d2d2d2d2d2d282825201b140c030000000000020b12191f2326272d2d2d2d2d2d2b2b28241e170f060000000000000810171c2123242d2d2d2d2d2d2d22211e1a140e0600000000000000000000000000000000010d18232d373f464a4c535353535353535355626e7b8897998c7f736659535353535353535355626f7b8898988c7f726559535353534e4c4741382f241a0e03000915212c38424c545a5c606060606d7a8693a0ada6998c807366606060606060605f534d453b31251a0e0200000000000000040e1a242b3744505b656e7b86929fa7ab9f958b7f72695e52473e31271d1b262f3c45515d67707d8a949eaaa89f92877c6f665b50443b31251a0e040000000000000000000000000a1724303d4a5763707d8a99a3a79a8e817467564c414754606d7a86939f9e9285796c606d7985929f9f9285796d605346424d576774818e9aa7a298897d706356493d30251a0e020000000000000000000000000000000006111c262f3b45505a606d7a849199a49f9490849096a1a1978f82776c60584e43392e23180e0400000000000000000000000000000000000000000000000000000000000000030c18232e39434f59616d7a85929f9f92867b6e61594f43392f24180b0200000000000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b0000000000000a141d28313a434b545c606d727c848e939fa2a49f9490857d716c625a50473d32281e130800000000000000000000000000000000000000000000000000000006121f2b3844505c667784909daaaea298877b6e6154483b2e21150a000000000714212e3a4754616d7a8797a1adaa9e918477665c5145382c1f13060000000814212e3b4754616e7a87939facafa3998c7f72675d51453b2f261b1206000000000000000000000000000000071018242f3944505b66727e8b99a3aeac9f9285796d6053463a2d20130800000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d2014070000000000000000000000000000000000000000000000000000000000000000040b141b22272f35383f444649505355585a5c626f7b8895a093867a6d605b5a5754534d4947433c39332b261f180f09000000000000000000000000000000000000000814212e3a47535f697683909ca5aa9f92857b6e69605d555855534d453c31261a0e0200000000000000000000000000000006131f2b37434e5865717e8b97a2ada3998c7f72655b50444e5865717e8b98a2aea2988b7e7165584e43372b1e1308000000000000000000000000000000010e1a2734414d5a6774808d9aa7a89b8e8175685b4e4235281b0f02000000040e1720282e3336373939393939393534312c251e150c02000000010b141d242b3033343939393939393837342f2921180f050000000008121a22282d3031393939393939392e2d2b261f180f060000000000000000000000000000000007111b252d343a3e3f4646464646464647535f697885929c8f827569574d4246464646464653606c7985929b8e827568564d424646413f3c362f261d1308000005101b26303a42494e4f535353606d7a8693a0ada6998c807366595353535353534846423b33291f140900000000000000020c16202a36424d57606c77829098a3aea3999083786c60564d42352c1f15141d2935404b55616c75828f98a2aea3999083786c60574d42362a20160c020000000000000000000005121e2a36424d576774808d9aaba8978a7e7164574b3e45525d687783909da297887c6f626f7c8998a29c8f8276665c50443e4b5764717e8a97a8aa9a8d807367574d42362a1e1205000000000000000000000000000000030d17222d38424d57616c75818e96a1a39890827a84919ea59f948b7f726a5f554b40342820160c020000000000000000000000000000000000000000000000000000000000000007121d27303d46525e68717e8b949f988f82756c61554b4035291d140a00000000000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b000000000000020b161f28313a424a515b626a6f7a818b9298a0a69f9792877e716c62594f443a3025190d03000000000000000000000000000000000000000000000000000003101c28343f4a546875818e9ba8b3aa978a7d7064574a3d32271b0d04000001081623303d495663707c8996a9b3a89c8f827569544b4034281c10040000030f1b27333f495364717e8b9aa4afac9f92867a6e61554b4033291d140a000000000000000000000000000000000007121d28333f4a54616d7a86929facaea298897d706356493d2f24190d01000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d20140700000000000000000000000000000000000000000000000000000000000000050d161d262d333a41454a5053535b60626467686a6f7b8895a093867a6d6a686664615e5755534e49443e37312a211a120a01000000000000000000000000000000000006121e2b37424d5763707d89939ea6a29891847b736d676665625f574d42372b1e12060000000000000000000000000000000815212e3b47535f6a7683909da9ac9f92867b6e6153493f4753606d7a85929facaa9d9083776a6054473a2f24190d010000000000000000000000000000010d1a2734404d5a6773808d9aa6a79b8e8174685b4e4135281b0e020000000b16202932393f434446464646464642413d3730271e140900000008121d262f363c3f414646464646464544403a332b21170c01000005101a242c33393c3e464646464646463b3a37312a21180e030000000000000000000000000000000009131b23292e313239393939393937424d576975828f9c928578695f53473a3939393844505b6676838f9c918478695e52463a393433302b241d140b010000000a141e2830383d4143464753606d7a8693aab4a6998d8073665a4d46464646463b3a36312921170d030000000000000008131e28323a46525e69727e8b949faaa89f92877c6f665b50443b30231a0d0b18242f3943505a616e7b86929fa8ab9f958b7f72695e53463e32281e1308000000000000000000000714212d3a46535e697784919eaaa196877b6e6154483b414c566673808d99a9988b7f7266727f8c99aa998c7f7266544a3f3b4754616e7b8796a0aa9d908477695e52463a2d2014060000000000000000000000000000010b151f28333f4a545e69717e8a939ea79f92867b707d89939ea69f92867c6f675c51453d32281e130800000000000000000000000000000000000000000000000000000000000000000b151e2a36414c56606c778390999e938a7d70675d51453c2f261b1106000000000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b00000000000000040d161f2830394044515860676d757e8691969fa7a19992887e716b60564c4135291f15090000000000000000000000000000000000000000000000000000000b17232e3f4b5865727e8b98a8b2a69a8d807367584e43372b1f15100c090e131e2a36414c5666727f8c99a5b3aa998c7f7366594c402e23180c00000005121f2b3744505b6575818e9bacb6a99c8f8276685e5243392f21170b020000000000000000000000000000000000010b17222d3846525d6875828f9ca8b4aa9a8d807367564c4135291d1104000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d201407000000000000000000000000000000000000000000000000000000000000050e171f282f383f444c51545c6063656c6e71747576787c8895a093867978777573716e6967625f58555047423c332c241c130a0000000000000000000000000000000000020e1a26313c4854606b74818e949da5a09691857f7a7673726e695f53473a2e211408000000000000000000000000000004111d2935414c55626f7c88959faba99b8f8275685e52413845515d6774818e9ba7aca095897c6f62564c4135291d11040000000000000000000000000000000d1a2733404d5a6673808d99a6a79a8e8174675b4e4134281b0e01000006121d28323b444b4f515353535353534f4d48423930251b0f0400030e19242f3840474c4d53535353535352504c453d33291e130700000c17222c363e45494a535353535353534846423c332a1f140900000000000000000000000000000000010911181e2225252d2d2d2d2d2631404c5966737f8c9997887b6e6255483b2f2d28333f4a546673808d9996877a6e6154473b2e2726241f1a130b0200000000020c161e262c3235363a4653606d798698a3aea79a8d81746753493f36393a3c3a38342f271f150b01000000000000030d1924303a44505a616e7b85929fa6ada1968d80746a5f544a3f32291f110807121d28313e46535f69737f8c95a0aca79f92867b6e615a50443a3025190d040000000000000000000815212e3b4854616e7b8796a0ab9e918478695e53463a3d4a5663707d8999a39b8e82756675828f9ca298897c6f6256493c3a46525e697784919daaa095877b6e6154483b2e23170c000000000000000000000000000007121d27313944505b666e7b85929fa5a0958c7f726b75818e97a1a3989083796d60594f443a3025190f0600000000000000000000000000000000000000000000000000000000000000030c1925303a44505b656f7c87929f9e9184796d60584e41382d22170b020000000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b0000000000000000040d161e272e343f464e555d606c717c8490959fa7a39a92877d70685e52463c31261a0e0000000000000000000000000000000000000000000000000000000615222f3c4855626f7b8896a0acaa9d9184776a6054473c31271f1c181b1a1e242d3946525e6876838f9ca9aea298897c706356493d302316070000000613202d394653606c7885929eabb3a9988b7f7265564c4131271d0f050000000000000000000000000000000000000006111c2935414c5665727f8b98aab4aa9d918477685d5245392c201306000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d2014070000000000000000000000000000000000000000000000000000000000040e172029313a414950555d60666d7075797b7e8082838486929fac9f9286858382807d7b77736f6a64615a534d453e362d251c120900000000000000000000000000000000000915202c38444f59606d79828e939c9fa097928c8683807f7b6e6255483b2f22150800000000000000000000000000000613202c3945515d6774818e9aa7ada1968a7d7063564d4135404b55636f7c8995a0aca79b8e8174685d5245392c20160a0000000000000000000000000000000d1a2633404d596673808c99a6a79a8d8074675a4d4134271a0e0100000b17232e39444d565b5e6060606060605b59534b42372c2015090007131f2b36404a52585a6060606060605e5c574f453a2f24180c0004111c28333e485055576060606060606055534d453c31261a0e020000000000000000000000000000000000070d12161819202020202023303d4a5663707d8999978b7e7164584b3e2f24222d3d4a5764707d8a97978a7d7064574a3d2e231717140e0801000000000000040c141b2125282c3845515c667986929faca89b8f8275655b5046424547484745403931271d12070000000000010b151f2935414c56616c75828f98a2aea69e9184796d60584e42382d20170d00010c161f2a36424d57606d7984919da5aea2988f82756c61564c4135291f160c010000000000000003101c28343f4a5465727e8b98a8a79b8e817468574d42363a4753606d7a86929f9e9285786c7985929f9f9285796d6053463a36424d566774818e9aa7a7988b7e7165544a3f34281c1003000000000000000000000000050e18242f39434e58606c78829097a2a3999083786d616d7a85929ea6a0958d80736b60564c41352921180c030000000000000000000000000000000000000000000000000000000000000008131e27333f49535f6a73808d96a0968d80736a5f53493f33271e14080000000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b000000000000000000040c151c2328343c434c515a626a6f7a839095a0a9a39992857a6d61574d42372b1b110600000000000000000000000000000000000000000000000000000815212e3a47535f6a7784919eabaca095887c6f62584e4339312c282327262b2f35414c56616d7a86929facab9f9285796d6053463a2d2013070000000815222e3b4855616e7b8897a1adada197887b6e6255483b3022150b0000000000000000000000000000000000000000000d1924303c4855626f7b8898a2aeaca095877a6d6054473a2d211407000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d20140700000000000000000000000000000000000000000000000000000000020b162029323b434b535b60676d73797d8285888b8d8f90919298a3aea3989291908e8d8a8784807c76706c625f5750483f372d241b10060000000000000000000000000000000003101c27333d45515c676d7981898f939aa29f9992908d8b7f7265584c3f3225190c00000000000000000000000000000714212d3a4754606d7a85929facac9e9184796d6053463b303a4854606b7784919dabac9f92867a6d6054473d32271b0f0200000000000000000000000000000c1926333f4c5966727f8c99a5a69a8d8073675a4d4034271a0d0100020e1b27333f4b565f676a6c6c6c6c6c6c68655d53483d3125190c000b1723303c47525c64676c6c6c6c6c6c6b6861574c4034281b0f030814212d3945505a61646c6c6c6c6c6c6c6c5f574d42372b1e12050000000000000000000000000000000000000106090b0c1313131314212d3a4754606d7a86939a8d817467554b403529212e3a4754616d7a8796998d807366544a3f34281c100303000000000000000000020a1015191c2834404b546b7885929eabab9e9184786c6056534d51545553514b43392f23180c000000000007121d27313945525d68717e8a939eaaaa9e948a7d70675d51463c2f261c0e050000040d1a26313b45515c66707d89939ea9aa9e948a7e71685e52463d31281d12070000000000000006121f2c3844505c6675828f9ba8a9988b7e7165584b3e313945515d677683909ca197887b6f7b8897a29c8f8276665c504438303e4b5764717e8a97a8a89b8e8275665c5044382c1f12060000000000000000000000020c17202935404b555f6a727f8c949fa89f92877c6f665e68717e8a949ea79f93887d70685e52463f332a1e150a00000000000000000000000000000000000000000000000000000000000000020b17222d38414e58606d7984919e9f92877c6f655b50443b3025190c0300000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b00000000000000000000030b1218222b313a414550585f686d79839097a1aba1978e8174695f5347382d22170b000000000000000000000000000000000000000000000000000006121f2b37434e586673808d99a3afa89b8e81756a5f554b433c38342e3431373a4145525d68737f8c99a3afa79b8e8175675c5145382c1f13060000000a1724303d4a5763707d8a96a9b3ab9e928578695f53473a2e2114030000000000000000000000000000000000000000000813202d394653606c7985929facb1a795897c6f6256493c2f231609000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d201407000000000000000000000000000000000000000000000000000000000a141d28323b444d555d656c717a80858a8e9297979a9b9d9e9fa3aab4aaa39f9e9d9b999796918d88837d766e69615a51493f362d22180b02000000000000000000000000000000000b16212834404b555d676d747d82889297a2a39f9c988b7f7265584c3f3225190c0000000000000000000000000007131f2c38434f5965727e8b98a2aea49a8d8073665c5044382c38434f5965727f8c99a3aea2988b7f7265594f44382c1e130800000000000000000000000000000c1926323f4c5965727f8c98a5a6998d8073665a4d4033271a0d000004101d2a36434f5b677177797979797979756f65594d4134281b0e020d1a26333f4c58646e747979797979797873685c5044372b1e11050a1723303c4955616c717979797979797976695f53463a2d21140700000000000000000000000000000000000000000000000606060613202c3945515d677784909d908377675d5145382c202d3946525e687884919c908376665c5044382c1f120600000000000000000000000005090c18232e43505d6a7683909da9ada196897d7068615f575d6062605c554b4034291c1004000000030c18242f39434f59606d7a85919ea6aea2988f82756c61554b40342a1d140a0000000009141f2834404b54606b75818e97a2ada69e92857a6d61594f43392f24180c030000000000000713202d3a4653606d7985929faba197887b6e6155483b2e35404b556673808c99a9978b7e717e8b97a9998c7f7266544a3f342e3b4754616e7a8795a0ab9f9285796d6053463a2d201308000000000000000000000008131e29323a45515d676f7c87929fa6a0968d80736a5f56616c75828f98a2a49a91857a6d615a50453c30261c11060000000000000000000000000000000000000000000000000000000000000006111b262f3c45515d67707d8a939e999083776c60564c41362a1e150b00000000000000000000000b1825323e4b5865717e8b98a4a69a8d8073675a5a6773808d9aa6a4988b7e7165584b3e3225180b0000000000000000000000000710191f282f353f464e565d676e7a85929ea6a99f93877b6e6253493f33271b0f0300000000000000000000000000000000000000000000000000030f1a26313c4854616e7b87929faaac9f92877c6f675d554e46454041414142474c515b606d7a85929eabaca095897d7063554b4034281c10040000000c1926323f4c5965727f8c98a5b2a99c8f837669574d42372b1e120600000000000000000000000000000000000000000006121f2b3844505b667783909daab1a4978b7e7164584b3e3125180b000000000000000000000000000000000000000000000006121f2c3945525f6c7885929fabada093867a6d6053473a2d20140700000000000000000000000000000000000000000000000000000006111b262f3a444d565e676d777e858d91979b9ea2a9a7a8a5a4a4a6acb3aba5a3a4a5a7a6a8a09d9a95908a827b716c635b51483f342a1d140a0000000000000000000000000000000006111c262f3b444d575e666d72797e85929faba8a5988b7f7265584c3f3225190c000000000000000000000000000a15222f3b4854606b7783909daaac9f93877b6e61544a3f3428323d4754616d7a86929facaa9d9184776b6054483a3025190d00000000000000000000000000000c1925323f4c5865727f8b98a5a6998c807366594d4033261a0d000004111e2b3744515e6a77848686868686868175685b4f4235281c0f020e1a2734414d5a67748086868686868685786b5e5245382b1f12050b1724313e4a5764717e868686868686867b6e6155483b2e221508000000000000000000000000000000000000000000000000000004111d2935414c556774818e9a92867a6d6053473a2d202a36414c566875818e9b9285796d6053463a2d2013070000000000000000000000000000071a2734414d5a6774808d9aa9b2a89d91837a726e696c676d6f6d675c5145382c1f13060000000b151e2935404b55606b74818e97a1ada79f92867b6e615a50433a2f22190b0200000000030c18232e39424f59616e7a85929fa7ada1978e81746b60554b4035291e150a000000000000091623303c4956636f7c8997a2ab9e918578695f53463a2d2f3c4956636f7c8998a29a8e8174818d9aa298897c6f6256493c2e2d3946525e687784919daaa297897c6f6356493c3025190d01000000000000000000060f1925303a444f59606d79839199a3a49a9184796d6058505a616e7b86929fa7a1978f81756c62574d42382e23170d04000000000000000000000000000000000000000000000000000000000000000a141d2935404b55616b75818e989f958b7e72685e52463d30271d12070
+collab: Wait
+2026-07-15T23:37:51.710524Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.7 seconds
+Output:
+### 1-95
+    1: using System;
+    2: using System.Collections.Generic;
+    3: using System.IO;
+    4: using System.Linq;
+    5: using UnityEditor;
+    6: using UnityEditor.Rendering.Universal.ShaderGUI;
+    7: using UnityEngine;
+    8: using UnityEngine.Rendering;
+    9: 
+   10: /// <summary>
+   11: /// 현재 City.fbx의 결합 Buildings mesh를 37개 논리 건물 asset/prefab으로 결정적으로 분리한다.
+   12: /// 런타임에는 포함되지 않으며 원본 FBX는 읽기만 한다.
+   13: /// </summary>
+   14: internal static class CityBuildingsGenerator
+   15: {
+   16:     internal const string SourceFbxPath = "Assets/@Project/City/Externals/City.fbx";
+   17:     internal const string BuildingsName = "Buildings";
+   18:     internal const string GeneratedRootFolder = "Assets/@Project/City/Generated";
+   19:     internal const string GeneratedMeshFolder = GeneratedRootFolder + "/BuildingMeshes";
+   20:     internal const string GeneratedPrefabFolder = "Assets/@Project/City/Prefabs/GeneratedBuildings";
+   21:     internal const string OccludedMaterialPath = "Assets/@Project/City/Materials/City_Occluded.mat";
+   22:     internal const int ExpectedBuildingCount = 37;
+   23:     internal const int ExpectedSourceVertexCount = 12240;
+   24:     internal const int ExpectedSourceTriangleCount = 6120;
+   25:     internal const int ExpectedConnectedComponentCount = 2420;
+   26: 
+   27:     private const string BuildingAssetPrefix = "Building_";
+   28:     private const float GeometryEpsilon = 0.0001f;
+   29:     private const float MaxAssignmentGap = 0.05f;
+   30:     private const float MinAssignmentMargin = 0.05f;
+   31:     private const float OccludedAlpha = 0.25f;
+   32: 
+   33:     internal sealed class GenerationPlan
+   34:     {
+   35:         internal Mesh SourceMesh;
+   36:         internal MeshRenderer SourceRenderer;
+   37:         internal Material SourceMaterial;
+   38:         internal BuildingGroup[] Groups;
+   39:         internal int ConnectedComponentCount;
+   40:         internal int SourceVertexCount;
+   41:         internal int SourceTriangleCount;
+   42:     }
+   43: 
+   44:     internal sealed class BuildingGroup
+   45:     {
+   46:         internal int Index;
+   47:         internal Vector3 SeedCenter;
+   48:         internal Vector3[] Vertices;
+   49:         internal Vector3[] Normals;
+   50:         internal Vector4[] Tangents;
+   51:         internal Vector2[] Uvs;
+   52:         internal int[] Triangles;
+   53:         internal Bounds Bounds;
+   54:     }
+   55: 
+   56:     internal sealed class GeneratedAssets
+   57:     {
+   58:         internal Material OccludedMaterial;
+   59:         internal Mesh[] Meshes;
+   60:         internal GameObject[] Prefabs;
+   61:     }
+   62: 
+   63:     internal sealed class ScenePlan
+   64:     {
+   65:         internal Transform Buildings;
+   66:         internal bool HasGeneratedChildren;
+   67:         internal bool HasCombinedComponents;
+   68:     }
+   69: 
+   70:     internal sealed class GeneratedAssetsTransaction : IDisposable
+   71:     {
+   72:         private AssetFileSnapshot _snapshot;
+   73:         private bool _completed;
+   74: 
+   75:         internal GeneratedAssetsTransaction(GeneratedAssets assets, AssetFileSnapshot snapshot)
+   76:         {
+   77:             Assets = assets;
+   78:             _snapshot = snapshot;
+   79:         }
+   80: 
+   81:         internal GeneratedAssets Assets { get; }
+   82: 
+   83:         internal void Commit()
+   84:         {
+   85:             _completed = true;
+   86:             _snapshot = null;
+   87:         }
+   88: 
+   89:         public void Dispose()
+   90:         {
+   91:             if (_completed || _snapshot == null)
+   92:             {
+   93:                 return;
+   94:             }
+   95: 
+### 430-485
+  430: 
+  431:         ValidateSourceSignature(plan.SourceMesh, plan.SourceRenderer);
+  432:         ValidateOccludedMaterialSource(plan.SourceMaterial);
+  433:         ValidateGenerationPlan(plan);
+  434:         ValidateOutputDestinations();
+  435:         ValidateDesiredOutputsCanBeBuilt(plan);
+  436:     }
+  437: 
+  438:     /// <summary>
+  439:     /// 현재 City/Buildings가 원본 결합 상태이거나 정확한 generator prefab instance 상태인지 검사한다.
+  440:     /// 이름만 같은 foreign/duplicate/override 자식은 쓰기 전에 실패한다.
+  441:     /// </summary>
+  442:     internal static ScenePlan CreateValidatedScenePlan(Transform city)
+  443:     {
+  444:         if (city == null)
+  445:         {
+  446:             throw new ArgumentNullException(nameof(city));
+  447:         }
+  448: 
+  449:         Transform buildings = city.Find(BuildingsName);
+  450:         if (buildings == null)
+  451:         {
+  452:             throw new InvalidOperationException($"[CityBuildingsGenerator] scene City/{BuildingsName}을 찾지 못했습니다.");
+  453:         }
+  454: 
+  455:         ValidateBuildingsRootComponents(buildings);
+  456: 
+  457:         bool hasCombinedComponents =
+  458:             buildings.GetComponent<MeshRenderer>() != null ||
+  459:             buildings.GetComponent<MeshFilter>() != null ||
+  460:             buildings.GetComponent<MeshCollider>() != null;
+  461: 
+  462:         if (buildings.childCount == 0)
+  463:         {
+  464:             ValidateCombinedSourceIdentity(buildings);
+  465: 
+  466:             return new ScenePlan
+  467:             {
+  468:                 Buildings = buildings,
+  469:                 HasGeneratedChildren = false,
+  470:                 HasCombinedComponents = true,
+  471:             };
+  472:         }
+  473: 
+  474:         ValidateGeneratedSceneChildren(buildings, null);
+  475:         return new ScenePlan
+  476:         {
+  477:             Buildings = buildings,
+  478:             HasGeneratedChildren = true,
+  479:             HasCombinedComponents = hasCombinedComponents,
+  480:         };
+  481:     }
+  482: 
+  483:     /// <summary>
+  484:     /// 생성 asset과 scene hierarchy가 현재 source plan에 완전히 수렴했는지 읽기 전용으로 검사한다.
+  485:     /// </summary>
+### 620-720
+  620:         }
+  621:     }
+  622: 
+  623:     internal static bool ConvergeScene(
+  624:         ScenePlan scenePlan, GeneratedAssets assets, List<string> changed, List<string> unchanged)
+  625:     {
+  626:         if (scenePlan == null || scenePlan.Buildings == null)
+  627:         {
+  628:             throw new ArgumentNullException(nameof(scenePlan));
+  629:         }
+  630: 
+  631:         if (assets == null || assets.Prefabs == null || assets.Prefabs.Length != ExpectedBuildingCount)
+  632:         {
+  633:             throw new InvalidOperationException("[CityBuildingsGenerator] 생성 prefab 37종이 준비되지 않았습니다.");
+  634:         }
+  635: 
+  636:         Transform buildings = scenePlan.Buildings;
+  637:         ValidateScenePlanStillMatches(scenePlan, assets.Prefabs);
+  638: 
+  639:         bool changedHere = false;
+  640:         GameObject preparedRoot = null;
+  641:         if (!scenePlan.HasGeneratedChildren)
+  642:         {
+  643:             preparedRoot = BuildPreparedHierarchy(assets.Prefabs);
+  644:         }
+  645: 
+  646:         try
+  647:         {
+  648:             MeshRenderer combinedRenderer = buildings.GetComponent<MeshRenderer>();
+  649:             MeshFilter combinedFilter = buildings.GetComponent<MeshFilter>();
+  650:             MeshCollider combinedCollider = buildings.GetComponent<MeshCollider>();
+  651:             if (combinedRenderer != null)
+  652:             {
+  653:                 Undo.DestroyObjectImmediate(combinedRenderer);
+  654:                 changedHere = true;
+  655:             }
+  656: 
+  657:             if (combinedFilter != null)
+  658:             {
+  659:                 Undo.DestroyObjectImmediate(combinedFilter);
+  660:                 changedHere = true;
+  661:             }
+  662: 
+  663:             if (combinedCollider != null)
+  664:             {
+  665:                 Undo.DestroyObjectImmediate(combinedCollider);
+  666:                 changedHere = true;
+  667:             }
+  668: 
+  669:             if (preparedRoot != null)
+  670:             {
+  671:                 for (int i = 0; i < assets.Prefabs.Length; i++)
+  672:                 {
+  673:                     Transform child = preparedRoot.transform.GetChild(0);
+  674:                     Undo.RegisterCreatedObjectUndo(child.gameObject, "Create generated city building");
+  675:                     Undo.SetTransformParent(child, buildings, "Place generated city building");
+  676:                     child.SetSiblingIndex(i);
+  677:                 }
+  678: 
+  679:                 changedHere = true;
+  680:             }
+  681:         }
+  682:         finally
+  683:         {
+  684:             if (preparedRoot != null)
+  685:             {
+  686:                 UnityEngine.Object.DestroyImmediate(preparedRoot);
+  687:             }
+  688:         }
+  689: 
+  690:         ValidateGeneratedSceneChildren(buildings, assets.Prefabs);
+  691: 
+  692:         if (changedHere)
+  693:         {
+  694:             changed.Add("씬: City/Buildings 결합 renderer/collider -> 개별 건물 37개");
+  695:         }
+  696:         else
+  697:         {
+  698:             unchanged.Add("씬: City/Buildings 개별 건물 37개");
+  699:         }
+  700: 
+  701:         return changedHere;
+  702:     }
+  703: 
+  704:     internal static string GetBuildingAssetName(int index)
+  705:     {
+  706:         return BuildingAssetPrefix + index.ToString("D2");
+  707:     }
+  708: 
+  709:     internal static string GetMeshAssetPath(int index)
+  710:     {
+  711:         return GeneratedMeshFolder + "/" + GetBuildingAssetName(index) + ".asset";
+  712:     }
+  713: 
+  714:     internal static string GetPrefabAssetPath(int index)
+  715:     {
+  716:         return GeneratedPrefabFolder + "/" + GetBuildingAssetName(index) + ".prefab";
+  717:     }
+  718: 
+  719:     private static void ValidateSourceSignature(Mesh mesh, MeshRenderer renderer)
+  720:     {
+### 1050-1160
+ 1050:                          PrefabUtility.GetPrefabInstanceStatus(child.gameObject) == PrefabInstanceStatus.Connected &&
+ 1051:                          !PrefabUtility.HasPrefabInstanceAnyOverrides(child.gameObject, false) &&
+ 1052:                          child.localPosition == Vector3.zero &&
+ 1053:                          child.localRotation == Quaternion.identity &&
+ 1054:                          child.localScale == Vector3.one &&
+ 1055:                          instances.Add(child.gameObject);
+ 1056:             if (!valid)
+ 1057:             {
+ 1058:                 throw new InvalidOperationException(
+ 1059:                     $"[CityBuildingsGenerator] City/Buildings 자식 {i}('{child.name}')이 " +
+ 1060:                     $"정확한 generator prefab instance({expectedPath})가 아니거나 override/duplicate 상태입니다. 삭제하지 않고 중단합니다.");
+ 1061:             }
+ 1062:         }
+ 1063:     }
+ 1064: 
+ 1065:     private static void ValidateScenePlanStillMatches(ScenePlan scenePlan, GameObject[] prefabs)
+ 1066:     {
+ 1067:         Transform buildings = scenePlan.Buildings;
+ 1068:         ValidateBuildingsRootComponents(buildings);
+ 1069:         if (scenePlan.HasGeneratedChildren)
+ 1070:         {
+ 1071:             ValidateGeneratedSceneChildren(buildings, prefabs);
+ 1072:             return;
+ 1073:         }
+ 1074: 
+ 1075:         if (buildings.childCount != 0 || buildings.GetComponent<MeshFilter>() == null ||
+ 1076:             buildings.GetComponent<MeshFilter>().sharedMesh == null || buildings.GetComponent<MeshRenderer>() == null)
+ 1077:         {
+ 1078:             throw new InvalidOperationException(
+ 1079:                 "[CityBuildingsGenerator] preflight 이후 City/Buildings 결합 hierarchy가 변경됐습니다.");
+ 1080:         }
+ 1081:     }
+ 1082: 
+ 1083:     private static GameObject BuildPreparedHierarchy(GameObject[] prefabs)
+ 1084:     {
+ 1085:         GameObject preparedRoot = new GameObject("__CityBuildings_Prepared");
+ 1086:         preparedRoot.hideFlags = HideFlags.HideAndDontSave;
+ 1087:         try
+ 1088:         {
+ 1089:             for (int i = 0; i < prefabs.Length; i++)
+ 1090:             {
+ 1091:                 GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(prefabs[i], preparedRoot.transform);
+ 1092:                 if (instance == null)
+ 1093:                 {
+ 1094:                     throw new InvalidOperationException(
+ 1095:                         $"[CityBuildingsGenerator] 임시 hierarchy에 prefab을 배치하지 못했습니다: {GetPrefabAssetPath(i)}");
+ 1096:                 }
+ 1097: 
+ 1098:                 instance.name = GetBuildingAssetName(i);
+ 1099:                 instance.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
+ 1100:                 instance.transform.localScale = Vector3.one;
+ 1101:                 instance.transform.SetSiblingIndex(i);
+ 1102:             }
+ 1103: 
+ 1104:             ValidateGeneratedSceneChildren(preparedRoot.transform, prefabs);
+ 1105:             return preparedRoot;
+ 1106:         }
+ 1107:         catch
+ 1108:         {
+ 1109:             UnityEngine.Object.DestroyImmediate(preparedRoot);
+ 1110:             throw;
+ 1111:         }
+ 1112:     }
+ 1113: 
+ 1114:     private static void ValidateSeedSeparation(List<ComponentData> seeds)
+ 1115:     {
+ 1116:         for (int i = 0; i < seeds.Count; i++)
+ 1117:         {
+ 1118:             for (int j = i + 1; j < seeds.Count; j++)
+ 1119:             {
+ 1120:                 float gap = FootprintGap(seeds[i].Bounds, seeds[j].Bounds);
+ 1121:                 if (gap <= MaxAssignmentGap)
+ 1122:                 {
+ 1123:                     throw new InvalidOperationException(
+ 1124:                         $"[CityBuildingsGenerator] 건물 seed {i}/{j} footprint가 너무 가깝습니다: {gap:F4}m");
+ 1125:                 }
+ 1126:             }
+ 1127:         }
+ 1128:     }
+ 1129: 
+ 1130:     private static void AssignComponents(
+ 1131:         IEnumerable<ComponentData> components, List<ComponentData> seeds)
+ 1132:     {
+ 1133:         foreach (ComponentData component in components)
+ 1134:         {
+ 1135:             int bestIndex = -1;
+ 1136:             float bestGap = float.PositiveInfinity;
+ 1137:             float secondGap = float.PositiveInfinity;
+ 1138:             int overlappingSeeds = 0;
+ 1139: 
+ 1140:             for (int i = 0; i < seeds.Count; i++)
+ 1141:             {
+ 1142:                 float gap = FootprintGap(component.Bounds, seeds[i].Bounds);
+ 1143:                 if (gap <= GeometryEpsilon)
+ 1144:                 {
+ 1145:                     overlappingSeeds++;
+ 1146:                 }
+ 1147: 
+ 1148:                 if (gap < bestGap)
+ 1149:                 {
+ 1150:                     secondGap = bestGap;
+ 1151:                     bestGap = gap;
+ 1152:                     bestIndex = i;
+ 1153:                 }
+ 1154:                 else if (gap < secondGap)
+ 1155:                 {
+ 1156:                     secondGap = gap;
+ 1157:                 }
+ 1158:             }
+ 1159: 
+ 1160:             if (bestIndex < 0 || bestGap > MaxAssignmentGap)
+### 1360-1460
+ 1360:         ValidateOccludedMaterialSource(source);
+ 1361: 
+ 1362:         Material desired = new Material(source) { name = "City_Occluded" };
+ 1363:         Color baseColor = desired.GetColor("_BaseColor");
+ 1364:         baseColor.a = OccludedAlpha;
+ 1365:         desired.SetColor("_BaseColor", baseColor);
+ 1366:         desired.SetFloat("_Surface", (float)BaseShaderGUI.SurfaceType.Transparent);
+ 1367:         desired.SetFloat("_Blend", (float)BaseShaderGUI.BlendMode.Alpha);
+ 1368:         BaseShaderGUI.SetMaterialKeywords(desired, LitGUI.SetMaterialKeywords);
+ 1369:         return desired;
+ 1370:     }
+ 1371: 
+ 1372:     private static Material ConvergeOccludedMaterial(Material desired, out bool changed)
+ 1373:     {
+ 1374:         Material material = AssetDatabase.LoadAssetAtPath<Material>(OccludedMaterialPath);
+ 1375:         if (material == null)
+ 1376:         {
+ 1377:             material = new Material(desired) { name = "City_Occluded" };
+ 1378:             AssetDatabase.CreateAsset(material, OccludedMaterialPath);
+ 1379:             changed = true;
+ 1380:             return material;
+ 1381:         }
+ 1382: 
+ 1383:         if (MaterialMatches(material, desired))
+ 1384:         {
+ 1385:             changed = false;
+ 1386:             return material;
+ 1387:         }
+ 1388: 
+ 1389:         EditorUtility.CopySerialized(desired, material);
+ 1390:         material.name = "City_Occluded";
+ 1391:         EditorUtility.SetDirty(material);
+ 1392:         changed = true;
+ 1393:         return material;
+ 1394:     }
+ 1395: 
+ 1396:     private static bool MaterialMatches(Material actual, Material desired)
+ 1397:     {
+ 1398:         return actual != null && desired != null && actual.shader == desired.shader &&
+ 1399:                EditorJsonUtility.ToJson(actual) == EditorJsonUtility.ToJson(desired);
+ 1400:     }
+ 1401: 
+ 1402:     private static GameObject ConvergeBuildingPrefab(
+ 1403:         int index, Mesh mesh, GenerationPlan plan, out bool changed)
+ 1404:     {
+ 1405:         string path = GetPrefabAssetPath(index);
+ 1406:         GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+ 1407:         if (prefab != null && PrefabMatches(prefab, index, mesh, plan))
+ 1408:         {
+ 1409:             changed = false;
+ 1410:             return prefab;
+ 1411:         }
+ 1412: 
+ 1413:         if (prefab == null)
+ 1414:         {
+ 1415:             GameObject temporary = new GameObject(GetBuildingAssetName(index));
+ 1416:             try
+ 1417:             {
+ 1418:                 ConvergePrefabRoot(temporary, mesh, plan);
+ 1419:                 prefab = PrefabUtility.SaveAsPrefabAsset(temporary, path);
+ 1420:             }
+ 1421:             finally
+ 1422:             {
+ 1423:                 UnityEngine.Object.DestroyImmediate(temporary);
+ 1424:             }
+ 1425:         }
+ 1426:         else
+ 1427:         {
+ 1428:             GameObject contents = PrefabUtility.LoadPrefabContents(path);
+ 1429:             try
+ 1430:             {
+ 1431:                 ConvergePrefabRoot(contents, mesh, plan);
+ 1432:                 prefab = PrefabUtility.SaveAsPrefabAsset(contents, path);
+ 1433:             }
+ 1434:             finally
+ 1435:             {
+ 1436:                 PrefabUtility.UnloadPrefabContents(contents);
+ 1437:             }
+ 1438:         }
+ 1439: 
+ 1440:         if (prefab == null)
+ 1441:         {
+ 1442:             throw new InvalidOperationException($"[CityBuildingsGenerator] prefab 저장 실패: {path}");
+ 1443:         }
+ 1444: 
+ 1445:         changed = true;
+ 1446:         return prefab;
+ 1447:     }
+ 1448: 
+ 1449:     private static void ConvergePrefabRoot(GameObject root, Mesh mesh, GenerationPlan plan)
+ 1450:     {
+ 1451:         root.name = mesh.name;
+ 1452:         root.layer = 0;
+ 1453:         root.tag = "Untagged";
+ 1454:         root.SetActive(true);
+ 1455:         root.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
+ 1456:         root.transform.localScale = Vector3.one;
+ 1457: 
+ 1458:         for (int i = root.transform.childCount - 1; i >= 0; i--)
+ 1459:         {
+ 1460:             UnityEngine.Object.DestroyImmediate(root.transform.GetChild(i).gameObject);
+### scene/prefab files
+
+codex
+설계의 완료 기준을 한 단계 더 엄격히 잡고 있습니다. “결정적”은 같은 빌드·같은 입력에서의 재현만이 아니라, PhysX 조회 제거, 정적 데이터의 고정 순회, 고정 반복 횟수, RNG 호출·이벤트 발행 순서 불변까지 포함해 정의하겠습니다. 다만 Burst 부동소수점은 CPU 아키텍처 간 비트 단위 동일성을 자동 보장하지 않으므로, 그 범위와 필요 시 양자화 옵션을 분리해 명시하겠습니다.
+collab: Wait
+2026-07-15T23:38:28.405694Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 1.3 seconds
+Output:
+
+collab: Wait
+2026-07-15T23:39:02.278067Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.7 seconds
+Output:
+1090:      objectReference: {fileID: 0}
+1091:    m_RemovedComponents: []
+1092:    m_RemovedGameObjects: []
+1093:    m_AddedGameObjects: []
+1094:    m_AddedComponents: []
+1095:  m_SourcePrefab: {fileID: 100100000, guid: 1ecf640a22a2c4ef28715d54315f1413, type: 3}
+1096:--- !u!4 &607582884 stripped
+1097:Transform:
+1098:  m_CorrespondingSourceObject: {fileID: 3127256733452751130, guid: 1ecf640a22a2c4ef28715d54315f1413, type: 3}
+1099:  m_PrefabInstance: {fileID: 607582883}
+1100:  m_PrefabAsset: {fileID: 0}
+1101:--- !u!1 &620548534
+1102:GameObject:
+1103:  m_ObjectHideFlags: 0
+1104:  m_CorrespondingSourceObject: {fileID: 0}
+1105:  m_PrefabInstance: {fileID: 0}
+1106:  m_PrefabAsset: {fileID: 0}
+1107:  serializedVersion: 6
+1108:  m_Component:
+1109:  - component: {fileID: 620548536}
+1110:  - component: {fileID: 620548535}
+1111:  m_Layer: 0
+1112:  m_Name: GameSceneController
+1113:  m_TagString: Untagged
+1114:  m_Icon: {fileID: 0}
+1115:  m_NavMeshLayer: 0
+1116:  m_StaticEditorFlags: 0
+1117:  m_IsActive: 1
+1118:--- !u!114 &620548535
+1119:MonoBehaviour:
+1120:  m_ObjectHideFlags: 0
+1121:  m_CorrespondingSourceObject: {fileID: 0}
+1122:  m_PrefabInstance: {fileID: 0}
+1123:  m_PrefabAsset: {fileID: 0}
+1124:  m_GameObject: {fileID: 620548534}
+1125:  m_Enabled: 1
+1126:  m_EditorHideFlags: 0
+1127:  m_Script: {fileID: 11500000, guid: d4cee896f44a31640a025c2304fa55ad, type: 3}
+1128:  m_Name: 
+1129:  m_EditorClassIdentifier: Assembly-CSharp::GameSceneController
+1130:  config: {fileID: 11400000, guid: 3296273a037a6ac40acbf97bb2a03604, type: 2}
+1131:  crowdCountTextStyle: {fileID: 11400000, guid: 90df816b6c57d496fba85dd6d4794ac5, type: 2}
+1132:  humanPrefab: {fileID: 4557897642118330164, guid: 303a7c17cbf54bd4aa58b274fa7e7b66, type: 3}
+1133:  mainCamera: {fileID: 330585545}
+1134:  cityRoot: {fileID: 5165518116837827667}
+1135:  buildingOccludedMaterial: {fileID: 2100000, guid: 21496d1451f02494fbc5a80335defd5a, type: 2}
+1136:--- !u!4 &620548536
+1137:Transform:
+1138:  m_ObjectHideFlags: 0
+1139:  m_CorrespondingSourceObject: {fileID: 0}
+1140:  m_PrefabInstance: {fileID: 0}
+1141:  m_PrefabAsset: {fileID: 0}
+1142:  m_GameObject: {fileID: 620548534}
+1143:  serializedVersion: 2
+1144:  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+1145:  m_LocalPosition: {x: 0, y: 0, z: 0}
+1146:  m_LocalScale: {x: 1, y: 1, z: 1}
+1147:  m_ConstrainProportionsScale: 0
+1148:  m_Children: []
+1149:  m_Father: {fileID: 0}
+1150:  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+1151:--- !u!1001 &658425572
+1152:PrefabInstance:
+1153:  m_ObjectHideFlags: 0
+1154:  serializedVersion: 2
+1155:  m_Modification:
+1156:    serializedVersion: 3
+1157:    m_TransformParent: {fileID: 3633362016603616036}
+1158:    m_Modifications:
+1159:    - target: {fileID: 5003218935608467879, guid: 2f0ea41fedf6f43f1851af0809815cb5, type: 3}
+1160:      propertyPath: m_LocalPosition.x
+
+collab: Wait
+codex
+프로젝트 조사에서 중요한 추가 사실이 확인됐습니다. `CharacterController.Move`만 없애도 주 병목은 제거되지만, 중립/AI의 Raycast와 스폰 CheckSphere가 남아 있으면 “커널 이동 충돌 경로에서 PhysX 완전 제거”라고 부를 수 없습니다. 따라서 1차 성능 교체와 2차 결정론 완성의 경계를 분명히 하고, 가능하면 동일 SDF 질의로 이 두 경로까지 치환하는 조건을 단계 게이트에 포함하겠습니다.
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+codex
+현재 확인된 구현 근거상, 기존 골든 `26/26 + 6/6`은 충돌 교체의 충분조건이 아니라 회귀 안전망입니다. resolver는 그대로 보존하되, 새로 다음 transcript가 필요합니다: tick별 RNG 소비량, neutral 후보 선택 인덱스, rival 좌/우 동률 분기, recruit/combat commit 순서, 이벤트 payload 순서. 전체 위치 스냅샷은 승인하신 대로 새 baseline으로 재정의하되, 이 순서 transcript는 기존과 동일해야 한다는 게 설계 게이트의 핵심입니다.
+collab: Wait
+collab: Wait
+codex
+결론부터 말하면, **5cm·1mm 양자화 2D SDF + 고정 순서 DDA sweep + 최대 3-contact 슬라이딩**을 권장합니다. 셀 점유는 벽 슬라이딩 품질이 부족하고, batch CapsuleCast는 병목과 PhysX 비결정성을 남깁니다.
+
+현재 브랜치는 `Refactor_PrefabTreeStruct_260715`, HEAD `89c5d19`이며, 아래 설계는 현재 미커밋 작업트리까지 조사한 결과입니다.
+
+설계 결정 로그:
+
+```text
+1. Target feature owner: CrowdRoot / Crowd collision solver
+2. New file location:
+   - Assets/@Project/Crowd/Collision/Runtime
+   - Assets/@Project/City/Editor (SDF baker/validator)
+3. State location:
+   - 원본 충돌 데이터: ScriptableObject 또는 binary asset
+   - 런타임 상태: CrowdRoot 소유 Persistent NativeArray
+4. Communication method:
+   - CrowdRoot → collision solver 직접 호출
+   - EventBus/QueryBus 신규 도입 없음
+5. Affected files:
+   - CrowdRoot.cs, RivalAiDriver.cs
+   - collision runtime/baker/asset 신규 파일
+   - manifest.json, Crowd runtime asmdef
+   - Human prefab/GameplayRoot는 가능하면 수정하지 않음
+```
+
+## 권장 벽충돌 표현+근거
+
+**정적 도시 장애물의 2D signed-distance field를 권장합니다.**
+
+기본 사양:
+
+- 셀 크기: `0.05m`.
+- 각 grid vertex에 장애물 경계까지 signed distance 저장.
+  - 외부 양수, 내부 음수.
+  - `short`, 1단위=`1mm`, 범위 `±32.767m`.
+- 런타임 보간: 4개 vertex의 bilinear interpolation.
+- 좌표계: City-local 또는 고정 world XZ. 런타임 transform 변화 금지.
+- 범위: `ComputeWalkableRegion` 영역 + 최대 캐릭터 반경 + `2h` padding.
+- 베이크 대상: 현재 CC가 보는 40개 non-convex MeshCollider.
+  - generated building 37개.
+  - Parks, Vehicles, StreetProps 각 1개.
+- Y는 CC가 실제 차지하는 높이 구간과 교차하는 mesh를 XZ footprint로 투영합니다. 지면은 collider가 없고 `groundY`로 고정되므로 SDF 대상이 아닙니다.
+
+5cm bilinear SDF가 실제 거리보다 과대평가해 tunneling을 만들지 않도록, 양의 거리에 다음 보수 오차를 미리 뺍니다.
+
+```text
+bias = h / sqrt(2) + 1mm
+     ≈ 36.4mm
+```
+
+따라서 벽을 뚫는 방향이 아니라 CC보다 최대 약 3.6cm 일찍 막히는 방향으로 오차가 납니다. 벽근처 품질 게이트가 미달이면 1차 조정은 `2.5cm` grid입니다. 이때 보수 오차는 약 `1.87cm`, 메모리는 4배입니다.
+
+메모리는 다음과 같습니다.
+
+```text
+(width / 0.05 + 1) × (depth / 0.05 + 1) × 2 bytes
+```
+
+예를 들어 100×100m는 약 8MiB, 200×200m는 약 32MiB입니다. 실제 도시 bounds로 베이크 후 확정해야 합니다.
+
+대안은 다음 이유로 제외합니다.
+
+- 셀 점유:
+  - 싸지만 법선이 grid 축에 붙습니다.
+  - 대각벽·코너에서 계단식 슬라이딩, 떨림, 속도 손실이 눈에 띕니다.
+  - 거리와 gradient를 추가하면 결국 SDF가 됩니다.
+- Batch CapsuleCast:
+  - 기존 3D MeshCollider 모양에는 가장 가깝습니다.
+  - 그러나 PhysX broadphase/triangle contact 비용과 플랫폼별 접촉 차이가 남습니다.
+  - 현재 94% 병목 제거와 결정론을 동시에 만족하지 못합니다.
+
+베이크는 hierarchy path → mesh GUID → triangle index로 입력 순서를 고정하고, 결과 asset에 schema, origin, 크기, cell size, Y 범위, source hash, CRC를 포함합니다. 런타임 재베이크는 금지합니다.
+
+## 이동 해소
+
+스케일 1 기준 목표 clearance는 다음과 같습니다.
+
+```text
+R = radius + skinWidth
+  = 0.35 + 0.08
+  = 0.43m
+```
+
+중립 캐릭터가 uniform scale `s`를 사용하므로 초기 구현은 `Rᵢ=0.43×s`로 합니다. 실제 CC의 skinWidth scale 거동은 targeted A/B 측정으로 확인하고 필요하면 식만 보정합니다.
+
+권장 해소 순서는 다음과 같습니다.
+
+```text
+Resolve(position, delta, effectiveRadius):
+
+1. |delta| < 0.001m이면 즉시 원위치 반환
+   - depenetration도 실행하지 않음
+   - CC minMoveDistance 재현
+
+2. 시작점 depenetration, 최대 4회
+
+3. 남은 delta에 대해 최대 3-contact:
+   a. open-space fast path
+   b. DDA + bilinear SDF TOI sweep
+   c. TOI 직전으로 이동
+   d. 법선 방향 standoff 보정
+   e. 남은 변위를 활성 접촉 법선의 접선으로 투영
+   f. corner이면 두 법선 제약을 고정 순서로 재투영
+
+4. 최종 depenetration
+
+5. 기존 walkable-region clamp와 groundY 적용
+```
+
+Open-space fast path:
+
+```text
+Phi(p) > R + |delta| + 1mm
+```
+
+이면 충돌 가능성이 없으므로 정확히 `p += delta` 한 번만 수행합니다. 오픈 지역에서 기존 CC 비충돌 결과와 거의 같아지는 핵심 경로입니다.
+
+Sweep은 일반 sphere tracing 대신 **grid DDA + 셀 내부 bilinear 등거리선 TOI**를 사용합니다. 셀 내부 SDF를 이동선에 대입하면 2차식이 되므로, 해당 셀 구간에 포함되는 가장 이른 진입근을 선택할 수 있습니다. 거의 접선인 벽에서 sphere tracing 반복 수가 폭증하는 문제도 없습니다.
+
+결정 규칙은 고정합니다.
+
+- X/Z grid 경계를 동시에 통과하면 X, 그다음 Z.
+- 셀은 half-open 규칙.
+- 음의 방향으로 정확히 경계에 있으면 음의 셀 선택.
+- `t=0` 접촉은 벽 안쪽으로 들어가는 경우에만 차단.
+- 벽에서 멀어지거나 평행한 변위는 허용.
+- TOI에서 `0.5mm` 뒤로 물러남.
+- solver standoff slop `1mm`.
+- 최대 접촉 수 3.
+- depenetration 최대 4회.
+- solver 내부 잔여변위 종료값은 약 `1e-5m`; `minMoveDistance`를 잔여변위마다 다시 적용하지 않음.
+
+법선은 bilinear SDF analytic gradient로 계산합니다. gradient가 너무 작은 medial-axis에서는 `+X, +Z, -X, -Z, 대각선` 고정 순서로 이웃을 검사하고, 동률이면 먼저 검사한 방향을 선택합니다.
+
+두 벽 코너에서는 접촉 법선을 발견 순서대로 저장하고, 각 법선에 대해 안쪽 성분만 제거합니다.
+
+```text
+remaining -= n * min(0, dot(remaining, n))
+```
+
+두 법선을 두 차례 고정 순서로 적용합니다. convex corner를 향하면 남은 변위가 0이 되고, 벽에서 빠져나오는 성분은 보존됩니다.
+
+팔로워는 반드시 solver가 반환한 최종 위치로 기존 피드백을 유지합니다.
+
+```text
+actualVelocity = (finalPosition - initialPosition) / dt
+```
+
+이후 기존의 commanded 방향 분해, `alongKept` clamp, 진행률 0.5 미만 blocked damping을 그대로 둡니다. 명령 변위를 되먹이면 벽에서 튀거나 재가속하는 이질감이 생깁니다. 관련 경로는 [CrowdRoot.cs](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Scripts/CrowdRoot.cs:894)입니다.
+
+## 이질감 최소화
+
+오픈 영역에서는 fast path가 단순 `position + delta`이므로 거의 동일해야 합니다. 부동소수점 연산 순서도 기존과 맞춰 한 번의 덧셈으로 끝냅니다.
+
+평면 벽에서는 다음 세 요소로 CC에 근접시킵니다.
+
+- `radius + skinWidth` clearance.
+- TOI 기반 sweep 차단.
+- 충돌 법선의 접선 투영.
+
+정직하게 남는 차이는 다음과 같습니다.
+
+- 5cm SDF 보수 bias 때문에 최대 약 3.6cm 더 일찍 막힐 수 있음.
+- convex/concave corner의 SDF 등거리선이 CC의 triangle contact normal과 다름.
+- CC의 undocumented contact-offset 및 non-convex triangle 선택 차이.
+- 저상 StreetProp, 경사면, 오버행은 3D capsule을 2D footprint로 축약하면서 다르게 막힐 수 있음.
+- 큰 neutral에서 skinWidth scaling이 Unity CC와 다를 가능성.
+
+조정 순서는 고정합니다.
+
+1. skin scaling 실측 보정.
+2. 5cm → 2.5cm 해상도.
+3. 벽 근처에만 bake된 exact line-segment distance narrow band 추가.
+4. 그래도 품질 게이트 미달이면 CC 유지.
+
+개별 캐릭터가 벽 근처일 때만 PhysX로 되돌아가는 hybrid는 권장하지 않습니다. 프레임별 solver 전환으로 감각이 불연속해지고 병목·비결정성이 다시 생깁니다.
+
+## 결정론
+
+Collision job은 다음으로 고정합니다.
+
+```csharp
+[BurstCompile(
+    FloatMode = FloatMode.Strict,
+    FloatPrecision = FloatPrecision.Standard)]
+```
+
+- fast-math 금지.
+- SDF immutable.
+- 각 index는 자신의 출력만 기록.
+- reduction, atomic, 공유 누산 없음.
+- DDA tie, quadratic root 선택, gradient fallback, contact 삽입 순서 고정.
+- job 내부 RNG, event, Transform 접근 금지.
+- job 결과는 agent index 오름차순으로 적용.
+
+기존 tick 순서는 바꾸지 않습니다.
+
+```text
+입력/heading
+→ leader 이동
+→ follower/neutral command 생성 및 이동
+→ position mirror
+→ spatial grid rebuild
+→ recruit
+→ combat
+→ commit
+→ event publish
+```
+
+따라서 spatial grid의 기존 역-index cell 순회와 float 합산 순서도 유지합니다. `26/26 CombatResolver`, `6/6 RecruitResolver` 골든은 그대로 통과해야 하며, 전체 위치 snapshot만 새 SDF baseline으로 재정의합니다.
+
+단, **CC.Move만 바꾸면 Crowd 시뮬레이션에서 PhysX가 완전히 제거되지는 않습니다.**
+
+현재 추가 의존은 다음과 같습니다.
+
+- 초기 배치 `Physics.CheckSphere`.
+- neutral repick `Physics.Raycast`.
+- rival 전방/좌/우 `Physics.Raycast`.
+
+“PhysX 제거 → 완전 결정적”을 완료하려면 이것도 같은 SDF로 바꿉니다.
+
+- CheckSphere: `Phi(position) <= requestedRadius`.
+- Raycast: grid DDA로 zero-level 진입 여부 검사.
+- 기존 candidate 순서와 first-clear early exit 유지.
+
+특히 neutral repick은 ray 결과가 달라지면 RNG draw 수가 달라집니다. 따라서 기존 CC baseline에서 기록한 attempted-ray hit/miss transcript의 **100% 일치**를 하드 게이트로 둡니다. rival ray와 spawn accept/reject도 같은 조건입니다.
+
+이벤트 발행 코드 순서는 불변으로 유지할 수 있지만, 새 궤적으로 게임 결과 자체가 달라지면 특정 이벤트의 발생 여부·tick까지 모두 같다고 보장할 수는 없습니다. 고정 fixture의 ordered event transcript는 동일해야 하고, 전체 경기 차이는 다수 seed 결과 게이트로 관리합니다.
+
+결정론 보장 범위는 다음처럼 명시해야 합니다.
+
+- 같은 bake asset, 동일 binary, 동일 ARM64 실행환경: collision 결과 bit-exact 목표.
+- Editor x64와 Android ARM64 사이: `FloatMode.Strict`만으로 bit-exact 보장 불가.
+- CPU 간 완전한 bitwise 결정론이 필요하면 충돌뿐 아니라 steering/kernel 전체의 fixed-point 또는 tick별 양자화가 필요하며 별도 범위입니다.
+
+## 성능·800도달
+
+런타임 구조는 다음을 권장합니다.
+
+- SDF: X-fast row-major `NativeArray<short>`, `[ReadOnly]`.
+- 위치, 명령 delta, 반경, 결과: Persistent NativeArray SoA.
+- tick당 allocation 0.
+- 리더는 수가 4 이하이므로 먼저 메인 스레드 또는 작은 Burst 경로에서 해소.
+- 이후 follower+neutral 명령을 생성해 하나의 `IJobParallelFor`.
+- batch size 32/64를 기본 후보로 측정.
+- spatial grid rebuild 직전에 `Complete()`.
+- 최종 위치·팔로워 피드백 적용은 index 오름차순.
+
+현재 구조에는 scheduling과 겹칠 독립 작업이 많지 않으므로, Android에서는 `IJobParallelFor(16/32/64)`뿐 아니라 single-thread Burst `IJob`도 함께 측정해야 합니다. 800개에서는 worker wake-up 비용이 계산비보다 클 가능성도 있습니다.
+
+에이전트당 약 10~30회 SDF 조회라면:
+
+- 800명 기준 8천~2.4만 bilinear query.
+- 약 6.4만~19.2만 16-bit grid 원소 접근.
+- non-convex MeshCollider 800회 solve보다 매우 작음.
+
+실측 전 추정은 collision job `0.15~0.6ms/tick`입니다. 기존 총 tick의 94%가 CC.Move이고 새 충돌이 기존 총비용의 2~6%라면:
+
+```text
+잔존 커널 6% + 새 충돌 2~6%
+= 기존의 약 8~12%
+= 약 8.3~12.5배 가속
+```
+
+따라서 **800개체 CPU 시뮬레이션 60fps 도달 가능성은 높습니다.** 다만 Transform 800개, Animator, 렌더링/GPU는 그대로이므로 보장이 아니라 최저 지원 Android release IL2CPP의 실측 판정 사항입니다.
+
+성능 하드 게이트:
+
+- 800명 `SimTick` p95 ≤ `4ms`, max ≤ `8ms`.
+- collision Schedule→Complete p95 ≤ `0.75ms`.
+- 기존 대비 end-to-end speedup ≥ `8배`.
+- tick GC `0B`.
+- 10분 soak에서 4-step 초과 accumulator 폐기 `0회`.
+- 전체 main-thread CPU p95 ≤ `14ms`.
+- 1% low ≥ `55fps`.
+
+## 필요 패키지
+
+현재 Burst/Collections/Mathematics가 전이 의존성이므로 직접 사용하는 시점에 manifest에 직접 pin합니다.
+
+- `com.unity.burst: 1.8.28`
+- `com.unity.collections: 2.6.2`
+- `com.unity.mathematics: 1.3.3`
+
+관련 runtime asmdef에는 다음 참조를 명시합니다.
+
+- `Unity.Burst`
+- `Unity.Collections`
+- `Unity.Mathematics`
+
+추가로 필요하지 않은 것:
+
+- Entities 없음.
+- UniTask 없음.
+- Addressables 없음.
+- 별도 복잡한 EventBus/QueryBus 없음.
+- unsafe code 없음.
+
+Player의 `allowUnsafeCode=0`, asmdef의 `allowUnsafeCode=false`를 유지합니다. `NativeDisableParallelForRestriction`, raw pointer도 필요하지 않습니다.
+
+SDF는 Editor에서만 베이크합니다. `City.fbx`가 runtime-readable이 아니므로 런타임 mesh bake/Physics sampling은 사용하지 않습니다. 런타임은 직렬화 asset을 동기 로드해 Persistent NativeArray로 한 번 복사하고, `CrowdRoot.Shutdown/Dispose`에서 해제합니다.
+
+asset 누락, schema/CRC 오류, source hash 불일치는 빌드 validator 실패로 처리합니다.
+
+## 실측 게이트 기준
+
+A/B는 “한 스텝 oracle”과 “폐루프 전체 경기”를 분리합니다.
+
+한 스텝 oracle:
+
+- 동일한 시작 위치, 명령 delta, scale을 기록.
+- 같은 입력을 CC.Move와 SDF solver에 각각 재생.
+- 최소 100만 agent-step.
+- 평면벽, convex/concave corner, 얇은 prop, 최대 scale targeted sweep 1만 건 추가.
+
+버킷:
+
+- Open: 이동 segment의 최소 clearance > `0.50m`, CC contact 없음.
+- Wall-near: 최소 clearance ≤ `0.25m` 또는 contact 발생.
+- 사이는 transition으로 별도 보고.
+
+통과 기준:
+
+| 항목 | 기준 |
+|---|---:|
+| Open 평균 endpoint 편차 | ≤ 0.5mm |
+| Open p99 / 최대 | ≤ 1mm / 2mm |
+| Wall-near 평균 / p95 / 최대 | ≤ 2.5cm / 5cm / 10cm |
+| 평면벽 평균 / 최대 | ≤ 1.5cm / 5cm |
+| skin standoff 절대오차 평균 / p95 | ≤ 1cm / 2.5cm |
+| 최종 침투 최대 | ≤ 1cm |
+| 벽 관통 | 0건 |
+| `delta < 0.001m` | 100% 무이동 |
+| 평면벽 접선 변위 상대오차 | ≤ 2% |
+
+폐루프 위치 발산은 agent ID별로 0.5/1/2/5/10/30/60초에 기록합니다.
+
+- 1초: 평균 ≤ `5cm`, p95 ≤ `15cm`.
+- 5초: median ≤ `25cm`, p95 ≤ `1m`.
+- 10초 이후는 steering 비선형 증폭 때문에 정보성 곡선으로 보고 게임 결과 게이트를 우선합니다.
+
+다수 seed 결과는 200 seed와 고정 scripted player input으로 비교합니다.
+
+- winner 일치 ≥ `95%`.
+- 전체 순위 일치 ≥ `90%`.
+- match duration 차이 median ≤ `1초`, p95 ≤ `3초`.
+- 종료 팀 인원 aggregate 평균 상대차 ≤ `5%`.
+- 벽 끼임·관통 0건.
+
+결정론 게이트:
+
+- kernel golden `26/26 + 6/6`.
+- 동일 Android Burst binary 30회 snapshot hash bit-exact.
+- batch `1/32/64`, worker 수 변화에도 hash 동일.
+- ordered resolver/commit/event fixture 동일.
+- spawn CheckSphere와 neutral/rival ray hit/miss transcript 100% 일치.
+- RNG 호출 수·호출 위치 transcript 동일.
+
+## 구현 단계
+
+1. **Baseline 동결**
+   - 현재 미커밋 `CrowdRoot`, `RivalAiDriver`, `CrowdModel`, `GameConfig` 변경을 baseline에 포함할지 확정합니다.
+   - CC 경로의 위치·RNG·ray·event·성능 데이터를 저장합니다.
+   - 게이트: Editor와 Android baseline 재현 가능.
+
+2. **SDF baker/validator**
+   - 40개 collider coverage, source hash, CRC, 얇은 장애물, 최대 scale 검증.
+   - 아직 이동 경로는 변경하지 않습니다.
+   - 게이트: 누락 collider 0, source hash 안정, 메모리 목표 충족.
+
+3. **단일 스레드 reference solver**
+   - feature switch 뒤에 SDF Resolve를 추가합니다.
+   - 게이트: open/wall/skin/minMove one-step 기준 통과.
+
+4. **나머지 PhysX query 치환**
+   - spawn CheckSphere, neutral/rival ray를 SDF query로 변경합니다.
+   - 게이트: 기존 hit/miss 및 RNG transcript 100% 일치.
+   - 불일치 시 “완전 결정론” 전환을 중단합니다.
+
+5. **Burst job화**
+   - Persistent NativeArray, zero-allocation, single/parallel 경로 구현.
+   - 게이트: reference와 bit-exact, batch/worker hash 동일, `26/26 + 6/6` 통과.
+
+6. **CrowdRoot 통합**
+   - leader 선행, follower/neutral batch, 실제변위 피드백, 기존 region clamp 순서를 보존합니다.
+   - 게이트: 폐루프 위치 발산 및 ordered outcome/event fixture 통과.
+
+7. **다수 seed 품질 검증**
+   - 200 seed scripted A/B.
+   - 게이트: winner/순위/시간/인원 기준 통과.
+
+8. **Android release 성능 검증**
+   - 100/300/500/800, warmup 200 + timing 1000 tick.
+   - 최저 지원 ARM64 기기에서 10분 soak.
+   - 모든 품질·성능 게이트 통과 후 SDF를 기본 경로로 전환합니다.
+
+9. **안전 전환**
+   - 한 릴리스 동안 시작 시 선택하는 CC/SDF build flag를 유지합니다.
+   - 두 solver를 같은 tick에서 혼용하지 않습니다.
+   - 현장 검증 후 CharacterController 제거는 별도 작업으로 진행합니다.
+
+## 리스크·롤백
+
+주요 리스크:
+
+- 저상 prop·오버행·경사면을 2D로 축약한 품질 차이.
+- 5cm 보수 bias로 인한 추가 이격.
+- neutral scale별 CC skin 거동 차이.
+- SDF medial axis의 불안정한 gradient.
+- 현재 full-position/RNG/event golden 부재.
+- Android scheduling 비용과 렌더링 병목.
+- x64↔ARM float bitwise 불일치.
+- 현재 핵심 파일이 이미 수정된 dirty worktree 상태.
+
+다음 중 하나라도 발생하면 기본 전환을 중단하고 CC build로 롤백합니다.
+
+- 벽 관통 1건.
+- wall-near 최대 편차 `10cm` 초과.
+- winner 일치율 `95%` 미만.
+- `26/26 + 6/6` 실패.
+- batch/worker별 snapshot hash 불일치.
+- ray/spawn/RNG transcript 불일치.
+- `SimTick` p95 `4ms` 초과.
+- 기존 대비 8배 미만 가속.
+- 10분 soak에서 tick 폐기 또는 지속적 끼임 발생.
+
+품질 미달이면 2.5cm SDF 또는 narrow-band exact distance까지만 재시도하고, solver 반복 수를 줄여 성능을 맞추는 것은 모든 품질 게이트를 다시 통과할 때만 허용합니다. 그래도 미달이면 CharacterController를 유지합니다.
+
+이번 작업은 설계·읽기 전용 조사였으며 변경한 파일은 없습니다.
+tokens used
+58,745
+결론부터 말하면, **5cm·1mm 양자화 2D SDF + 고정 순서 DDA sweep + 최대 3-contact 슬라이딩**을 권장합니다. 셀 점유는 벽 슬라이딩 품질이 부족하고, batch CapsuleCast는 병목과 PhysX 비결정성을 남깁니다.
+
+현재 브랜치는 `Refactor_PrefabTreeStruct_260715`, HEAD `89c5d19`이며, 아래 설계는 현재 미커밋 작업트리까지 조사한 결과입니다.
+
+설계 결정 로그:
+
+```text
+1. Target feature owner: CrowdRoot / Crowd collision solver
+2. New file location:
+   - Assets/@Project/Crowd/Collision/Runtime
+   - Assets/@Project/City/Editor (SDF baker/validator)
+3. State location:
+   - 원본 충돌 데이터: ScriptableObject 또는 binary asset
+   - 런타임 상태: CrowdRoot 소유 Persistent NativeArray
+4. Communication method:
+   - CrowdRoot → collision solver 직접 호출
+   - EventBus/QueryBus 신규 도입 없음
+5. Affected files:
+   - CrowdRoot.cs, RivalAiDriver.cs
+   - collision runtime/baker/asset 신규 파일
+   - manifest.json, Crowd runtime asmdef
+   - Human prefab/GameplayRoot는 가능하면 수정하지 않음
+```
+
+## 권장 벽충돌 표현+근거
+
+**정적 도시 장애물의 2D signed-distance field를 권장합니다.**
+
+기본 사양:
+
+- 셀 크기: `0.05m`.
+- 각 grid vertex에 장애물 경계까지 signed distance 저장.
+  - 외부 양수, 내부 음수.
+  - `short`, 1단위=`1mm`, 범위 `±32.767m`.
+- 런타임 보간: 4개 vertex의 bilinear interpolation.
+- 좌표계: City-local 또는 고정 world XZ. 런타임 transform 변화 금지.
+- 범위: `ComputeWalkableRegion` 영역 + 최대 캐릭터 반경 + `2h` padding.
+- 베이크 대상: 현재 CC가 보는 40개 non-convex MeshCollider.
+  - generated building 37개.
+  - Parks, Vehicles, StreetProps 각 1개.
+- Y는 CC가 실제 차지하는 높이 구간과 교차하는 mesh를 XZ footprint로 투영합니다. 지면은 collider가 없고 `groundY`로 고정되므로 SDF 대상이 아닙니다.
+
+5cm bilinear SDF가 실제 거리보다 과대평가해 tunneling을 만들지 않도록, 양의 거리에 다음 보수 오차를 미리 뺍니다.
+
+```text
+bias = h / sqrt(2) + 1mm
+     ≈ 36.4mm
+```
+
+따라서 벽을 뚫는 방향이 아니라 CC보다 최대 약 3.6cm 일찍 막히는 방향으로 오차가 납니다. 벽근처 품질 게이트가 미달이면 1차 조정은 `2.5cm` grid입니다. 이때 보수 오차는 약 `1.87cm`, 메모리는 4배입니다.
+
+메모리는 다음과 같습니다.
+
+```text
+(width / 0.05 + 1) × (depth / 0.05 + 1) × 2 bytes
+```
+
+예를 들어 100×100m는 약 8MiB, 200×200m는 약 32MiB입니다. 실제 도시 bounds로 베이크 후 확정해야 합니다.
+
+대안은 다음 이유로 제외합니다.
+
+- 셀 점유:
+  - 싸지만 법선이 grid 축에 붙습니다.
+  - 대각벽·코너에서 계단식 슬라이딩, 떨림, 속도 손실이 눈에 띕니다.
+  - 거리와 gradient를 추가하면 결국 SDF가 됩니다.
+- Batch CapsuleCast:
+  - 기존 3D MeshCollider 모양에는 가장 가깝습니다.
+  - 그러나 PhysX broadphase/triangle contact 비용과 플랫폼별 접촉 차이가 남습니다.
+  - 현재 94% 병목 제거와 결정론을 동시에 만족하지 못합니다.
+
+베이크는 hierarchy path → mesh GUID → triangle index로 입력 순서를 고정하고, 결과 asset에 schema, origin, 크기, cell size, Y 범위, source hash, CRC를 포함합니다. 런타임 재베이크는 금지합니다.
+
+## 이동 해소
+
+스케일 1 기준 목표 clearance는 다음과 같습니다.
+
+```text
+R = radius + skinWidth
+  = 0.35 + 0.08
+  = 0.43m
+```
+
+중립 캐릭터가 uniform scale `s`를 사용하므로 초기 구현은 `Rᵢ=0.43×s`로 합니다. 실제 CC의 skinWidth scale 거동은 targeted A/B 측정으로 확인하고 필요하면 식만 보정합니다.
+
+권장 해소 순서는 다음과 같습니다.
+
+```text
+Resolve(position, delta, effectiveRadius):
+
+1. |delta| < 0.001m이면 즉시 원위치 반환
+   - depenetration도 실행하지 않음
+   - CC minMoveDistance 재현
+
+2. 시작점 depenetration, 최대 4회
+
+3. 남은 delta에 대해 최대 3-contact:
+   a. open-space fast path
+   b. DDA + bilinear SDF TOI sweep
+   c. TOI 직전으로 이동
+   d. 법선 방향 standoff 보정
+   e. 남은 변위를 활성 접촉 법선의 접선으로 투영
+   f. corner이면 두 법선 제약을 고정 순서로 재투영
+
+4. 최종 depenetration
+
+5. 기존 walkable-region clamp와 groundY 적용
+```
+
+Open-space fast path:
+
+```text
+Phi(p) > R + |delta| + 1mm
+```
+
+이면 충돌 가능성이 없으므로 정확히 `p += delta` 한 번만 수행합니다. 오픈 지역에서 기존 CC 비충돌 결과와 거의 같아지는 핵심 경로입니다.
+
+Sweep은 일반 sphere tracing 대신 **grid DDA + 셀 내부 bilinear 등거리선 TOI**를 사용합니다. 셀 내부 SDF를 이동선에 대입하면 2차식이 되므로, 해당 셀 구간에 포함되는 가장 이른 진입근을 선택할 수 있습니다. 거의 접선인 벽에서 sphere tracing 반복 수가 폭증하는 문제도 없습니다.
+
+결정 규칙은 고정합니다.
+
+- X/Z grid 경계를 동시에 통과하면 X, 그다음 Z.
+- 셀은 half-open 규칙.
+- 음의 방향으로 정확히 경계에 있으면 음의 셀 선택.
+- `t=0` 접촉은 벽 안쪽으로 들어가는 경우에만 차단.
+- 벽에서 멀어지거나 평행한 변위는 허용.
+- TOI에서 `0.5mm` 뒤로 물러남.
+- solver standoff slop `1mm`.
+- 최대 접촉 수 3.
+- depenetration 최대 4회.
+- solver 내부 잔여변위 종료값은 약 `1e-5m`; `minMoveDistance`를 잔여변위마다 다시 적용하지 않음.
+
+법선은 bilinear SDF analytic gradient로 계산합니다. gradient가 너무 작은 medial-axis에서는 `+X, +Z, -X, -Z, 대각선` 고정 순서로 이웃을 검사하고, 동률이면 먼저 검사한 방향을 선택합니다.
+
+두 벽 코너에서는 접촉 법선을 발견 순서대로 저장하고, 각 법선에 대해 안쪽 성분만 제거합니다.
+
+```text
+remaining -= n * min(0, dot(remaining, n))
+```
+
+두 법선을 두 차례 고정 순서로 적용합니다. convex corner를 향하면 남은 변위가 0이 되고, 벽에서 빠져나오는 성분은 보존됩니다.
+
+팔로워는 반드시 solver가 반환한 최종 위치로 기존 피드백을 유지합니다.
+
+```text
+actualVelocity = (finalPosition - initialPosition) / dt
+```
+
+이후 기존의 commanded 방향 분해, `alongKept` clamp, 진행률 0.5 미만 blocked damping을 그대로 둡니다. 명령 변위를 되먹이면 벽에서 튀거나 재가속하는 이질감이 생깁니다. 관련 경로는 [CrowdRoot.cs](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Scripts/CrowdRoot.cs:894)입니다.
+
+## 이질감 최소화
+
+오픈 영역에서는 fast path가 단순 `position + delta`이므로 거의 동일해야 합니다. 부동소수점 연산 순서도 기존과 맞춰 한 번의 덧셈으로 끝냅니다.
+
+평면 벽에서는 다음 세 요소로 CC에 근접시킵니다.
+
+- `radius + skinWidth` clearance.
+- TOI 기반 sweep 차단.
+- 충돌 법선의 접선 투영.
+
+정직하게 남는 차이는 다음과 같습니다.
+
+- 5cm SDF 보수 bias 때문에 최대 약 3.6cm 더 일찍 막힐 수 있음.
+- convex/concave corner의 SDF 등거리선이 CC의 triangle contact normal과 다름.
+- CC의 undocumented contact-offset 및 non-convex triangle 선택 차이.
+- 저상 StreetProp, 경사면, 오버행은 3D capsule을 2D footprint로 축약하면서 다르게 막힐 수 있음.
+- 큰 neutral에서 skinWidth scaling이 Unity CC와 다를 가능성.
+
+조정 순서는 고정합니다.
+
+1. skin scaling 실측 보정.
+2. 5cm → 2.5cm 해상도.
+3. 벽 근처에만 bake된 exact line-segment distance narrow band 추가.
+4. 그래도 품질 게이트 미달이면 CC 유지.
+
+개별 캐릭터가 벽 근처일 때만 PhysX로 되돌아가는 hybrid는 권장하지 않습니다. 프레임별 solver 전환으로 감각이 불연속해지고 병목·비결정성이 다시 생깁니다.
+
+## 결정론
+
+Collision job은 다음으로 고정합니다.
+
+```csharp
+[BurstCompile(
+    FloatMode = FloatMode.Strict,
+    FloatPrecision = FloatPrecision.Standard)]
+```
+
+- fast-math 금지.
+- SDF immutable.
+- 각 index는 자신의 출력만 기록.
+- reduction, atomic, 공유 누산 없음.
+- DDA tie, quadratic root 선택, gradient fallback, contact 삽입 순서 고정.
+- job 내부 RNG, event, Transform 접근 금지.
+- job 결과는 agent index 오름차순으로 적용.
+
+기존 tick 순서는 바꾸지 않습니다.
+
+```text
+입력/heading
+→ leader 이동
+→ follower/neutral command 생성 및 이동
+→ position mirror
+→ spatial grid rebuild
+→ recruit
+→ combat
+→ commit
+→ event publish
+```
+
+따라서 spatial grid의 기존 역-index cell 순회와 float 합산 순서도 유지합니다. `26/26 CombatResolver`, `6/6 RecruitResolver` 골든은 그대로 통과해야 하며, 전체 위치 snapshot만 새 SDF baseline으로 재정의합니다.
+
+단, **CC.Move만 바꾸면 Crowd 시뮬레이션에서 PhysX가 완전히 제거되지는 않습니다.**
+
+현재 추가 의존은 다음과 같습니다.
+
+- 초기 배치 `Physics.CheckSphere`.
+- neutral repick `Physics.Raycast`.
+- rival 전방/좌/우 `Physics.Raycast`.
+
+“PhysX 제거 → 완전 결정적”을 완료하려면 이것도 같은 SDF로 바꿉니다.
+
+- CheckSphere: `Phi(position) <= requestedRadius`.
+- Raycast: grid DDA로 zero-level 진입 여부 검사.
+- 기존 candidate 순서와 first-clear early exit 유지.
+
+특히 neutral repick은 ray 결과가 달라지면 RNG draw 수가 달라집니다. 따라서 기존 CC baseline에서 기록한 attempted-ray hit/miss transcript의 **100% 일치**를 하드 게이트로 둡니다. rival ray와 spawn accept/reject도 같은 조건입니다.
+
+이벤트 발행 코드 순서는 불변으로 유지할 수 있지만, 새 궤적으로 게임 결과 자체가 달라지면 특정 이벤트의 발생 여부·tick까지 모두 같다고 보장할 수는 없습니다. 고정 fixture의 ordered event transcript는 동일해야 하고, 전체 경기 차이는 다수 seed 결과 게이트로 관리합니다.
+
+결정론 보장 범위는 다음처럼 명시해야 합니다.
+
+- 같은 bake asset, 동일 binary, 동일 ARM64 실행환경: collision 결과 bit-exact 목표.
+- Editor x64와 Android ARM64 사이: `FloatMode.Strict`만으로 bit-exact 보장 불가.
+- CPU 간 완전한 bitwise 결정론이 필요하면 충돌뿐 아니라 steering/kernel 전체의 fixed-point 또는 tick별 양자화가 필요하며 별도 범위입니다.
+
+## 성능·800도달
+
+런타임 구조는 다음을 권장합니다.
+
+- SDF: X-fast row-major `NativeArray<short>`, `[ReadOnly]`.
+- 위치, 명령 delta, 반경, 결과: Persistent NativeArray SoA.
+- tick당 allocation 0.
+- 리더는 수가 4 이하이므로 먼저 메인 스레드 또는 작은 Burst 경로에서 해소.
+- 이후 follower+neutral 명령을 생성해 하나의 `IJobParallelFor`.
+- batch size 32/64를 기본 후보로 측정.
+- spatial grid rebuild 직전에 `Complete()`.
+- 최종 위치·팔로워 피드백 적용은 index 오름차순.
+
+현재 구조에는 scheduling과 겹칠 독립 작업이 많지 않으므로, Android에서는 `IJobParallelFor(16/32/64)`뿐 아니라 single-thread Burst `IJob`도 함께 측정해야 합니다. 800개에서는 worker wake-up 비용이 계산비보다 클 가능성도 있습니다.
+
+에이전트당 약 10~30회 SDF 조회라면:
+
+- 800명 기준 8천~2.4만 bilinear query.
+- 약 6.4만~19.2만 16-bit grid 원소 접근.
+- non-convex MeshCollider 800회 solve보다 매우 작음.
+
+실측 전 추정은 collision job `0.15~0.6ms/tick`입니다. 기존 총 tick의 94%가 CC.Move이고 새 충돌이 기존 총비용의 2~6%라면:
+
+```text
+잔존 커널 6% + 새 충돌 2~6%
+= 기존의 약 8~12%
+= 약 8.3~12.5배 가속
+```
+
+따라서 **800개체 CPU 시뮬레이션 60fps 도달 가능성은 높습니다.** 다만 Transform 800개, Animator, 렌더링/GPU는 그대로이므로 보장이 아니라 최저 지원 Android release IL2CPP의 실측 판정 사항입니다.
+
+성능 하드 게이트:
+
+- 800명 `SimTick` p95 ≤ `4ms`, max ≤ `8ms`.
+- collision Schedule→Complete p95 ≤ `0.75ms`.
+- 기존 대비 end-to-end speedup ≥ `8배`.
+- tick GC `0B`.
+- 10분 soak에서 4-step 초과 accumulator 폐기 `0회`.
+- 전체 main-thread CPU p95 ≤ `14ms`.
+- 1% low ≥ `55fps`.
+
+## 필요 패키지
+
+현재 Burst/Collections/Mathematics가 전이 의존성이므로 직접 사용하는 시점에 manifest에 직접 pin합니다.
+
+- `com.unity.burst: 1.8.28`
+- `com.unity.collections: 2.6.2`
+- `com.unity.mathematics: 1.3.3`
+
+관련 runtime asmdef에는 다음 참조를 명시합니다.
+
+- `Unity.Burst`
+- `Unity.Collections`
+- `Unity.Mathematics`
+
+추가로 필요하지 않은 것:
+
+- Entities 없음.
+- UniTask 없음.
+- Addressables 없음.
+- 별도 복잡한 EventBus/QueryBus 없음.
+- unsafe code 없음.
+
+Player의 `allowUnsafeCode=0`, asmdef의 `allowUnsafeCode=false`를 유지합니다. `NativeDisableParallelForRestriction`, raw pointer도 필요하지 않습니다.
+
+SDF는 Editor에서만 베이크합니다. `City.fbx`가 runtime-readable이 아니므로 런타임 mesh bake/Physics sampling은 사용하지 않습니다. 런타임은 직렬화 asset을 동기 로드해 Persistent NativeArray로 한 번 복사하고, `CrowdRoot.Shutdown/Dispose`에서 해제합니다.
+
+asset 누락, schema/CRC 오류, source hash 불일치는 빌드 validator 실패로 처리합니다.
+
+## 실측 게이트 기준
+
+A/B는 “한 스텝 oracle”과 “폐루프 전체 경기”를 분리합니다.
+
+한 스텝 oracle:
+
+- 동일한 시작 위치, 명령 delta, scale을 기록.
+- 같은 입력을 CC.Move와 SDF solver에 각각 재생.
+- 최소 100만 agent-step.
+- 평면벽, convex/concave corner, 얇은 prop, 최대 scale targeted sweep 1만 건 추가.
+
+버킷:
+
+- Open: 이동 segment의 최소 clearance > `0.50m`, CC contact 없음.
+- Wall-near: 최소 clearance ≤ `0.25m` 또는 contact 발생.
+- 사이는 transition으로 별도 보고.
+
+통과 기준:
+
+| 항목 | 기준 |
+|---|---:|
+| Open 평균 endpoint 편차 | ≤ 0.5mm |
+| Open p99 / 최대 | ≤ 1mm / 2mm |
+| Wall-near 평균 / p95 / 최대 | ≤ 2.5cm / 5cm / 10cm |
+| 평면벽 평균 / 최대 | ≤ 1.5cm / 5cm |
+| skin standoff 절대오차 평균 / p95 | ≤ 1cm / 2.5cm |
+| 최종 침투 최대 | ≤ 1cm |
+| 벽 관통 | 0건 |
+| `delta < 0.001m` | 100% 무이동 |
+| 평면벽 접선 변위 상대오차 | ≤ 2% |
+
+폐루프 위치 발산은 agent ID별로 0.5/1/2/5/10/30/60초에 기록합니다.
+
+- 1초: 평균 ≤ `5cm`, p95 ≤ `15cm`.
+- 5초: median ≤ `25cm`, p95 ≤ `1m`.
+- 10초 이후는 steering 비선형 증폭 때문에 정보성 곡선으로 보고 게임 결과 게이트를 우선합니다.
+
+다수 seed 결과는 200 seed와 고정 scripted player input으로 비교합니다.
+
+- winner 일치 ≥ `95%`.
+- 전체 순위 일치 ≥ `90%`.
+- match duration 차이 median ≤ `1초`, p95 ≤ `3초`.
+- 종료 팀 인원 aggregate 평균 상대차 ≤ `5%`.
+- 벽 끼임·관통 0건.
+
+결정론 게이트:
+
+- kernel golden `26/26 + 6/6`.
+- 동일 Android Burst binary 30회 snapshot hash bit-exact.
+- batch `1/32/64`, worker 수 변화에도 hash 동일.
+- ordered resolver/commit/event fixture 동일.
+- spawn CheckSphere와 neutral/rival ray hit/miss transcript 100% 일치.
+- RNG 호출 수·호출 위치 transcript 동일.
+
+## 구현 단계
+
+1. **Baseline 동결**
+   - 현재 미커밋 `CrowdRoot`, `RivalAiDriver`, `CrowdModel`, `GameConfig` 변경을 baseline에 포함할지 확정합니다.
+   - CC 경로의 위치·RNG·ray·event·성능 데이터를 저장합니다.
+   - 게이트: Editor와 Android baseline 재현 가능.
+
+2. **SDF baker/validator**
+   - 40개 collider coverage, source hash, CRC, 얇은 장애물, 최대 scale 검증.
+   - 아직 이동 경로는 변경하지 않습니다.
+   - 게이트: 누락 collider 0, source hash 안정, 메모리 목표 충족.
+
+3. **단일 스레드 reference solver**
+   - feature switch 뒤에 SDF Resolve를 추가합니다.
+   - 게이트: open/wall/skin/minMove one-step 기준 통과.
+
+4. **나머지 PhysX query 치환**
+   - spawn CheckSphere, neutral/rival ray를 SDF query로 변경합니다.
+   - 게이트: 기존 hit/miss 및 RNG transcript 100% 일치.
+   - 불일치 시 “완전 결정론” 전환을 중단합니다.
+
+5. **Burst job화**
+   - Persistent NativeArray, zero-allocation, single/parallel 경로 구현.
+   - 게이트: reference와 bit-exact, batch/worker hash 동일, `26/26 + 6/6` 통과.
+
+6. **CrowdRoot 통합**
+   - leader 선행, follower/neutral batch, 실제변위 피드백, 기존 region clamp 순서를 보존합니다.
+   - 게이트: 폐루프 위치 발산 및 ordered outcome/event fixture 통과.
+
+7. **다수 seed 품질 검증**
+   - 200 seed scripted A/B.
+   - 게이트: winner/순위/시간/인원 기준 통과.
+
+8. **Android release 성능 검증**
+   - 100/300/500/800, warmup 200 + timing 1000 tick.
+   - 최저 지원 ARM64 기기에서 10분 soak.
+   - 모든 품질·성능 게이트 통과 후 SDF를 기본 경로로 전환합니다.
+
+9. **안전 전환**
+   - 한 릴리스 동안 시작 시 선택하는 CC/SDF build flag를 유지합니다.
+   - 두 solver를 같은 tick에서 혼용하지 않습니다.
+   - 현장 검증 후 CharacterController 제거는 별도 작업으로 진행합니다.
+
+## 리스크·롤백
+
+주요 리스크:
+
+- 저상 prop·오버행·경사면을 2D로 축약한 품질 차이.
+- 5cm 보수 bias로 인한 추가 이격.
+- neutral scale별 CC skin 거동 차이.
+- SDF medial axis의 불안정한 gradient.
+- 현재 full-position/RNG/event golden 부재.
+- Android scheduling 비용과 렌더링 병목.
+- x64↔ARM float bitwise 불일치.
+- 현재 핵심 파일이 이미 수정된 dirty worktree 상태.
+
+다음 중 하나라도 발생하면 기본 전환을 중단하고 CC build로 롤백합니다.
+
+- 벽 관통 1건.
+- wall-near 최대 편차 `10cm` 초과.
+- winner 일치율 `95%` 미만.
+- `26/26 + 6/6` 실패.
+- batch/worker별 snapshot hash 불일치.
+- ray/spawn/RNG transcript 불일치.
+- `SimTick` p95 `4ms` 초과.
+- 기존 대비 8배 미만 가속.
+- 10분 soak에서 tick 폐기 또는 지속적 끼임 발생.
+
+품질 미달이면 2.5cm SDF 또는 narrow-band exact distance까지만 재시도하고, solver 반복 수를 줄여 성능을 맞추는 것은 모든 품질 게이트를 다시 통과할 때만 허용합니다. 그래도 미달이면 CharacterController를 유지합니다.
+
+이번 작업은 설계·읽기 전용 조사였으며 변경한 파일은 없습니다.

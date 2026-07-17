@@ -1,0 +1,15 @@
+역할: AF_CrowdCity crowd를 "최근 5년(2021~2026) 출시 AOS/iOS 기종에서 **최소 1만 명 이상 보장**"하는 구조로 만들어야 할 때의 필수 설계 제약을 검증하는 독립 검증자. (라운드1~4 합의: NativeArray SoA+Burst+Job(DOTS 아님), 렌더가 binding, 티어별 상한 추정상 1만은 T3=GameObject/Animator/SkinnedMeshRenderer/CC 전부 제거 + Graphics.RenderMeshIndirect에서 처음 도달, T1 sim-only는 자릿수 못 올림.)
+
+**신규 하드 요구**: 목표 중앙값 기기가 아니라 **5년 window 내 최약 기기 기준으로 1만 floor 보장**. 5년 window에는 2021년 저가 안드로이드(Mali-G52/Adreno 610급, GLES3.x, compute 지원 불안정, RAM 3~4GB)부터 최신 플래그십까지 포함. AOS+iOS 양쪽.
+
+검증 질문(코드/문서 확인되는 것은 근거 인용, 기기 스펙·성능은 일반지식+외삽으로 답하되 "외삽/일반지식" 명시, 프로젝트에서 확인 안 되는 설정은 확인 불가로):
+1. 최약 기기 렌더 경로 가용성: T3의 `Graphics.RenderMeshIndirect`는 compute shader 필요. 5년 window 최약 AOS(GLES3.0/저가 2021)가 이를 지원 못 할 수 있는가? 그렇다면 fallback(BatchRendererGroup은 GLES3.1+, 또는 `Graphics.DrawMeshInstanced`+MaterialPropertyBlock은 GLES3.0 가능)이 필요한가? 현재 프로젝트 그래픽 API/최소 SDK 설정을 ProjectSettings에서 확인(GLES3.1 강제 여부, min API level, URP 타깃).
+2. 1만 floor 보장에 필요한 최소 티어: 최약 기기 기준으로 T3(무애니/단순 rigid)로 1만이 보장되는가, 아니면 T4(VAT+multi-LOD+culling)가 필수인가? 왜?
+3. 크로스 OS 결정성: 싱글플레이라면 cross-ISA(ARM AOS vs Apple iOS) bit-identical이 불필요함을 확인(DESIGN.md의 결정성 계약 범위 인용). 리더보드/리플레이/멀티가 있으면 무엇이 달라지나?
+4. 지속 발열·메모리 상한: 저가폰(RAM 3~4GB, 빅리틀 스로틀)에서 1만 지속 30fps 보장에 필수인 것(tick-rate 분리, aggressive frustum/distance culling, behavior LOD, 텍스처/메시 예산). NativeArray SoA 1만~5만 메모리 footprint 개략 계산(AgentBuffer 필드 기준). 현 tick 0.02s·프레임당 최대4회(GameplayRoot) 유지 시 부하.
+5. "1만 floor 보장 구조" 최소 스펙: 반드시 있어야 하는 컴포넌트를 필수/선택으로 구분(sim: NativeArray SoA+Burst+Job / RNG per-agent / 렌더: instancing 경로+fallback / LOD·culling / 밀도 캡핑 / 결정성 게이트). 무엇을 빼면 최약 기기 1만이 깨지는가?
+6. 최종 판정: 최약 5년-window AOS/iOS에서 1만 floor가 (A)현실적 보장 가능 / (B)조건부(특정 LOD/culling/밀도캡 전제) / (C)비현실적 중 택1 + 1~2줄 근거 + 최대 리스크 1개.
+
+조사: ProjectSettings/ProjectSettings.asset(그래픽 API/min SDK), Packages/manifest.json(URP 버전), AgentBuffer.cs(메모리), GameplayRoot(tick), DESIGN.md(결정성 계약) 확인. 나머지 기기 성능은 외삽.
+
+출력(간결): 질문 1~6 결론 + 근거. 마지막 "합의 후보" 4~6개.

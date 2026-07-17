@@ -1,0 +1,600 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.5
+--------
+workdir: D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: ultra
+reasoning summaries: none
+session id: 019f6b6c-624f-7370-ac0e-db4d3785122b
+--------
+user
+역할: AF_CrowdCity crowd를 "최근 5년(2021~2026) 출시 AOS/iOS 기종에서 **최소 1만 명 이상 보장**"하는 구조로 만들어야 할 때의 필수 설계 제약을 검증하는 독립 검증자. (라운드1~4 합의: NativeArray SoA+Burst+Job(DOTS 아님), 렌더가 binding, 티어별 상한 추정상 1만은 T3=GameObject/Animator/SkinnedMeshRenderer/CC 전부 제거 + Graphics.RenderMeshIndirect에서 처음 도달, T1 sim-only는 자릿수 못 올림.)
+
+**신규 하드 요구**: 목표 중앙값 기기가 아니라 **5년 window 내 최약 기기 기준으로 1만 floor 보장**. 5년 window에는 2021년 저가 안드로이드(Mali-G52/Adreno 610급, GLES3.x, compute 지원 불안정, RAM 3~4GB)부터 최신 플래그십까지 포함. AOS+iOS 양쪽.
+
+검증 질문(코드/문서 확인되는 것은 근거 인용, 기기 스펙·성능은 일반지식+외삽으로 답하되 "외삽/일반지식" 명시, 프로젝트에서 확인 안 되는 설정은 확인 불가로):
+1. 최약 기기 렌더 경로 가용성: T3의 `Graphics.RenderMeshIndirect`는 compute shader 필요. 5년 window 최약 AOS(GLES3.0/저가 2021)가 이를 지원 못 할 수 있는가? 그렇다면 fallback(BatchRendererGroup은 GLES3.1+, 또는 `Graphics.DrawMeshInstanced`+MaterialPropertyBlock은 GLES3.0 가능)이 필요한가? 현재 프로젝트 그래픽 API/최소 SDK 설정을 ProjectSettings에서 확인(GLES3.1 강제 여부, min API level, URP 타깃).
+2. 1만 floor 보장에 필요한 최소 티어: 최약 기기 기준으로 T3(무애니/단순 rigid)로 1만이 보장되는가, 아니면 T4(VAT+multi-LOD+culling)가 필수인가? 왜?
+3. 크로스 OS 결정성: 싱글플레이라면 cross-ISA(ARM AOS vs Apple iOS) bit-identical이 불필요함을 확인(DESIGN.md의 결정성 계약 범위 인용). 리더보드/리플레이/멀티가 있으면 무엇이 달라지나?
+4. 지속 발열·메모리 상한: 저가폰(RAM 3~4GB, 빅리틀 스로틀)에서 1만 지속 30fps 보장에 필수인 것(tick-rate 분리, aggressive frustum/distance culling, behavior LOD, 텍스처/메시 예산). NativeArray SoA 1만~5만 메모리 footprint 개략 계산(AgentBuffer 필드 기준). 현 tick 0.02s·프레임당 최대4회(GameplayRoot) 유지 시 부하.
+5. "1만 floor 보장 구조" 최소 스펙: 반드시 있어야 하는 컴포넌트를 필수/선택으로 구분(sim: NativeArray SoA+Burst+Job / RNG per-agent / 렌더: instancing 경로+fallback / LOD·culling / 밀도 캡핑 / 결정성 게이트). 무엇을 빼면 최약 기기 1만이 깨지는가?
+6. 최종 판정: 최약 5년-window AOS/iOS에서 1만 floor가 (A)현실적 보장 가능 / (B)조건부(특정 LOD/culling/밀도캡 전제) / (C)비현실적 중 택1 + 1~2줄 근거 + 최대 리스크 1개.
+
+조사: ProjectSettings/ProjectSettings.asset(그래픽 API/min SDK), Packages/manifest.json(URP 버전), AgentBuffer.cs(메모리), GameplayRoot(tick), DESIGN.md(결정성 계약) 확인. 나머지 기기 성능은 외삽.
+
+출력(간결): 질문 1~6 결론 + 근거. 마지막 "합의 후보" 4~6개.
+codex
+요청 범위를 “코드·설정은 파일/라인 근거, 기기 성능은 일반지식·외삽으로 명시, 확인되지 않는 값은 확인 불가”로 고정하겠습니다. 세 갈래로 독립 조사한 뒤, 별도 교차검증을 거쳐 1~6 판정과 합의 후보만 간결하게 정리하겠습니다. 성공 기준은 특히 `최약 2021 저가 AOS`에서의 API fallback과 지속 30fps 조건을 ‘평균 성능’과 혼동하지 않는 것입니다.
+  → ProjectSettings·URP 렌더 경로 제약 조사
+  • AgentBuffer·GameplayRoot 메모리/틱 비용 조사
+  • DESIGN 결정성 계약 및 플랫폼 외삽 분석
+  • 독립 교차검증 후 1~6 최종 판정
+2026-07-16T14:55:28.192223Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.9 seconds
+Output:
+
+collab: Wait
+2026-07-16T14:55:58.714403Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+위치 줄:2 문자:245
++ ... ]::Round($bytes/1KB,3); MiB=[math]::Round($bytes/1MB,6) } } | Format- ...
++                                                                 ~
+빈 파이프 요소는 사용할 수 없습니다.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : EmptyPipeElement
+ 
+
+codex
+현재 설정, 시뮬레이션 예산, 결정성 계약을 서로 분리해 읽고 있습니다. 최종 판정에서는 “API 호출 가능”과 “최약 기기에서 10k를 지속 보장”을 별도 조건으로 다루고, T3/T4 명칭보다 실제로 빠질 수 없는 기능(LOD·컬링·fallback)을 기준으로 판정하겠습니다.
+collab: Wait
+collab: Wait
+2026-07-16T14:57:03.947204Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 2.4 seconds
+Output:
+
+collab: Wait
+collab: Wait
+2026-07-16T14:57:55.681085Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+
+collab: Wait
+codex
+한 가지 중요한 사실이 확인됐습니다. 현재 `AgentBuffer`는 목표 구조인 `NativeArray`가 아니라 관리 배열 SoA이며, 따라서 현 코드 자체가 이미 “1만 floor 구조 완료”를 입증하지는 않습니다. 또한 문서의 결정성은 동일 step 내부 결과에 한정되고 cross-run replay 보장은 명시적으로 제외되어 있습니다. 렌더 설정 값의 직렬화 의미를 교차확인 중입니다.
+collab: Wait
+2026-07-16T14:59:00.009704Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.7 seconds
+Output:
+ProjectSettings\EditorSettings.asset-33-  m_UseLegacyProbeSampleCount: 0
+ProjectSettings\EditorSettings.asset-34-  m_SerializeInlineMappingsOnOneLine: 1
+ProjectSettings\EditorSettings.asset-35-  m_DisableCookiesInLightmapper: 0
+ProjectSettings\EditorSettings.asset:36:  m_ShadowmaskStitching: 0
+ProjectSettings\EditorSettings.asset-37-  m_AssetPipelineMode: 1
+ProjectSettings\EditorSettings.asset-38-  m_RefreshImportMode: 0
+ProjectSettings\EditorSettings.asset-39-  m_CacheServerMode: 0
+--
+ProjectSettings\GraphicsSettings.asset-37-  m_PreloadedShaders: []
+ProjectSettings\GraphicsSettings.asset-38-  m_PreloadShadersBatchTimeLimit: -1
+ProjectSettings\GraphicsSettings.asset-39-  m_SpritesDefaultMaterial: {fileID: 10754, guid: 0000000000000000f000000000000000, type: 0}
+ProjectSettings\GraphicsSettings.asset:40:  m_CustomRenderPipeline: {fileID: 11400000, guid: 4b83569d67af61e458304325a23e5dfd, type: 2}
+ProjectSettings\GraphicsSettings.asset-41-  m_TransparencySortMode: 0
+ProjectSettings\GraphicsSettings.asset-42-  m_TransparencySortAxis: {x: 0, y: 0, z: 1}
+ProjectSettings\GraphicsSettings.asset-43-  m_DefaultRenderingPath: 1
+--
+ProjectSettings\GraphicsSettings.asset-57-  m_FogKeepExp: 1
+ProjectSettings\GraphicsSettings.asset-58-  m_FogKeepExp2: 1
+ProjectSettings\GraphicsSettings.asset-59-  m_AlbedoSwatchInfos: []
+ProjectSettings\GraphicsSettings.asset:60:  m_RenderPipelineGlobalSettingsMap:
+ProjectSettings\GraphicsSettings.asset:61:    UnityEngine.Rendering.Universal.UniversalRenderPipeline: {fileID: 11400000, guid: 18dc0cd2c080841dea60987a38ce93fa, type: 2}
+ProjectSettings\GraphicsSettings.asset-62-  m_ShaderBuildSettings:
+ProjectSettings\GraphicsSettings.asset-63-    keywordDeclarationOverrides: []
+ProjectSettings\GraphicsSettings.asset-64-  m_LightsUseLinearIntensity: 1
+--
+Assets\Settings\DefaultVolumeProfile.asset-55-  m_EditorHideFlags: 0
+Assets\Settings\DefaultVolumeProfile.asset-56-  m_Script: {fileID: 0}
+Assets\Settings\DefaultVolumeProfile.asset-57-  m_Name: CopyPasteTestComponent2
+Assets\Settings\DefaultVolumeProfile.asset:58:  m_EditorClassIdentifier: Unity.RenderPipelines.Core.Editor.Tests:UnityEditor.Rendering.Tests:VolumeComponentCopyPasteTests/CopyPasteTestComponent2
+Assets\Settings\DefaultVolumeProfile.asset-59-  active: 1
+Assets\Settings\DefaultVolumeProfile.asset-60-  p1:
+Assets\Settings\DefaultVolumeProfile.asset-61-    m_OverrideState: 1
+--
+Assets\Settings\DefaultVolumeProfile.asset-250-  m_EditorHideFlags: 0
+Assets\Settings\DefaultVolumeProfile.asset-251-  m_Script: {fileID: 0}
+Assets\Settings\DefaultVolumeProfile.asset-252-  m_Name: VolumeComponentSupportedEverywhere
+Assets\Settings\DefaultVolumeProfile.asset:253:  m_EditorClassIdentifier: Unity.RenderPipelines.Core.Editor.Tests:UnityEngine.Rendering.Tests:VolumeComponentEditorSupportedOnTests/VolumeComponentSupportedEverywhere
+Assets\Settings\DefaultVolumeProfile.asset-254-  active: 1
+Assets\Settings\DefaultVolumeProfile.asset-255---- !u!114 &-5139089513906902183
+Assets\Settings\DefaultVolumeProfile.asset-256-MonoBehaviour:
+--
+Assets\Settings\DefaultVolumeProfile.asset-425-  m_EditorHideFlags: 0
+Assets\Settings\DefaultVolumeProfile.asset-426-  m_Script: {fileID: 0}
+Assets\Settings\DefaultVolumeProfile.asset-427-  m_Name: CopyPasteTestComponent3
+Assets\Settings\DefaultVolumeProfile.asset:428:  m_EditorClassIdentifier: Unity.RenderPipelines.Core.Editor.Tests:UnityEditor.Rendering.Tests:VolumeComponentCopyPasteTests/CopyPasteTestComponent3
+Assets\Settings\DefaultVolumeProfile.asset-429-  active: 1
+Assets\Settings\DefaultVolumeProfile.asset-430-  p1:
+Assets\Settings\DefaultVolumeProfile.asset-431-    m_OverrideState: 1
+--
+Assets\Settings\DefaultVolumeProfile.asset-867-  m_EditorHideFlags: 0
+Assets\Settings\DefaultVolumeProfile.asset-868-  m_Script: {fileID: 0}
+Assets\Settings\DefaultVolumeProfile.asset-869-  m_Name: VolumeComponentSupportedOnAnySRP
+Assets\Settings\DefaultVolumeProfile.asset:870:  m_EditorClassIdentifier: Unity.RenderPipelines.Core.Editor.Tests:UnityEngine.Rendering.Tests:VolumeComponentEditorSupportedOnTests/VolumeComponentSupportedOnAnySRP
+Assets\Settings\DefaultVolumeProfile.asset-871-  active: 1
+Assets\Settings\DefaultVolumeProfile.asset-872---- !u!114 &7173750748008157695
+Assets\Settings\DefaultVolumeProfile.asset-873-MonoBehaviour:
+--
+Assets\Settings\DefaultVolumeProfile.asset-976-  m_EditorHideFlags: 0
+Assets\Settings\DefaultVolumeProfile.asset-977-  m_Script: {fileID: 0}
+Assets\Settings\DefaultVolumeProfile.asset-978-  m_Name: CopyPasteTestComponent1
+Assets\Settings\DefaultVolumeProfile.asset:979:  m_EditorClassIdentifier: Unity.RenderPipelines.Core.Editor.Tests:UnityEditor.Rendering.Tests:VolumeComponentCopyPasteTests/CopyPasteTestComponent1
+Assets\Settings\DefaultVolumeProfile.asset-980-  active: 1
+Assets\Settings\DefaultVolumeProfile.asset-981-  p1:
+Assets\Settings\DefaultVolumeProfile.asset-982-    m_OverrideState: 1
+--
+Assets\Settings\Mobile_Renderer.asset-44-    passOperation: 2
+Assets\Settings\Mobile_Renderer.asset-45-    failOperation: 0
+Assets\Settings\Mobile_Renderer.asset-46-    zFailOperation: 0
+Assets\Settings\Mobile_Renderer.asset:47:  m_ShadowTransparentReceive: 0
+Assets\Settings\Mobile_Renderer.asset-48-  m_RenderingMode: 0
+Assets\Settings\Mobile_Renderer.asset-49-  m_DepthPrimingMode: 0
+Assets\Settings\Mobile_Renderer.asset-50-  m_CopyDepthMode: 0
+--
+Assets\Settings\Mobile_RPAsset.asset-16-  k_AssetPreviousVersion: 13
+Assets\Settings\Mobile_RPAsset.asset-17-  m_RendererType: 1
+Assets\Settings\Mobile_RPAsset.asset-18-  m_RendererData: {fileID: 0}
+Assets\Settings\Mobile_RPAsset.asset:19:  m_RendererDataList:
+Assets\Settings\Mobile_RPAsset.asset-20-  - {fileID: 11400000, guid: 65bc7dbf4170f435aa868c779acfb082, type: 2}
+Assets\Settings\Mobile_RPAsset.asset-21-  m_DefaultRendererIndex: 0
+Assets\Settings\Mobile_RPAsset.asset:22:  m_RequireDepthTexture: 0
+Assets\Settings\Mobile_RPAsset.asset-23-  m_RequireOpaqueTexture: 0
+Assets\Settings\Mobile_RPAsset.asset-24-  m_OpaqueDownsampling: 0
+Assets\Settings\Mobile_RPAsset.asset-25-  m_SupportsTerrainHoles: 1
+Assets\Settings\Mobile_RPAsset.asset:26:  m_SupportsHDR: 1
+Assets\Settings\Mobile_RPAsset.asset-27-  m_HDRColorBufferPrecision: 0
+Assets\Settings\Mobile_RPAsset.asset:28:  m_MSAA: 1
+Assets\Settings\Mobile_RPAsset.asset-29-  m_RenderScale: 0.8
+Assets\Settings\Mobile_RPAsset.asset-30-  m_UpscalingFilter: 0
+Assets\Settings\Mobile_RPAsset.asset-31-  m_FsrOverrideSharpness: 0
+--
+Assets\Settings\Mobile_RPAsset.asset-41-  m_SupportProbeVolumeScenarios: 0
+Assets\Settings\Mobile_RPAsset.asset-42-  m_SupportProbeVolumeScenarioBlending: 0
+Assets\Settings\Mobile_RPAsset.asset-43-  m_ProbeVolumeSHBands: 1
+Assets\Settings\Mobile_RPAsset.asset:44:  m_MainLightRenderingMode: 1
+Assets\Settings\Mobile_RPAsset.asset:45:  m_MainLightShadowsSupported: 1
+Assets\Settings\Mobile_RPAsset.asset:46:  m_MainLightShadowmapResolution: 1024
+Assets\Settings\Mobile_RPAsset.asset:47:  m_AdditionalLightsRenderingMode: 1
+Assets\Settings\Mobile_RPAsset.asset:48:  m_AdditionalLightsPerObjectLimit: 4
+Assets\Settings\Mobile_RPAsset.asset-49-  m_AdditionalLightShadowsSupported: 0
+Assets\Settings\Mobile_RPAsset.asset:50:  m_AdditionalLightsShadowmapResolution: 2048
+Assets\Settings\Mobile_RPAsset.asset:51:  m_AdditionalLightsShadowResolutionTierLow: 256
+Assets\Settings\Mobile_RPAsset.asset:52:  m_AdditionalLightsShadowResolutionTierMedium: 512
+Assets\Settings\Mobile_RPAsset.asset:53:  m_AdditionalLightsShadowResolutionTierHigh: 1024
+Assets\Settings\Mobile_RPAsset.asset-54-  m_ReflectionProbeBlending: 1
+Assets\Settings\Mobile_RPAsset.asset-55-  m_ReflectionProbeBoxProjection: 1
+Assets\Settings\Mobile_RPAsset.asset-56-  m_ReflectionProbeAtlas: 1
+Assets\Settings\Mobile_RPAsset.asset:57:  m_ShadowDistance: 50
+Assets\Settings\Mobile_RPAsset.asset:58:  m_ShadowCascadeCount: 1
+Assets\Settings\Mobile_RPAsset.asset-59-  m_Cascade2Split: 0.25
+Assets\Settings\Mobile_RPAsset.asset-60-  m_Cascade3Split: {x: 0.1, y: 0.3}
+Assets\Settings\Mobile_RPAsset.asset-61-  m_Cascade4Split: {x: 0.067, y: 0.2, z: 0.467}
+Assets\Settings\Mobile_RPAsset.asset-62-  m_CascadeBorder: 0.2
+Assets\Settings\Mobile_RPAsset.asset:63:  m_ShadowDepthBias: 1
+Assets\Settings\Mobile_RPAsset.asset:64:  m_ShadowNormalBias: 1
+Assets\Settings\Mobile_RPAsset.asset-65-  m_AnyShadowsSupported: 1
+Assets\Settings\Mobile_RPAsset.asset-66-  m_SoftShadowsSupported: 0
+Assets\Settings\Mobile_RPAsset.asset-67-  m_ConservativeEnclosingSphere: 1
+Assets\Settings\Mobile_RPAsset.asset-68-  m_NumIterationsEnclosingSphere: 64
+Assets\Settings\Mobile_RPAsset.asset-69-  m_SoftShadowQuality: 2
+Assets\Settings\Mobile_RPAsset.asset:70:  m_AdditionalLightsCookieResolution: 1024
+Assets\Settings\Mobile_RPAsset.asset:71:  m_AdditionalLightsCookieFormat: 1
+Assets\Settings\Mobile_RPAsset.asset:72:  m_UseSRPBatcher: 1
+Assets\Settings\Mobile_RPAsset.asset-73-  m_SupportsDynamicBatching: 0
+Assets\Settings\Mobile_RPAsset.asset-74-  m_MixedLightingSupported: 1
+Assets\Settings\Mobile_RPAsset.asset-75-  m_SupportsLightCookies: 1
+--
+Assets\Settings\Mobile_RPAsset.asset-86-  m_GPUResidentDrawerMode: 0
+Assets\Settings\Mobile_RPAsset.asset-87-  m_SmallMeshScreenPercentage: 0
+Assets\Settings\Mobile_RPAsset.asset-88-  m_GPUResidentDrawerEnableOcclusionCullingInCameras: 0
+Assets\Settings\Mobile_RPAsset.asset:89:  m_ShadowType: 1
+Assets\Settings\Mobile_RPAsset.asset-90-  m_LocalShadowsSupported: 0
+Assets\Settings\Mobile_RPAsset.asset-91-  m_LocalShadowsAtlasResolution: 256
+Assets\Settings\Mobile_RPAsset.asset-92-  m_MaxPixelLights: 0
+Assets\Settings\Mobile_RPAsset.asset:93:  m_ShadowAtlasResolution: 256
+Assets\Settings\Mobile_RPAsset.asset-94-  m_VolumeFrameworkUpdateMode: 0
+Assets\Settings\Mobile_RPAsset.asset-95-  m_VolumeProfile: {fileID: 11400000, guid: 10fc4df2da32a41aaa32d77bc913491c, type: 2}
+Assets\Settings\Mobile_RPAsset.asset-96-  apvScenesData:
+--
+Assets\Settings\Mobile_RPAsset.asset-137-  m_PrefilterReflectionProbeBoxProjection: 0
+Assets\Settings\Mobile_RPAsset.asset-138-  m_PrefilterReflectionProbeAtlas: 0
+Assets\Settings\Mobile_RPAsset.asset-139-  m_ShaderVariantLogLevel: 0
+Assets\Settings\Mobile_RPAsset.asset:140:  m_ShadowCascades: 0
+Assets\Settings\Mobile_RPAsset.asset-141-  m_Textures:
+Assets\Settings\Mobile_RPAsset.asset-142-    blueNoise64LTex: {fileID: 2800000, guid: e3d24661c1e055f45a7560c033dbb837, type: 3}
+Assets\Settings\Mobile_RPAsset.asset-143-    bayerMatrixTex: {fileID: 2800000, guid: f9ee4ed84c1d10c49aabb9b210b0fc44, type: 3}
+--
+ProjectSettings\QualitySettings.asset-47-    asyncUploadBufferSize: 16
+ProjectSettings\QualitySettings.asset-48-    asyncUploadPersistentBuffer: 1
+ProjectSettings\QualitySettings.asset-49-    resolutionScalingFixedDPIFactor: 1
+ProjectSettings\QualitySettings.asset:50:    customRenderPipeline: {fileID: 11400000, guid: 5e6cbd92db86f4b18aec3ed561671858,
+ProjectSettings\QualitySettings.asset-51-      type: 2}
+ProjectSettings\QualitySettings.asset-52-    terrainQualityOverrides: 0
+ProjectSettings\QualitySettings.asset-53-    terrainPixelError: 1
+--
+ProjectSettings\QualitySettings.asset-101-    asyncUploadBufferSize: 16
+ProjectSettings\QualitySettings.asset-102-    asyncUploadPersistentBuffer: 1
+ProjectSettings\QualitySettings.asset-103-    resolutionScalingFixedDPIFactor: 1
+ProjectSettings\QualitySettings.asset:104:    customRenderPipeline: {fileID: 11400000, guid: 4b83569d67af61e458304325a23e5dfd,
+ProjectSettings\QualitySettings.asset-105-      type: 2}
+ProjectSettings\QualitySettings.asset-106-    terrainQualityOverrides: 0
+ProjectSettings\QualitySettings.asset-107-    terrainPixelError: 1
+--
+Assets\Settings\PC_Renderer.asset-52-    passOperation: 2
+Assets\Settings\PC_Renderer.asset-53-    failOperation: 0
+Assets\Settings\PC_Renderer.asset-54-    zFailOperation: 0
+Assets\Settings\PC_Renderer.asset:55:  m_ShadowTransparentReceive: 1
+Assets\Settings\PC_Renderer.asset-56-  m_RenderingMode: 2
+Assets\Settings\PC_Renderer.asset-57-  m_DepthPrimingMode: 0
+Assets\Settings\PC_Renderer.asset-58-  m_CopyDepthMode: 0
+--
+Assets\Settings\PC_RPAsset.asset-16-  k_AssetPreviousVersion: 13
+Assets\Settings\PC_RPAsset.asset-17-  m_RendererType: 1
+Assets\Settings\PC_RPAsset.asset-18-  m_RendererData: {fileID: 0}
+Assets\Settings\PC_RPAsset.asset:19:  m_RendererDataList:
+Assets\Settings\PC_RPAsset.asset-20-  - {fileID: 11400000, guid: f288ae1f4751b564a96ac7587541f7a2, type: 2}
+Assets\Settings\PC_RPAsset.asset-21-  m_DefaultRendererIndex: 0
+Assets\Settings\PC_RPAsset.asset:22:  m_RequireDepthTexture: 1
+Assets\Settings\PC_RPAsset.asset-23-  m_RequireOpaqueTexture: 1
+Assets\Settings\PC_RPAsset.asset-24-  m_OpaqueDownsampling: 1
+Assets\Settings\PC_RPAsset.asset-25-  m_SupportsTerrainHoles: 1
+Assets\Settings\PC_RPAsset.asset:26:  m_SupportsHDR: 1
+Assets\Settings\PC_RPAsset.asset-27-  m_HDRColorBufferPrecision: 0
+Assets\Settings\PC_RPAsset.asset:28:  m_MSAA: 1
+Assets\Settings\PC_RPAsset.asset-29-  m_RenderScale: 1
+Assets\Settings\PC_RPAsset.asset-30-  m_UpscalingFilter: 0
+Assets\Settings\PC_RPAsset.asset-31-  m_FsrOverrideSharpness: 0
+--
+Assets\Settings\PC_RPAsset.asset-41-  m_SupportProbeVolumeScenarios: 0
+Assets\Settings\PC_RPAsset.asset-42-  m_SupportProbeVolumeScenarioBlending: 0
+Assets\Settings\PC_RPAsset.asset-43-  m_ProbeVolumeSHBands: 1
+Assets\Settings\PC_RPAsset.asset:44:  m_MainLightRenderingMode: 1
+Assets\Settings\PC_RPAsset.asset:45:  m_MainLightShadowsSupported: 1
+Assets\Settings\PC_RPAsset.asset:46:  m_MainLightShadowmapResolution: 2048
+Assets\Settings\PC_RPAsset.asset:47:  m_AdditionalLightsRenderingMode: 1
+Assets\Settings\PC_RPAsset.asset:48:  m_AdditionalLightsPerObjectLimit: 4
+Assets\Settings\PC_RPAsset.asset-49-  m_AdditionalLightShadowsSupported: 1
+Assets\Settings\PC_RPAsset.asset:50:  m_AdditionalLightsShadowmapResolution: 2048
+Assets\Settings\PC_RPAsset.asset:51:  m_AdditionalLightsShadowResolutionTierLow: 256
+Assets\Settings\PC_RPAsset.asset:52:  m_AdditionalLightsShadowResolutionTierMedium: 512
+Assets\Settings\PC_RPAsset.asset:53:  m_AdditionalLightsShadowResolutionTierHigh: 1024
+Assets\Settings\PC_RPAsset.asset-54-  m_ReflectionProbeBlending: 1
+Assets\Settings\PC_RPAsset.asset-55-  m_ReflectionProbeBoxProjection: 1
+Assets\Settings\PC_RPAsset.asset-56-  m_ReflectionProbeAtlas: 1
+Assets\Settings\PC_RPAsset.asset:57:  m_ShadowDistance: 50
+Assets\Settings\PC_RPAsset.asset:58:  m_ShadowCascadeCount: 4
+Assets\Settings\PC_RPAsset.asset-59-  m_Cascade2Split: 0.25
+Assets\Settings\PC_RPAsset.asset-60-  m_Cascade3Split: {x: 0.1, y: 0.3}
+Assets\Settings\PC_RPAsset.asset-61-  m_Cascade4Split: {x: 0.12299999, y: 0.2926, z: 0.53599995}
+Assets\Settings\PC_RPAsset.asset-62-  m_CascadeBorder: 0.107758604
+Assets\Settings\PC_RPAsset.asset:63:  m_ShadowDepthBias: 0.1
+Assets\Settings\PC_RPAsset.asset:64:  m_ShadowNormalBias: 0.5
+Assets\Settings\PC_RPAsset.asset-65-  m_AnyShadowsSupported: 1
+Assets\Settings\PC_RPAsset.asset-66-  m_SoftShadowsSupported: 1
+Assets\Settings\PC_RPAsset.asset-67-  m_ConservativeEnclosingSphere: 1
+Assets\Settings\PC_RPAsset.asset-68-  m_NumIterationsEnclosingSphere: 64
+Assets\Settings\PC_RPAsset.asset-69-  m_SoftShadowQuality: 3
+Assets\Settings\PC_RPAsset.asset:70:  m_AdditionalLightsCookieResolution: 2048
+Assets\Settings\PC_RPAsset.asset:71:  m_AdditionalLightsCookieFormat: 3
+Assets\Settings\PC_RPAsset.asset:72:  m_UseSRPBatcher: 1
+Assets\Settings\PC_RPAsset.asset-73-  m_SupportsDynamicBatching: 0
+Assets\Settings\PC_RPAsset.asset-74-  m_MixedLightingSupported: 1
+Assets\Settings\PC_RPAsset.asset-75-  m_SupportsLightCookies: 1
+--
+Assets\Settings\PC_RPAsset.asset-86-  m_GPUResidentDrawerMode: 0
+Assets\Settings\PC_RPAsset.asset-87-  m_SmallMeshScreenPercentage: 0
+Assets\Settings\PC_RPAsset.asset-88-  m_GPUResidentDrawerEnableOcclusionCullingInCameras: 0
+Assets\Settings\PC_RPAsset.asset:89:  m_ShadowType: 1
+Assets\Settings\PC_RPAsset.asset-90-  m_LocalShadowsSupported: 0
+Assets\Settings\PC_RPAsset.asset-91-  m_LocalShadowsAtlasResolution: 256
+Assets\Settings\PC_RPAsset.asset-92-  m_MaxPixelLights: 0
+Assets\Settings\PC_RPAsset.asset:93:  m_ShadowAtlasResolution: 256
+Assets\Settings\PC_RPAsset.asset-94-  m_VolumeFrameworkUpdateMode: 0
+Assets\Settings\PC_RPAsset.asset-95-  m_VolumeProfile: {fileID: 11400000, guid: 10fc4df2da32a41aaa32d77bc913491c, type: 2}
+Assets\Settings\PC_RPAsset.asset-96-  apvScenesData:
+--
+Assets\Settings\PC_RPAsset.asset-137-  m_PrefilterReflectionProbeBoxProjection: 0
+Assets\Settings\PC_RPAsset.asset-138-  m_PrefilterReflectionProbeAtlas: 0
+Assets\Settings\PC_RPAsset.asset-139-  m_ShaderVariantLogLevel: 0
+Assets\Settings\PC_RPAsset.asset:140:  m_ShadowCascades: 0
+Assets\Settings\PC_RPAsset.asset-141-  m_Textures:
+Assets\Settings\PC_RPAsset.asset-142-    blueNoise64LTex: {fileID: 2800000, guid: e3d24661c1e055f45a7560c033dbb837, type: 3}
+Assets\Settings\PC_RPAsset.asset-143-    bayerMatrixTex: {fileID: 2800000, guid: f9ee4ed84c1d10c49aabb9b210b0fc44, type: 3}
+--
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-10-  m_Enabled: 1
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-11-  m_EditorHideFlags: 0
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-12-  m_Script: {fileID: 11500000, guid: 2ec995e51a6e251468d2a3fd8a686257, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:13:  m_Name: UniversalRenderPipelineGlobalSettings
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-14-  m_EditorClassIdentifier: 
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-15-  m_ShaderStrippingSetting:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-16-    m_Version: 0
+--
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-100-    version: 2
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-101-    RefIds:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-102-    - rid: 6852985685364965376
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:103:      type: {class: URPShaderStrippingSetting, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-104-      data:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-105-        m_Version: 0
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-106-        m_StripUnusedPostProcessingVariants: 1
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-107-        m_StripUnusedVariants: 1
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-108-        m_StripScreenCoordOverrideVariants: 1
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-109-    - rid: 6852985685364965377
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:110:      type: {class: UniversalRenderPipelineEditorShaders, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-111-      data:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-112-        m_AutodeskInteractive: {fileID: 4800000, guid: 0e9d5a909a1f7e84882a534d0d11e49f, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-113-        m_AutodeskInteractiveTransparent: {fileID: 4800000, guid: 5c81372d981403744adbdda4433c9c11, type: 3}
+--
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-116-        m_DefaultSpeedTree8Shader: {fileID: -6465566751694194690, guid: 9920c1f1781549a46ba081a2a15a16ec, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-117-        m_DefaultSpeedTree9Shader: {fileID: -6465566751694194690, guid: cbd3e1cc4ae141c42a30e33b4d666a61, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-118-    - rid: 6852985685364965378
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:119:      type: {class: UniversalRendererResources, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-120-      data:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-121-        m_Version: 0
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-122-        m_CopyDepthPS: {fileID: 4800000, guid: d6dae50ee9e1bfa4db75f19f99355220, type: 3}
+--
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-126-        m_StencilDitherMaskSeedPS: {fileID: 4800000, guid: 8c3ee818f2efa514c889881ccb2e95a2, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-127-        m_DBufferClear: {fileID: 4800000, guid: f056d8bd2a1c7e44e9729144b4c70395, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-128-    - rid: 6852985685364965379
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:129:      type: {class: UniversalRenderPipelineDebugShaders, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-130-      data:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-131-        m_DebugReplacementPS: {fileID: 4800000, guid: cf852408f2e174538bcd9b7fda1c5ae7, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-132-        m_HdrDebugViewPS: {fileID: 4800000, guid: 573620ae32aec764abd4d728906d2587, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-133-        m_ProbeVolumeSamplingDebugComputeShader: {fileID: 7200000, guid: 53626a513ea68ce47b59dc1299fe3959, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-134-    - rid: 6852985685364965380
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:135:      type: {class: UniversalRenderPipelineRuntimeShaders, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-136-      data:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-137-        m_Version: 0
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-138-        m_FallbackErrorShader: {fileID: 4800000, guid: e6e9a19c3678ded42a3bc431ebef7dbd, type: 3}
+--
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-144-        m_TerrainDetailGrassBillboard: {fileID: 0}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-145-        m_TerrainDetailGrass: {fileID: 0}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-146-    - rid: 6852985685364965381
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:147:      type: {class: UniversalRenderPipelineRuntimeTextures, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-148-      data:
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-149-        m_Version: 1
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-150-        m_BlueNoise64LTex: {fileID: 2800000, guid: e3d24661c1e055f45a7560c033dbb837, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-151-        m_BayerMatrixTex: {fileID: 2800000, guid: f9ee4ed84c1d10c49aabb9b210b0fc44, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-152-        m_DebugFontTex: {fileID: 2800000, guid: 26a413214480ef144b2915d6ff4d0beb, type: 3}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-153-    - rid: 6852985685364965382
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset:154:      type: {class: Renderer2DResources, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
+Assets\Settings\UniversalRenderPipelineGlobalSettings.asset-155-      data:
+
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+codex
+렌더 설정은 확인됐습니다. Android는 `Vulkan → OpenGLES3` 명시 순서지만 GLES 3.1/3.2 요구 플래그가 모두 꺼져 있고 min SDK 25이므로, GLES 3.0·비-compute 기기를 현재 제품 범위에서 제외하지 않습니다. 따라서 indirect 단일 경로는 floor 계약이 될 수 없고 capability gate와 GLES3 fallback이 필수라는 쪽으로 증거가 모였습니다.
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+collab: Wait
+세 조사 결과를 서로 다른 조사자가 교차확인했으며, 프로젝트 근거와 외삽을 분리해 최종 판정을 확정했습니다.
+  ✓ ProjectSettings·URP 렌더 경로 제약 조사
+  ✓ AgentBuffer·GameplayRoot 메모리/틱 비용 조사
+  ✓ DESIGN 결정성 계약 및 플랫폼 외삽 분석
+  ✓ 독립 교차검증 후 1~6 최종 판정
+codex
+전제: 아래 **B 판정은 “10,000명이 논리적으로 시뮬레이션에 존재하되, 동시 렌더·고비용 행동 수는 상한으로 제한”**하는 경우다. 10,000명 전원 동시 가시·애니메이션이 요구되면 판정은 C로 바뀐다.
+
+### 1. 최약 기기 렌더 경로
+
+**결론: GLES3.0 fallback이 필수다.**
+
+- Android API는 자동 선택이 아니라 `Vulkan → OpenGLES3` 명시 목록이다([ProjectSettings.asset:535](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:535)).
+- GLES 3.1/AEP/3.2 요구가 모두 꺼져 있어 GLES3.0 기기가 포함된다([ProjectSettings.asset:541](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:541)).
+- Android min SDK는 API 25다([ProjectSettings.asset:179](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:179)). 이는 GPU/compute 하한도, 2021년 이후 기기라는 보장도 아니다.
+- iOS는 Metal 자동 선택, 최소 iOS 15다([ProjectSettings.asset:532](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:532), [ProjectSettings.asset:197](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:197)).
+- URP 17.3.0이며([manifest.json:13](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/manifest.json:13)), 모바일 URP는 render scale 0.8, SRP Batcher on이다([Mobile_RPAsset.asset:29](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/Settings/Mobile_RPAsset.asset:29), [Mobile_RPAsset.asset:72](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/Settings/Mobile_RPAsset.asset:72)).
+
+정확히는 `RenderMeshIndirect`가 compute shader를 직접 dispatch해야 한다는 뜻이 아니라, **compute/indirect capability를 지원하는 플랫폼에서만 동작**한다는 제약이다([Unity 문서](https://docs.unity3d.com/6000.3/Documentation/ScriptReference/Graphics.RenderMeshIndirect.html)). 따라서 `supportsComputeShaders`, `supportsIndirectArgumentsBuffer`, `supportsInstancing` 게이트가 필요하다.
+
+BRG의 정확한 GLES 하한은 Unity 6.3 문서가 Android OpenGL ES 3.x로 표기해 “무조건 3.1+”라고 단정하기 어렵다([Unity BRG 문서](https://docs.unity3d.com/6000.3/Documentation/Manual/batch-renderer-group-how.html)). 그러나 프로젝트의 BRG 셰이더·드라이버 호환 및 fallback 구현은 확인되지 않았으므로 **GLES3.0 floor 경로로 인정할 수 없다**. 보수적 fallback은 CPU culling 후 `RenderMeshInstanced` 또는 `DrawMeshInstanced+MPB` 분할 제출이다.
+
+### 2. 필요한 최소 티어
+
+**T3 단독으로는 불충분하며, T4급 workload bounding이 필수다.**
+
+일반지식·외삽상 indirect rigid instancing은 draw-call CPU 비용만 줄인다. 10,000명의 vertex/fragment, overdraw, 대역폭, 발열은 제한하지 못한다. 따라서 다음이 필요하다.
+
+- multi-LOD
+- aggressive frustum/distance culling
+- visible-density hard cap
+- behavior/update LOD
+- 저가 티어의 rigid/billboard/impostor 또는 비표시 집계
+
+VAT 자체는 필수가 아니다. 저가 GPU에서는 texture bandwidth를 늘릴 수 있으므로 애니메이션 품질이 필요할 때 near/mid LOD에만 선택 적용하는 편이 안전하다.
+
+현재 문서의 검증 범위는 154명과 154 SMR/Animator뿐이라 10k 근거가 아니다([DESIGN.md:88](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:88), [DESIGN.md:109](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:109)).
+
+### 3. 크로스 OS 결정성
+
+**현 싱글플레이에는 AOS/iOS 간 bit-identical이 불필요하며 보장되지도 않는다.**
+
+계약은 “동일 초기 상태 + 동일 step 입력 → 동일 outcome”인 kernel-internal 결정성이고, 문서가 명시적으로 `no cross-run replay claim`이라고 제한한다([DESIGN.md:66](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:66)). 실제 위치도 Transform/`CharacterController.Move` 결과를 mirror하는 구조다([DESIGN.md:36](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:36), [DESIGN.md:79](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:79)).
+
+- 단순 리더보드: bit-identical보다 서버 검증·위변조 방지가 중요.
+- 서버 재시뮬레이션/입력-only replay/lockstep: 고정소수점 또는 양자화, 안정 정렬, 결정적 RNG, 데이터·커널 버전 고정, checksum이 필요.
+- snapshot replay/server-authoritative multiplayer: 클라이언트 bit-identical은 필수 아님. 보정·snapshot 동기화 필요.
+- P2P/lockstep/rollback 재시뮬레이션: cross-ISA 결정성 게이트가 필수.
+
+### 4. 지속 발열·메모리·tick
+
+현재 `AgentBuffer`는 목표 NativeArray가 아니라 관리 배열 5개의 SoA다: `Id:int`, `Team:int`, `IsLeader:bool`, `Pos:Vector2`, `Scale:float`([AgentBuffer.cs:21](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/AgentBuffer.cs:21)).
+
+순수 원소 payload:
+
+- agent당 `4+4+1+8+4 = 21B`
+- 10k: 210,000B ≈ 205KiB
+- 50k: 1,050,000B ≈ 1.00MiB
+- `uint` RNG를 추가하면 각각 약 244KiB / 1.19MiB
+
+배열 헤더·정렬, 이전 위치, spatial grid, job scratch, visible index, GPU buffer, mesh/texture는 제외다. 즉 AgentBuffer 자체보다 렌더 데이터·공간질의·에셋이 실제 메모리 위험이다.
+
+GameplayRoot는 0.02초=50Hz, 프레임당 최대 4 step이다([GameplayRoot.cs:12](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:12), [GameplayRoot.cs:176](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:176)).
+
+- 30fps에서 평균 1.67 tick/frame
+- 10k: 최소 약 500k agent-step/s, hitch 시 한 프레임 40k step
+- 50k: 약 2.5M agent-step/s, 한 프레임 peak 200k step
+- 80ms 초과 backlog는 버리므로 spiral은 제한하지만 wall-clock 진행은 보장하지 않는다([GameplayRoot.cs:186](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:186)).
+
+**일반지식·외삽:** 50Hz 전체 행동 갱신은 유지하면 안 된다. 렌더와 sim을 분리하고, 근거리/중요 agent만 높은 주기, 원거리·집단은 낮은 behavior tick으로 처리해야 한다. mesh vertex·texture residency·visible count의 티어별 hard budget과 저가 실기기 장시간 thermal soak가 필수다. 구체 예산값은 현재 프로젝트에서 확인 불가다.
+
+### 5. “1만 floor 구조” 최소 스펙
+
+**필수**
+
+- `NativeArray` SoA + Burst + Jobs, bounded spatial grid/query
+- 모든 10k agent의 GameObject/Animator/SMR/CC 제거
+- render/sim 분리 및 multi-rate behavior LOD
+- capability-gated indirect/instancing 주 경로와 GLES3.0 instancing fallback
+- multi-LOD, frustum/distance culling, visible hard cap
+- 셀별 상호작용 상한 또는 결정적 집계로 밀집 지역의 O(N²) 방지
+- mesh/texture/GPU-buffer 예산과 최약 기기 thermal acceptance gate
+
+이를 빼면 각각 CPU, draw 가용성, fill-rate/발열, 밀집 상호작용 중 하나가 무제한이 되어 weakest-device floor가 깨진다.
+
+**조건부 필수**
+
+- 확률 행동이 있으면 agent별 또는 counter-based RNG. Job 실행 순서와 무관해야 한다.
+- 입력 replay/재시뮬레이션/lockstep이 있으면 cross-ISA 결정성 게이트.
+
+**선택**
+
+- VAT, GPU compute culling, BRG, occlusion culling.
+- 특히 VAT와 BRG는 품질·상위 capability 경로이지 GLES3.0 floor의 필수 기반은 아니다.
+
+### 6. 최종 판정
+
+**B — 조건부.** 논리 population 10k를 T4급 LOD·컬링·behavior LOD·밀도 cap으로 상한 고정하고, 비-compute fallback과 장시간 실기기 인증을 붙이면 현실적인 목표다. **최대 리스크는 “10k”를 전원 동시 가시로 해석하는 것**이며, 그 요구라면 C다.
+
+변경 파일은 없으며, 신규 ownership/state/communication 결정도 없다. 프로젝트 설정·코드·문서는 교차검증했지만 실제 Android/iOS 빌드, fallback 구현, 장시간 실기 프로파일은 확인 불가다.
+
+### 합의 후보
+
+- 10k는 “논리적 활성 population”으로 정의하고 동시 visible 수에는 티어별 hard cap을 둔다.
+- 최소 티어는 VAT 고정 T4가 아니라 **T4급 workload bounding**이며 VAT는 선택 사항이다.
+- indirect 경로와 GLES3.0 instanced fallback을 함께 제공하고 런타임 capability로 선택한다.
+- 현 managed `AgentBuffer`를 NativeArray SoA+Burst+Jobs로 교체해야 목표 구조가 성립한다.
+- 싱글플레이 결정성은 kernel-internal로 제한하고, replay/lockstep 도입 시 별도 cross-ISA 게이트를 연다.
+- “보장”은 Mali-G52/Adreno 610급 포함 장시간 thermal/device matrix를 통과한 뒤에만 선언한다.
+tokens used
+90,148
+전제: 아래 **B 판정은 “10,000명이 논리적으로 시뮬레이션에 존재하되, 동시 렌더·고비용 행동 수는 상한으로 제한”**하는 경우다. 10,000명 전원 동시 가시·애니메이션이 요구되면 판정은 C로 바뀐다.
+
+### 1. 최약 기기 렌더 경로
+
+**결론: GLES3.0 fallback이 필수다.**
+
+- Android API는 자동 선택이 아니라 `Vulkan → OpenGLES3` 명시 목록이다([ProjectSettings.asset:535](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:535)).
+- GLES 3.1/AEP/3.2 요구가 모두 꺼져 있어 GLES3.0 기기가 포함된다([ProjectSettings.asset:541](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:541)).
+- Android min SDK는 API 25다([ProjectSettings.asset:179](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:179)). 이는 GPU/compute 하한도, 2021년 이후 기기라는 보장도 아니다.
+- iOS는 Metal 자동 선택, 최소 iOS 15다([ProjectSettings.asset:532](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:532), [ProjectSettings.asset:197](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/ProjectSettings/ProjectSettings.asset:197)).
+- URP 17.3.0이며([manifest.json:13](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/manifest.json:13)), 모바일 URP는 render scale 0.8, SRP Batcher on이다([Mobile_RPAsset.asset:29](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/Settings/Mobile_RPAsset.asset:29), [Mobile_RPAsset.asset:72](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/Settings/Mobile_RPAsset.asset:72)).
+
+정확히는 `RenderMeshIndirect`가 compute shader를 직접 dispatch해야 한다는 뜻이 아니라, **compute/indirect capability를 지원하는 플랫폼에서만 동작**한다는 제약이다([Unity 문서](https://docs.unity3d.com/6000.3/Documentation/ScriptReference/Graphics.RenderMeshIndirect.html)). 따라서 `supportsComputeShaders`, `supportsIndirectArgumentsBuffer`, `supportsInstancing` 게이트가 필요하다.
+
+BRG의 정확한 GLES 하한은 Unity 6.3 문서가 Android OpenGL ES 3.x로 표기해 “무조건 3.1+”라고 단정하기 어렵다([Unity BRG 문서](https://docs.unity3d.com/6000.3/Documentation/Manual/batch-renderer-group-how.html)). 그러나 프로젝트의 BRG 셰이더·드라이버 호환 및 fallback 구현은 확인되지 않았으므로 **GLES3.0 floor 경로로 인정할 수 없다**. 보수적 fallback은 CPU culling 후 `RenderMeshInstanced` 또는 `DrawMeshInstanced+MPB` 분할 제출이다.
+
+### 2. 필요한 최소 티어
+
+**T3 단독으로는 불충분하며, T4급 workload bounding이 필수다.**
+
+일반지식·외삽상 indirect rigid instancing은 draw-call CPU 비용만 줄인다. 10,000명의 vertex/fragment, overdraw, 대역폭, 발열은 제한하지 못한다. 따라서 다음이 필요하다.
+
+- multi-LOD
+- aggressive frustum/distance culling
+- visible-density hard cap
+- behavior/update LOD
+- 저가 티어의 rigid/billboard/impostor 또는 비표시 집계
+
+VAT 자체는 필수가 아니다. 저가 GPU에서는 texture bandwidth를 늘릴 수 있으므로 애니메이션 품질이 필요할 때 near/mid LOD에만 선택 적용하는 편이 안전하다.
+
+현재 문서의 검증 범위는 154명과 154 SMR/Animator뿐이라 10k 근거가 아니다([DESIGN.md:88](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:88), [DESIGN.md:109](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:109)).
+
+### 3. 크로스 OS 결정성
+
+**현 싱글플레이에는 AOS/iOS 간 bit-identical이 불필요하며 보장되지도 않는다.**
+
+계약은 “동일 초기 상태 + 동일 step 입력 → 동일 outcome”인 kernel-internal 결정성이고, 문서가 명시적으로 `no cross-run replay claim`이라고 제한한다([DESIGN.md:66](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:66)). 실제 위치도 Transform/`CharacterController.Move` 결과를 mirror하는 구조다([DESIGN.md:36](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:36), [DESIGN.md:79](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Docs/CrowdCity/DESIGN.md:79)).
+
+- 단순 리더보드: bit-identical보다 서버 검증·위변조 방지가 중요.
+- 서버 재시뮬레이션/입력-only replay/lockstep: 고정소수점 또는 양자화, 안정 정렬, 결정적 RNG, 데이터·커널 버전 고정, checksum이 필요.
+- snapshot replay/server-authoritative multiplayer: 클라이언트 bit-identical은 필수 아님. 보정·snapshot 동기화 필요.
+- P2P/lockstep/rollback 재시뮬레이션: cross-ISA 결정성 게이트가 필수.
+
+### 4. 지속 발열·메모리·tick
+
+현재 `AgentBuffer`는 목표 NativeArray가 아니라 관리 배열 5개의 SoA다: `Id:int`, `Team:int`, `IsLeader:bool`, `Pos:Vector2`, `Scale:float`([AgentBuffer.cs:21](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/AgentBuffer.cs:21)).
+
+순수 원소 payload:
+
+- agent당 `4+4+1+8+4 = 21B`
+- 10k: 210,000B ≈ 205KiB
+- 50k: 1,050,000B ≈ 1.00MiB
+- `uint` RNG를 추가하면 각각 약 244KiB / 1.19MiB
+
+배열 헤더·정렬, 이전 위치, spatial grid, job scratch, visible index, GPU buffer, mesh/texture는 제외다. 즉 AgentBuffer 자체보다 렌더 데이터·공간질의·에셋이 실제 메모리 위험이다.
+
+GameplayRoot는 0.02초=50Hz, 프레임당 최대 4 step이다([GameplayRoot.cs:12](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:12), [GameplayRoot.cs:176](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:176)).
+
+- 30fps에서 평균 1.67 tick/frame
+- 10k: 최소 약 500k agent-step/s, hitch 시 한 프레임 40k step
+- 50k: 약 2.5M agent-step/s, 한 프레임 peak 200k step
+- 80ms 초과 backlog는 버리므로 spiral은 제한하지만 wall-clock 진행은 보장하지 않는다([GameplayRoot.cs:186](/D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs:186)).
+
+**일반지식·외삽:** 50Hz 전체 행동 갱신은 유지하면 안 된다. 렌더와 sim을 분리하고, 근거리/중요 agent만 높은 주기, 원거리·집단은 낮은 behavior tick으로 처리해야 한다. mesh vertex·texture residency·visible count의 티어별 hard budget과 저가 실기기 장시간 thermal soak가 필수다. 구체 예산값은 현재 프로젝트에서 확인 불가다.
+
+### 5. “1만 floor 구조” 최소 스펙
+
+**필수**
+
+- `NativeArray` SoA + Burst + Jobs, bounded spatial grid/query
+- 모든 10k agent의 GameObject/Animator/SMR/CC 제거
+- render/sim 분리 및 multi-rate behavior LOD
+- capability-gated indirect/instancing 주 경로와 GLES3.0 instancing fallback
+- multi-LOD, frustum/distance culling, visible hard cap
+- 셀별 상호작용 상한 또는 결정적 집계로 밀집 지역의 O(N²) 방지
+- mesh/texture/GPU-buffer 예산과 최약 기기 thermal acceptance gate
+
+이를 빼면 각각 CPU, draw 가용성, fill-rate/발열, 밀집 상호작용 중 하나가 무제한이 되어 weakest-device floor가 깨진다.
+
+**조건부 필수**
+
+- 확률 행동이 있으면 agent별 또는 counter-based RNG. Job 실행 순서와 무관해야 한다.
+- 입력 replay/재시뮬레이션/lockstep이 있으면 cross-ISA 결정성 게이트.
+
+**선택**
+
+- VAT, GPU compute culling, BRG, occlusion culling.
+- 특히 VAT와 BRG는 품질·상위 capability 경로이지 GLES3.0 floor의 필수 기반은 아니다.
+
+### 6. 최종 판정
+
+**B — 조건부.** 논리 population 10k를 T4급 LOD·컬링·behavior LOD·밀도 cap으로 상한 고정하고, 비-compute fallback과 장시간 실기기 인증을 붙이면 현실적인 목표다. **최대 리스크는 “10k”를 전원 동시 가시로 해석하는 것**이며, 그 요구라면 C다.
+
+변경 파일은 없으며, 신규 ownership/state/communication 결정도 없다. 프로젝트 설정·코드·문서는 교차검증했지만 실제 Android/iOS 빌드, fallback 구현, 장시간 실기 프로파일은 확인 불가다.
+
+### 합의 후보
+
+- 10k는 “논리적 활성 population”으로 정의하고 동시 visible 수에는 티어별 hard cap을 둔다.
+- 최소 티어는 VAT 고정 T4가 아니라 **T4급 workload bounding**이며 VAT는 선택 사항이다.
+- indirect 경로와 GLES3.0 instanced fallback을 함께 제공하고 런타임 capability로 선택한다.
+- 현 managed `AgentBuffer`를 NativeArray SoA+Burst+Jobs로 교체해야 목표 구조가 성립한다.
+- 싱글플레이 결정성은 kernel-internal로 제한하고, replay/lockstep 도입 시 별도 cross-ISA 게이트를 연다.
+- “보장”은 Mali-G52/Adreno 610급 포함 장시간 thermal/device matrix를 통과한 뒤에만 선언한다.

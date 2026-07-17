@@ -1,0 +1,20 @@
+역할: AF_CrowdCity crowd 확장의 "최소 변경 티어별 실효 상한 개체수"를 코드 근거로 추정하는 독립 검증자. (라운드1~3에서 이미 합의: 목표=모바일 중급 만단위, 판정=NativeArray SoA+Burst+Job(DOTS 아님)+GPU instancing 렌더, binding constraint=per-agent GameObject/Animator/SkinnedMeshRenderer/bone Transform 스택, sim 커널은 상대적으로 저렴.)
+
+사용자 신규 질문: **"최소 변경으로는 몇 명까지 가능한가?"**
+
+아래 변경 티어 각각에 대해 **모바일 중급(Android/iOS) 실효 동시 개체 상한**을 추정하라. 모든 수치는 실기 프로파일 부재이므로 **반드시 "외삽"으로 명시**하고, 각 티어의 상한을 만드는 **binding constraint(무엇이 먼저 막는가)**를 코드 근거로 밝혀라. 현 하네스는 800명·headless·렌더/애니 제외 측정뿐임을 전제로.
+
+티어(최소→최대 변경):
+- **T0 변경 없음**: 현 상태(agent당 GameObject + Animator + SkinnedMeshRenderer + 45 Transform + baked CC).
+- **T1 sim만 최소 변경**: AgentBuffer/grid/combat/recruit를 NativeArray+Burst+IJobParallelFor로 이식·병렬화. **렌더/애니/GameObject 스택은 T0 그대로**. → 질문: 이 티어가 실효 상한(화면에 그릴 수 있는 수)을 실제로 올리는가, 아니면 렌더 bound라 거의 안 오르는가?
+- **T2 렌더 경량화(중간 변경)**: Animator 제거 + SkinnedMeshRenderer→rigid low-poly mesh + GPU instancing(MaterialPropertyBlock/DrawMeshInstanced), 단 GameObject+Transform 1개/agent는 유지. CC 제거(SDF가 대체).
+- **T3 GameObject 제거**: 순수 NativeArray sim + Graphics.RenderMeshIndirect(rigid mesh, VAT 없이 단순/무 애니). GameObject/Transform/Animator/SMR/CC 전부 제거.
+- **T4 풀 재설계**: T3 + baked VAT 고품질 애니 + multi-LOD + culling.
+
+각 티어에 대해: (a) 추정 상한 개체수(범위, 외삽), (b) binding constraint(코드 근거 파일:라인), (c) 대략적 작업량(소/중/대).
+
+추가로 명확히: **어느 티어에서 처음으로 1만(모바일)에 도달하는가?** 그리고 "최소 변경으로 몇까지"의 정직한 1~2줄 결론.
+
+조사: 필요한 코드만 재확인(Human.prefab 렌더 구성, CrowdRoot Instantiate/Transform 갱신, 커널). 추측 금지, 확인 불가는 명시.
+
+출력(간결): 티어 T0~T4 표(상한/constraint/작업량) + "1만 도달 티어" + 정직한 결론. 마지막 "합의 후보" 3~5개.

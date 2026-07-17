@@ -1,0 +1,18 @@
+역할: 너는 유니티 시니어 게임 프로그래머다. 이 저장소(AF_CrowdCity, 브랜치 feat/crowd-sdf-perf)의 실제 코드를 읽고, "유니티 초보자도 이해할 수 있게" 아래를 설명하라. 추측 금지 — 반드시 실제 소스 파일에서 근거를 찾아 파일경로:라인으로 인용하라.
+
+배경(이미 알려진 사실, 그러나 반드시 코드로 재확인할 것):
+- crowd(군중) 이동이 기존에는 UnityEngine.CharacterController.Move(PhysX 캡슐 sweep) 기반이었고, 프로파일상 crowd Update의 ~94%가 CC.Move 물리였다.
+- 최근 커밋 b7739ce에서 이동을 결정적(deterministic) 2D SDF(Signed Distance Field, 부호거리장) 기반 WallSolver로 "대체 가능"하게 만들었고, CrowdRoot의 _useSdfSolver 스위치로 전환한다.
+- 순수 커널(grid/recruit/combat) 계산은 전체의 ~1.1% 밖에 안 됐다.
+
+설명해야 할 것:
+1. 현재 crowd들이 실제로 어떻게 움직이는가? (SDF 솔버 경로와 CC 경로 둘 다) — 관련 핵심 파일/클래스/메서드(CrowdRoot, WallSolver, SDF 데이터 에셋, Crowd/Core asmdef 등)를 찾아 흐름을 설명.
+2. 기존 CharacterController 방식과 무엇이 다른가? CharacterController.Move가 내부적으로 뭘 하는지(캡슐 sweep, depenetration, 벽 슬라이딩, skinWidth), 그리고 SDF 방식은 그 중 무엇을 어떻게 대체하는지.
+3. 왜 연산이 빨라졌는가? SDF/거리장 조회가 왜 캡슐 sweep보다 저렴한지, 물리엔진 왕복/PhysX 브로드페이즈-내로우페이즈 비용, 결정성이 성능과 무슨 관계인지.
+4. 초보자용 비유 1~2개 (예: 캡슐 sweep = 매 프레임 벽을 실제로 밀어보며 부딪혀보기 / SDF = 미리 만든 "벽까지 거리 지도" 즉석 조회).
+
+주의:
+- 실제 코드와 다르면 커밋 메시지 주장보다 코드를 우선하라. 커밋 메시지에만 있고 코드로 확인 안 되는 수치(예: 12.3배, 3.9mm)는 "커밋 메시지 주장, 코드미확인"으로 명시.
+- SDF 솔버가 기본 ON인지 OFF인지 prefab/직렬화 값 기준으로 확인.
+- 남아있는 물리(spawn CheckSphere, neutral/rival Raycast 등)가 있으면 언급.
+- 한국어로, 초보자 친화적으로. 마지막에 "핵심 3줄 요약"을 넣어라.

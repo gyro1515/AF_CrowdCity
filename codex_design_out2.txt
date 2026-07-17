@@ -1,0 +1,1525 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.3
+--------
+workdir: D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 019f673e-9c6f-7331-93fe-a35c52de1c97
+--------
+user
+너는 유니티 시니어 퍼포먼스 엔지니어다. AF_CrowdCity(브랜치 Refactor_PrefabTreeStruct_260715)의 crowd 시뮬레이션 병목을 캐시 친화적으로 재설계하는 설계안을 작성하라. 다음 코드를 정독하라: Game/Scripts/GameplayRoot.cs, Crowd/Scripts/CrowdRoot.cs, Crowd/Core/(AgentBuffer/CombatResolver/RecruitResolver/FollowerSteering/MatchRules/SimTuning/SpatialGrid).
+배경: neutralCount 기본 800. 약한 CPU에선 500도 버벅, 300은 원활. 병목 99%가 GameplayRoot.Update()의 crowd 연산. 목표는 Update crowd 연산을 완전 캐시 친화적으로 재구조화(unsafe struct SoA 배열 순회, 또는 DOTS; AoS/SoA 적합하면 멀티스레드 IJobParallelFor 허용, 필요시 UniTask). 최우선 제약은 결정론·동작 동일성(EditMode CombatResolver 26/26·RecruitResolver 6/6 유지, RejectionRate/스냅샷 동일, rng 소비 순서·CheckSphere·이벤트 발행 순서 불변). 환경: Unity 6000.3.9f1, Burst 1.8.28/Collections 2.6.2/Mathematics 1.3.3 설치(URP 전이 의존성), Jobs/Entities/UniTask 미설치, allowUnsafeCode=0, IL2CPP(Android), .NET Standard 2.1.
+설계안에 포함하라: (1)병목 진단(무거운 연산·복잡도·캐시 비친화 원인; CharacterController.Move/Transform 패스 비중도 평가), (2)데이터 레이아웃 재설계(현재 AoS/SoA 판별 후 NativeArray/unsafe struct, 선형 접근, 할당 제거), (3)연산 커널 재설계(Burst 적용 범위, IJob vs IJobParallelFor, 멀티스레드 시 결정론 위험 평가), (4)결정론 보존 전략(현재 불변식 유지, Burst FloatMode), (5)접근법 선택+근거(Jobs+Burst+NativeArray vs DOTS vs 순수 unsafe배열; 권장안과 이유; UniTask 필요성), (6)필요 패키지/설정(manifest, allowUnsafeCode, asmdef), (7)헤드리스 성능 측정(Update 연산 시간 ms/tick을 batchmode Stopwatch로 측정 가능한지, neutralCount 스케일별 전/후 비교, 안정적 60fps 최대 neutralCount 추정법), (8)단계적 구현 계획+각 단계 결정론 게이트, (9)리스크.
+결론을 [권장 접근법+근거]/[병목 진단]/[데이터 레이아웃]/[커널·멀티스레드]/[결정론 전략]/[필요 패키지]/[성능 측정법]/[구현 단계]/[리스크] 섹션으로 명확히 제시하라.
+codex
+요청하신 범위는 구현이 아니라 설계 검토로 진행하겠습니다. 프로젝트 규칙에 따라 저는 성공 기준과 결론 통합만 맡고, 코드 정독·병목 분석·검증 가능성 조사는 서로 분리된 에이전트에게 위임하겠습니다. 핵심 성공 기준은 “현재 실행 순서와 RNG/물리 질의를 건드리지 않는 단계”와 “병렬화 가능한 순수 커널”을 명확히 분리하고, 각 단계마다 기존 테스트와 스냅샷 게이트를 정의하는 것입니다.
+2026-07-15T19:26:41.269816Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+# Unity AI Working Rules
+
+This document defines the working rules an AI must follow when creating or modifying code in a Unity project.
+
+To have an AI agent read these rules automatically in a new project, copy this file to the project root as `AGENTS.md` or as the instruction file read by that tool.
+This file is a condensed, AI-focused subset of `TEAM_ARCHITECTURE_GUIDE.md`'s mandatory safety rules.
+
+This `AGENTS.md` applies to the repository root and everything below it. The source of truth for detailed architecture is the in-project [`UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md`](UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md); follow that guide for details not covered here. If a more specific instruction file applies to a nested scope, merge it with this document, and surface any conflict instead of hiding it.
+
+- If a user request conflicts with this guide or leaves room for a materially different interpretation, state the difference before implementation or modification and ask the user which standard to follow.
+- Do not declare a guide exception or proceed with implementation until the user explicitly decides the priority.
+
+## Main/Subagent Operating Model and Context Isolation
+
+- In sessions where subagents are available, the main agent must act only as manager and controller. There is no exception that allows the main agent to perform investigation, file reading, detailed analysis, implementation, editing, testing, or diff review directly, even for trivial tasks.
+- The main agent is responsible only for defining the goal and scope; surfacing outcome-relevant assumptions and tradeoffs; defining success criteria; decomposing work; assigning file ownership to subagents; judging results; and delivering the final report.
+- Delegate investigation, file reading, detailed analysis, implementation, file modification, testing, and complete diff review to subagents with explicit ownership. If concurrency slots are unavailable, delegate sequentially instead of having the main agent do the work.
+- Keep only confirmed facts, decisions, change results, key verification results, and remaining risks in the main context. Keep source dumps, detailed reasoning, repeated logs, and trial-and-error in subagent contexts.
+- A subagent's report to the main agent must contain only `Conclusion`, `Changed files`, `Verification commands and results`, and `Risks or blockers`. Do not include process logs or unnecessary source dumps.
+- Never allow two or more subagents to edit the same file concurrently. Assign one owner per file before delegation, and confirm that earlier work has ended before transferring ownership.
+- For non-trivial work, assign implementation and verification to different subagents. One subagent may execute and verify a trivial task, but the main agent still has no exception to implement or verify it directly.
+- Compare every subagent report against the success criteria. If evidence is insufficient, delegate corrective work within the same scope. Never report unverified work as complete.
+
+## Behavioral Guidelines to Reduce Common LLM Coding Mistakes
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+Tradeoff: These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+1. Think Before Coding
+Don't assume. Don't hide confusion. Surface tradeoffs.
+
+Before implementing:
+
+State your assumptions explicitly. If uncertain, ask.
+If multiple interpretations exist, present them - don't pick silently.
+If a simpler approach exists, say so. Push back when warranted.
+If something is unclear, stop. Name what's confusing. Ask.
+2. Simplicity First
+Minimum code that solves the problem. Nothing speculative.
+
+No features beyond what was asked.
+No abstractions for single-use code.
+No "flexibility" or "configurability" that wasn't requested.
+No error handling for impossible scenarios.
+If you write 200 lines and it could be 50, rewrite it.
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+3. Surgical Changes
+Touch only what you must. Clean up only your own mess.
+
+When editing existing code:
+
+Don't "improve" adjacent code, comments, or formatting.
+Don't refactor things that aren't broken.
+Match existing style, even if you'd do it differently.
+If you notice unrelated dead code, mention it - don't delete it.
+When your changes create orphans:
+
+Remove imports/variables/functions that YOUR changes made unused.
+Don't remove pre-existing dead code unless asked.
+The test: Every changed line should trace directly to the user's request.
+
+4. Goal-Driven Execution
+Define success criteria. Loop until verified.
+
+Transform tasks into verifiable goals:
+
+"Add validation" ??"Write tests for invalid inputs, then make them pass"
+"Fix the bug" ??"Write a test that reproduces it, then make it pass"
+"Refactor X" ??"Ensure tests pass before and after"
+For multi-step tasks, state a brief plan:
+
+1. [Step] ??verify: [check]
+2. [Step] ??verify: [check]
+3. [Step] ??verify: [check]
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+### Project-Specific Safety Precedence
+
+The instruction "No error handling for impossible scenarios" forbids only speculative handling for scenarios that are genuinely impossible. It never permits omitting this guide's mandatory safety contracts: async cancellation and exception handling, event/EventBus unsubscription, matching Addressables handle and instance Release, or duplicate-call prevention and receipt/server/integrity validation for purchases, rewards, and currency. These requirements take precedence and must not be classified as handling impossible scenarios.
+
+## 0. Default Mindset
+
+- Do not build a complex framework. Make ownership, state location, communication method, and lifetime responsibility explicit.
+- Check existing project conventions before applying this document.
+- When uncertain, do not guess. State what is uncertain, then ask.
+- Keep changes small. Do not refactor, clean up, or rename anything unrelated to the request.
+- Define verifiable success criteria first, verify them as far as possible, and only then finish.
+
+## 0.1 Applying These Rules to an Existing Project
+
+Do not overhaul a project that is already in progress when applying this document.
+
+- This project's existing code root is `Assets/@Project`. In this project, this known fact takes precedence over the general root-detection rule below. Keep new code under this root and follow its current naming; do not move it to `Assets/_Project` or `Assets/Game` or create a parallel root outside the request's scope.
+- First determine whether the current folder root is `Assets/_Project` or `Assets/Game`, and follow the existing root and naming.
+- Even if the existing structure differs from this document, do not change structure outside the request's scope.
+- Apply these rules first to new features, new files, and changes that can be isolated.
+- If you find an existing static hub, Manager, direct SaveData access, or centralized event structure, do not extend that pattern in new code.
+- To correct an existing counterexample, separate it into a dedicated refactoring task and present the impact scope and verification method first.
+- If file placement is unclear, inspect `rg --files`, nearby folders, existing namespaces, and asmdefs before deciding.
+- If the project contains more than one path pattern, do not choose arbitrarily; ask the user which standard to follow.
+
+## 0.2 Adoption Stages
+
+Do not create every structure up front. Apply only the rules required by the project's current stage.
+
+- Treat this project as currently being at the MVP stage. Introduce Growth or Advanced structures only after the corresponding problem and requirement actually exist.
+- Do not newly introduce asmdefs, EventBus, UniTask, or Addressables before a current feature requirement, an existing dependency, or a real boundary or lifetime problem requires them. For this project, do not use the general MVP option below that permits placing an EventBus implementation in advance. When a tool is already in use, follow the existing approach and its mandatory lifetime rules within the request's scope.
+
+### MVP Stage: Mandatory from the Start
+
+- Give every feature a clear owner.
+- Use direct calls, C# events/callbacks, and parent-level binding as the default communication methods.
+- Do not store runtime state in a ScriptableObject.
+- Unsubscribe in the same lifecycle in which you subscribed.
+- Define cancellation and exception-handling rules for asynchronous work.
+- Separate Editor code from runtime code.
+- Do not trust the client alone for sensitive values such as rewards, purchases, currency, and rankings.
+- An EventBus implementation may exist in advance, but do not use it as the default communication method.
+- At MVP, limit EventBus exceptions to cases where two or more independent boundary objects must observe the same fact that has already happened.
+
+### Growth Stage: Introduce When Connections Between Features Increase
+
+- Introduce EventBus when multiple features or boundary objects begin observing the same fact that has already happened. Do not use EventBus for a single receiver or when parent-level binding is sufficient.
+- Introduce QueryBus or Command when sibling-feature connections proliferate and you need an immediate query or state-change entry point.
+- Add an AssetProvider when dynamic loading and release responsibilities become scattered.
+- Create a read-only Runtime interface when multiple features begin reading the same Runtime value.
+- Split major areas into asmdefs when compilation time or reference-boundary problems actually occur.
+
+### Advanced Stage: Introduce for Live Operations or Large-Scale Collaboration
+
+- Add RuntimeRegistry only when the session has many runtime endpoints.
+- Introduce per-feature asmdefs when feature independence and team size grow.
+- Treat Remote Addressables, Remote Config rollout, and server-side reward validation as mandatory contracts as soon as live-operation features are introduced.
+
+## 1. Decision Log Before Work
+
+Before adding a new public API, state store, event/query/save key/asset key, asmdef, or resource-lifetime change, write down these five lines:
+
+```txt
+1. Target feature owner:
+2. New file location:
+3. State location: SO / RuntimeModel / SaveData / Server
+4. Communication method: direct call / C# event/callback / parent-level binding / EventBus / QueryBus / Command
+5. Affected files:
+```
+
+The Decision Log is a pre-work decision note, not an actual commit message. Unless the user asks to keep it in code, include it in the final report; if the team has designated a location, store it in a feature README or `Docs/.../DECISIONS.md`.
+
+If the decision is ambiguous, do not begin implementation; ask.
+
+## 2. Ownership Rules
+
+- Scenes assemble; features own.
+- `SceneController` handles only creation order and wiring.
+- `GameplayRoot` connects multiple feature roots and binds features to one another.
+- `GameSession` owns session flow such as Ready/Playing/Pause/GameOver.
+- `FeatureRoot` owns creation, teardown, rules, and RuntimeModel within its own feature.
+- A parent may call its child directly.
+- A child must not know its parent directly. Use a C# event/callback when a child must notify its parent.
+- Sibling features must not reference one another's implementations directly.
+
+## 3. State Location Rules
+
+- Store source data, balance data, asset references, and catalogs in `ScriptableObject`.
+- Store state that changes during the current play session in `RuntimeModel` or `GameSession`.
+- Store values that must survive an app restart in `SaveData`.
+- The client must not be the final authority for purchase-, currency-, reward-, ranking-, or cheat-sensitive values. Treat `Server` validation as a mandatory contract for live-economy features.
+- Do not modify SO values at runtime as if the SO were the current-state store.
+- If an SO runtime cache is needed, separate source data from play state.
+
+## 4. Communication Method Rules
+
+- A parent controls a child: use a direct call.
+- A child notifies a parent: use a C# event/callback.
+- Sibling features communicate: bind them at a parent root.
+- Notify a distant feature of a fact that has already happened: use EventBus.
+- Read the current value of a distant feature immediately: use QueryBus or a read-only Runtime interface.
+- Change state: use the state owner's public API or a Command.
+- Do not use EventBus/QueryBus directly from leaf Views, Tiles, Buttons, or Enemies.
+- Limit EventBus/QueryBus consumers to boundary objects such as feature roots, sessions, tutorials, HUD, and Analytics.
+
+Here, "distant feature" refers to ownership distance, not hierarchy distance. Features are distant when they are not in a parent/child relationship and must not reference each other's implementations directly.
+
+## 5. EventBus Rules
+
+EventBus communicates only facts that have already happened by default.
+Send requests to change rewards, purchases, currency, saves, or game rules through the state owner's API or a Command, not through EventBus.
+
+Good examples:
+
+```txt
+BoardItemMerged
+CustomerOrderCompleted
+RewardClaimSucceeded
+RewardClaimFailed
+```
+
+Bad examples:
+
+```txt
+GetGoldRequest -> GetGoldResponse
+SetInventoryItem
+RewardClaimRequested
+EveryFrameEnemyPositionChanged
+```
+
+Payload rules:
+
+- Prefer IDs, coordinates, enums, numbers, and immutable snapshots.
+- Do not include `GameObject`, `MonoBehaviour`, mutable collections, or internal implementations.
+- Do not send high-volume per-frame data through EventBus.
+- Always unsubscribe.
+
+Event type location:
+
+- Put only infrastructure such as `Publish`, `Subscribe`, and `IEventBus` in the EventBus folder.
+- By default, place a `readonly struct` event payload under `Events` in the feature where the event occurred.
+- Place a public event that other features also subscribe to under `Contracts/Events` in the originating feature.
+- Use `Shared.Contracts/Events` only for ownerless common contracts such as app initialization, session changes, or shared-currency changes.
+- Decide event location based on "which domain did the event occur in," not "who listens."
+- Do not collect every event under `EventBus/Events`, `Shared/Events`, or `GameEvents.cs`.
+
+Dispatch rules:
+
+- An MVP-light EventBus uses synchronous dispatch on the Unity main thread by default.
+- Game rules must not depend on subscriber execution order.
+- If a subscriber must call `Publish` again, record the cycle risk and execution order in the Decision Log.
+- Do not create a cycle in which event A publishes B and B publishes A again.
+- If the implementation cannot safely handle subscription or unsubscription during dispatch, copy the subscriber list into a snapshot before publishing.
+
+## 6. QueryBus Rules
+
+QueryBus is an access point for values needed immediately.
+
+- Keep the minimum API small, around `Register<T>(T provider) : IDisposable` and `TryGet<T>(out T provider)`.
+- Register only read-only interfaces with no mutators in QueryBus, never implementations.
+- Do not send write commands through QueryBus.
+- If query results are cached for a long time, define an invalidation rule as well.
+- Register Providers only from a feature root or parent root.
+- Unregister a Provider in the same lifecycle in which it was registered.
+- Treat duplicate registrations of the same type as an error or define an explicit replacement policy.
+- Do not register leaf objects such as individual tiles, buttons, enemies, or cells as Providers.
+- Do not call QueryBus directly from leaf objects or per-frame hot paths.
+- Prevent QueryBus from becoming a Service Locator used to retrieve arbitrary features.
+
+## 7. Command / API Rules
+
+A Command/API is an explicit entry point for state changes.
+
+- The feature or domain service that owns the state must own the Command/API.
+- Process rewards, purchases, currency, saves, and server requests through a Command/API, not EventBus.
+- The caller must be able to observe success, failure, and cancellation.
+- An asynchronous Command must accept a `CancellationToken`.
+- Define duplicate-call prevention for reward, purchase, and currency Commands.
+- For live-economy Commands, evaluate the need for an idempotency key, server validation, and a reward ledger.
+- Do not funnel every write request through one global `CommandBus`.
+- Notify other features through EventBus only of facts that result from the state change.
+
+## 8. Subscription and Unsubscription
+
+Unsubscribe in the same lifecycle in which you subscribed.
+
+```txt
+Awake      -> OnDestroy
+OnEnable   -> OnDisable
+Initialize -> Dispose / Clear
+Open       -> Close
+OnSpawn    -> OnDespawn
+```
+
+- If you subscribe in `OnEnable`, unsubscribe in `OnDisable`.
+- If you subscribe in `Initialize`, unsubscribe in `Dispose`.
+- If you subscribe in `OnSpawn`, unsubscribe in `OnDespawn`.
+- If `Initialize` can be called twice, unsubscribe the existing subscription first or prevent duplicate initialization.
+- Use `OnDestroy` only as a final safety net.
+- When a pooled object returns to the pool, clear its previous runtime state and subscriptions.
+
+## 9. UniTask / Async Rules
+
+- Whenever possible, asynchronous work must accept a `CancellationToken`.
+- Work based on MonoBehaviour must use `destroyCancellationToken` or `GetCancellationTokenOnDestroy()`.
+- Every repeated async loop must have a cancellation condition.
+- `await` work whose result or failure matters.
+- Allow `.Forget()` only for work whose failure cannot affect the flow.
+- When using `.Forget()`, handle exceptions inside the work or provide an exception handler.
+
+## 10. Resources / Addressables Rules
+
+- A feature root or that feature's Factory must own dynamic creation.
+- Whoever creates an object is responsible for teardown, Pool return, and Addressables Release.
+- Do not scatter `Resources.Load("string/path")` across multiple features.
+- Manage Resources paths and Addressables keys in a searchable location such as constants, CatalogSO, or AssetId.
+- Do not Release an Addressables handle before the instance lifetime ends.
+- If you use `Addressables.InstantiateAsync`, define the corresponding Release policy.
+- If you call `Instantiate` directly after `LoadAssetAsync`, the load-handle owner must remain alive for the entire instance lifetime.
+
+## 11. asmdef / Editor Rules
+
+- Separate Editor code from runtime code.
+- Restrict `*.Editor.asmdef` to the Editor platform.
+- An Editor assembly may reference a runtime assembly.
+- A Runtime assembly must not reference an Editor assembly or `UnityEditor`.
+- If ScriptableObject type code is required at runtime, place it in a runtime assembly.
+- Place custom inspectors, importers, validators, and build tools in an Editor assembly.
+- Introduce per-feature asmdefs only when needed. Do not split them into tiny units from the start.
+- When creating a `Feature.Contracts` assembly, include only public events, read-only Runtime interfaces, and shared IDs.
+- `Feature.Contracts` must not reference that feature's Runtime implementation or an EventBus implementation.
+- Other features must not reference `Feature.Runtime`; when necessary, they may reference `Feature.Contracts` only.
+- Use `Shared.Contracts` only for ownerless common contracts.
+- Do not move arbitrary types into Shared to resolve circular references.
+
+## 12. Security / Live Operations Rules
+
+- Do not trust client SaveData as the final truth.
+- Account for duplicate grants and tampering in purchases, ad rewards, and event rewards.
+- When IAP, ads, server rewards, or live currency are introduced, evaluate receipt validation, ad SSV, idempotency keys, reward ledgers, replay prevention, and server-authoritative time.
+- Validate external URLs, deep links, push payloads, and server responses before use.
+- Give Remote Config values a fallback/default and range validation.
+- For Remote Config, SaveData, and Addressables data, evaluate schema version, minimum app version, fallback, and migration requirements.
+- If game rules, prices, events, or a Remote Addressables catalog can change remotely, define kill-switch, rollout, and rollback criteria.
+- Do not log personal information, tokens, or raw account IDs in Analytics/Crash logs.
+- Prevent development cheat/debug menus from being exposed in production builds.
+
+## 13. Forbidden Anti-Patterns
+
+The following are forbidden by default. If an exception is necessary, record the feature owner, reason, impact scope, and removal condition in the Decision Log.
+
+- Overhauling an existing project outside the request's scope.
+- Creating a God Manager.
+- Directly referencing one feature implementation from another.
+- Having a child directly reference its parent or `SceneController`.
+- Having UI modify domain state directly.
+- Storing current session state in a global singleton/static.
+- Creating a static event without assigning responsibility for clearing it.
+- Using a Shared folder as a warehouse for hypothetical common code.
+- Storing current play state in an SO.
+- Reading and writing SaveData continuously as if it were a RuntimeModel.
+- Imitating request-response RPC through EventBus.
+- Sending write commands through QueryBus.
+- Attaching leaf objects directly to EventBus/QueryBus.
+- Putting internal implementations or mutable collections in event payloads.
+- Collecting domain event payloads in the EventBus folder.
+- Choosing event payload location based on consumers.
+- Using Shared as a collection of all events.
+- Sending all write requests through a global CommandBus.
+- Using QueryBus as a Service Locator.
+- Repeatedly calling QueryBus from leaf objects or hot paths.
+- Sending high-volume per-frame data through EventBus.
+- Subscribing to an event/EventBus without unsubscribing.
+- Using `.Forget()` without exception handling.
+- Losing the owner of an Addressables handle.
+- Referencing `UnityEditor` from a Runtime assembly.
+- Mixing a public API change and an internal refactor in one task.
+
+## 14. Post-Work Report
+
+Include the following in the completion report:
+
+- Changed files.
+- Decisions about ownership, state location, and communication method.
+- What was verified.
+- Remaining risks or items requiring manual confirmation.
+- If existing project conventions conflict with this document, which one took precedence.
+
+
+2026-07-15T19:26:45.823266Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+
+  → GameplayRoot/CrowdRoot 실행 순서와 Unity API 경계 조사
+  • Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+  • 패키지·빌드 설정·헤드리스 측정 경로 조사
+  • 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+codex
+현재 세 갈래로 확인 중입니다: 프레임 오케스트레이션과 Unity API 경계, 코어 버퍼/리졸버의 메모리 접근 및 순서 의존성, 그리고 패키지·asmdef·배치모드 측정 가능성입니다. 설계안에서는 실제 코드에서 확인된 사실과 아직 프로파일러/기기 측정이 필요한 추정을 구분해 쓰겠습니다.
+collab: Wait
+collab: Wait
+2026-07-15T19:27:46.982264Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 1.5 seconds
+Output:
+C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Unity.exe
+
+2026-07-15T19:27:52.924851Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+
+collab: Wait
+codex
+코드 경로와 호출 관계를 따라가며 분석 중입니다. 특히 `CharacterController.Move`/`Transform` 접근은 데이터 커널처럼 Burst로 옮길 수 없는 메인 스레드 경계이므로, “계산 패스”와 “Unity 오브젝트 적용 패스”를 분리했을 때 남는 비용까지 별도로 평가하도록 하고 있습니다.
+collab: Wait
+2026-07-15T19:28:31.339685Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+
+Name                                         Length LastWriteTime        
+----                                         ------ -------------        
+shadercompiler-UnityShaderCompiler.exe-0.log    211 2026-07-16 오전 3:48:14
+
+
+rg: error parsing flag -E: grep config error: unknown encoding: rrorAction
+
+2026-07-15T19:28:34.307065Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.5 seconds
+Output:
+
+2026-07-15T19:28:48.889541Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Total output lines: 84
+Output:
+D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity\Library\Bee\artifacts\1300b0aE.dag\Project.CrowdCity.Core.dll.mvfrm.rsp
+D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity\Library\Bee\artifacts\1300b0aE.dag\Project.CrowdCity.Core.rsp
+D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity\Library\Bee\artifacts\1300b0aE.dag\Project.CrowdCity.Core.Tests.dll.mvfrm.rsp
+D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity\Library\Bee\artifacts\1300b0aE.dag\Project.CrowdCity.Core.Tests.rsp
+Library/Bee\artifacts\rsp\10010842633742469623.rsp:1:"unity-ilpp-b79b9392a5ef47555056d8cf6a127f46" p "Library/Bee/artifacts/1900b0aE.dag/Unity.RenderPipelines.Universal.Runtime.dll" "Library/Bee/artifacts/1900b0aE.dag/post-processed" "UNITY_6000_3_9" "UNITY_6000_3" "UNITY_6000" "UNITY_5_3_OR_NEWER" "UNITY_5_4_OR_NEWER" "UNITY_5_5_OR_NEWER" "UNITY_5_6_OR_NEWER" "UNITY_2017_1_OR_NEWER" "UNITY_2017_2_OR_NEWER" "UNITY_2017_3_OR_NEWER" "UNITY_2017_4_OR_NEWER" "UNITY_2018_1_OR_NEWER" "UNITY_2018_2_OR_NEWER" "UNITY_2018_3_OR_NEWER" "UNITY_2018_4_OR_NEWER" "UNITY_2019_1_OR_NEWER" "UNITY_2019_2_OR_NEWER" "UNITY_2019_3_OR_NEWER" "UNITY_2019_4_OR_NEWER" "UNITY_2020_1_OR_NEWER" "UNITY_2020_2_OR_NEWER" "UNITY_2020_3_OR_NEWER" "UNITY_2021_1_OR_NEWER" "UNITY_2021_2_OR_NEWER" "UNITY_2021_3_OR_NEWER" "UNITY_2022_1_OR_NEWER" "UNITY_2022_2_OR_NEWER" "UNITY_2022_3_OR_NEWER" "UNITY_2023_1_OR_NEWER" "UNITY_2023_2_OR_NEWER" "UNITY_2023_3_OR_NEWER" "UNITY_6000_0_OR_NEWER" "UNITY_6000_1_OR_NEWER" "UNITY_6000_2_OR_NEWER" "UNITY_6000_3_OR_NEWER" "PLATFORM_ARCH_64" "UNITY_64" "UNITY_INCLUDE_TESTS" "ENABLE_AR" "ENABLE_AUDIO" "ENABLE_AUDIO_SCRIPTABLE_PIPELINE" "ENABLE_CACHING" "ENABLE_CLOTH" "ENABLE_EVENT_QUEUE" "ENABLE_MICROPHONE" "ENABLE_MULTIPLE_DISPLAYS" "ENABLE_PHYSICS" "ENABLE_TEXTURE_STREAMING" "ENABLE_VIRTUALTEXTURING" "ENABLE_LZMA" "ENABLE_UNITYEVENTS" "ENABLE_VR" "ENABLE_WEBCAM" "ENABLE_UNITYWEBREQUEST" "ENABLE_WWW" "ENABLE_CLOUD_SERVICES" "ENABLE_CLOUD_SERVICES_ADS" "ENABLE_CLOUD_SERVICES_USE_WEBREQUEST" "ENABLE_UNITY_CONSENT" "ENABLE_UNITY_CLOUD_IDENTIFIERS" "ENABLE_CLOUD_SERVICES_CRASH_REPORTING" "ENABLE_CLOUD_SERVICES_NATIVE_CRASH_REPORTING" "ENABLE_CLOUD_SERVICES_PURCHASING" "ENABLE_CLOUD_SERVICES_ANALYTICS" "ENABLE_CLOUD_SERVICES_BUILD" "ENABLE_EDITOR_GAME_SERVICES" "ENABLE_UNITY_GAME_SERVICES_ANALYTICS_SUPPORT" "ENABLE_CLOUD_LICENSE" "ENABLE_EDITOR_HUB_LICENSE" "ENABLE_WEBSOCKET_CLIENT" "ENABLE_GENERATE_NATIVE_PLUGINS_FOR_ASSEMBLIES_API" "ENABLE_DIRECTOR_AUDIO" "ENABLE_DIRECTOR_TEXTURE" "ENABLE_MANAGED_JOBS" "ENABLE_MANAGED_TRANSFORM_JOBS" "ENABLE_MANAGED_ANIMATION_JOBS" "ENABLE_MANAGED_AUDIO_JOBS" "ENABLE_MANAGED_UNITYTLS" "INCLUDE_DYNAMIC_GI" "ENABLE_SCRIPTING_GC_WBARRIERS" "PLATFORM_SUPPORTS_MONO" "RENDER_SOFTWARE_CURSOR" "ENABLE_MARSHALLING_TESTS" "ENABLE_VIDEO" "ENABLE_NAVIGATION_OFFMESHLINK_TO_NAVMESHLINK" "ENABLE_ACCELERATOR_CLIENT_DEBUGGING" "ENABLE_ACCESSIBILITY_SCREEN_READER" "TEXTCORE_1_0_OR_NEWER" "EDITOR_ONLY_NAVMESH_BUILDER_DEPRECATED" "PLATFORM_STANDALONE_WIN" "PLATFORM_STANDALONE" "UNITY_STANDALONE_WIN" "UNITY_STANDALONE" "ENABLE_RUNTIME_GI" "ENABLE_MOVIES" "ENABLE_NETWORK" "ENABLE_NVIDIA" "ENABLE_AMD" "ENABLE_CRUNCH_TEXTURE_COMPRESSION" "ENABLE_CLOUD_SERVICES_ENGINE_DIAGNOSTICS" "ENABLE_OUT_OF_PROCESS_CRASH_HANDLER" "ENABLE_CLUSTER_SYNC" "ENABLE_CLUSTERINPUT" "PLATFORM_UPDATES_TIME_OUTSIDE_OF_PLAYER_LOOP" "GFXDEVICE_WAITFOREVENT_MESSAGEPUMP" "PLATFORM_USES_EXPLICIT_MEMORY_MANAGER_INITIALIZER" "PLATFORM_SUPPORTS_WAIT_FOR_PRESENTATION" "PLATFORM_SUPPORTS_SPLIT_GRAPHICS_JOBS" "ENABLE_MONO" "NET_STANDARD_2_0" "NET_STANDARD" "NET_STANDARD_2_1" "NETSTANDARD" "NETSTANDARD2_1" "ENABLE_PROFILER" "DEBUG" "TRACE" "UNITY_ASSERTIONS" "UNITY_EDITOR" "UNITY_EDITOR_64" "UNITY_EDITOR_WIN" "ENABLE_UNITY_COLLECTIONS_CHECKS" "ENABLE_BURST_AOT" "UNITY_TEAM_LICENSE" "ENABLE_CUSTOM_RENDER_TEXTURE" "ENABLE_DIRECTOR" "ENABLE_LOCALIZATION" "ENABLE_SPRITES" "ENABLE_TERRAIN" "ENABLE_TILEMAP" "ENABLE_TIMELINE" "ENABLE_INPUT_SYSTEM" "TEXTCORE_FONT_ENGINE_1_5_OR_NEWER" "TEXTCORE_TEXT_ENGINE_1_5_OR_NEWER" "TEXTCORE_FONT_ENGINE_1_6_OR_NEWER" "ENABLE_ADAPTIVE_PERFORMANCE" "ENABLE_BURST_1_0_0_OR_NEWER" "ENABLE_VR_MODULE" "ENABLE_XR_MODULE" "USING_ANIMATION_MODULE" "USING_PHYSICS2D_MODULE" "ENABLE_INPUT_SYSTEM_PACKAGE" "CSHARP_7_OR_LATER" "CSHARP_7_3_OR_NEWER" -r "Library\Bee\artifacts\1900b0aE.dag\Unity.Burst.dll" "Library\Bee\artifacts\1900b0aE.dag\Unity.Mathematics.dll" "Library\Bee\artifacts\1900b0aE.dag\Unity.RenderPipeline.Universal.ShaderLibrary.dll" "Library\Bee\artifacts\1900b0aE.dag\Unity.RenderPipelines.Core.Runtime.Shared.dll" "Library\Bee\artifacts\1900b0aE.dag\Unity.RenderPipelines.Core.Runtime.dll" "Library\Bee\artifacts\1900b0aE.dag\Unity.RenderPipelines.GPUDriven.Runtime.dll" "Library\Bee\artifacts\1900b0aE.dag\Unity.RenderPipelines.Universal.Config.Runtime.dll" "Library\Bee\artifacts\1900b0aE.dag\Unity.UnifiedRayTracing.Runtime.dll" "Library\Bee\artifacts\1900b0aE.dag\UnityEditor.UI.dll" "Library\Bee\artifacts\1900b0aE.dag\UnityEngine.UI.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEditor.Graphs.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.AccessibilityModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.AdaptivePerformanceModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.AssetComplianceModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.BuildProfileModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.ClothModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.CoreBusinessMetricsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.CoreModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.DeviceSimulatorModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.DiagnosticsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.EditorToolbarModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.EmbreeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.GIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.GraphicsStateCollectionSerializerModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.GraphViewModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.GridAndSnapModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.GridModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.HierarchyModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.InAppPurchasingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.LevelPlayModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.MediaModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.MultiplayerModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.Physics2DModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.PhysicsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.PlayModeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.PresetsUIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.PropertiesModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.QuickSearchModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.SafeModeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.SceneTemplateModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.SceneViewModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.ShaderBuildSettingsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.ShaderCompilationModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.ShaderFoundryModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.SketchUpModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.SpriteMaskModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.SpriteShapeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.SubstanceModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.TerrainModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.TextCoreFontEngineModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.TextCoreTextEngineModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.TextRenderingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.TilemapModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.TreeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.UIAutomationModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.UIBuilderModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.UIElementsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.UIElementsSamplesModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.UIToolkitAuthoringModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.UmbraModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.UnityConnectModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.VectorGraphicsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.VFXModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.VideoModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEditor.XRModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.AccessibilityModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.AdaptivePerformanceModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.AIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.AndroidJNIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.AnimationModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ARModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.AssetBundleModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.AudioModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ClothModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ClusterInputModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ClusterRendererModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ContentLoadModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.CoreModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.CrashReportingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.DirectorModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.DSPGraphModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.GameCenterModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.GIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.GraphicsStateCollectionSerializerModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.GridModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.HierarchyCoreModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.HotReloadModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.IdentifiersModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ImageConversionModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.IMGUIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.InputForUIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.InputLegacyModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.InputModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.InsightsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.JSONSerializeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.LocalizationModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.MarshallingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.MultiplayerModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ParticleSystemModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.PerformanceReportingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.Physics2DModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.PhysicsBackendPhysXModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.PhysicsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.PropertiesModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.RenderAs2DModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.RuntimeInitializeOnLoadManagerInitializerModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ScreenCaptureModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ShaderRuntimeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.ShaderVariantAnalyticsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.SharedInternalsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.SpriteMaskModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.SpriteShapeModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.StreamingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.SubstanceModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.SubsystemsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.TerrainModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.TerrainPhysicsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.TextCoreFontEngineModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.TextCoreTextEngineModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.TextRenderingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.TilemapModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.TLSModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UIElementsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UIModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UmbraModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityAnalyticsCommonModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityAnalyticsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityConnectModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityConsentModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityCurlModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestAssetBundleModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestAudioModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestTextureModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestWWWModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VectorGraphicsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VehiclesModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VFXModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VideoModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VirtualTexturingModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VRModule.d…237297 tokens truncated…\Managed\UnityEngine\UnityEngine.UnityAnalyticsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityConnectModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityConsentModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityCurlModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestAssetBundleModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestAudioModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestTextureModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.UnityWebRequestWWWModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VectorGraphicsModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VehiclesModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VFXModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VideoModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.VRModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.WindModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\Managed\UnityEngine\UnityEngine.XRModule.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\mscorlib.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.ComponentModel.Composition.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Core.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Data.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Drawing.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.IO.Compression.FileSystem.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Net.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Numerics.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Runtime.Serialization.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.ServiceModel.Web.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Transactions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Web.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Windows.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Xml.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Xml.Linq.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netfx\System.Xml.Serialization.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\Microsoft.Win32.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.AppContext.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Buffers.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Collections.Concurrent.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Collections.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Collections.NonGeneric.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Collections.Specialized.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.ComponentModel.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.ComponentModel.EventBasedAsync.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.ComponentModel.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.ComponentModel.TypeConverter.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Console.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Data.Common.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.Contracts.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.Debug.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.FileVersionInfo.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.Process.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.StackTrace.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.TextWriterTraceListener.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.Tools.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.TraceSource.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Diagnostics.Tracing.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Drawing.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Dynamic.Runtime.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Globalization.Calendars.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Globalization.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Globalization.Extensions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.Compression.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.Compression.ZipFile.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.FileSystem.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.FileSystem.DriveInfo.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.FileSystem.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.FileSystem.Watcher.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.IsolatedStorage.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.MemoryMappedFiles.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.Pipes.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.IO.UnmanagedMemoryStream.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Linq.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Linq.Expressions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Linq.Parallel.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Linq.Queryable.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Memory.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.Http.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.NameResolution.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.NetworkInformation.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.Ping.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.Requests.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.Security.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.Sockets.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.WebHeaderCollection.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.WebSockets.Client.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Net.WebSockets.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Numerics.Vectors.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.ObjectModel.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Reflection.DispatchProxy.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Reflection.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Reflection.Emit.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Reflection.Emit.ILGeneration.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Reflection.Emit.Lightweight.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Reflection.Extensions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Reflection.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Resources.Reader.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Resources.ResourceManager.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Resources.Writer.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.CompilerServices.VisualC.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.Extensions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.Handles.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.InteropServices.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.InteropServices.RuntimeInformation.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.Numerics.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.Serialization.Formatters.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.Serialization.Json.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.Serialization.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Runtime.Serialization.Xml.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.Claims.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.Cryptography.Algorithms.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.Cryptography.Csp.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.Cryptography.Encoding.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.Cryptography.Primitives.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.Cryptography.X509Certificates.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.Principal.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Security.SecureString.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Text.Encoding.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Text.Encoding.Extensions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Text.RegularExpressions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.Overlapped.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.Tasks.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.Tasks.Extensions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.Tasks.Parallel.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.Thread.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.ThreadPool.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Threading.Timer.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.ValueTuple.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Xml.ReaderWriter.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Xml.XDocument.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Xml.XmlDocument.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Xml.XmlSerializer.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Xml.XPath.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\compat\2.1.0\shims\netstandard\System.Xml.XPath.XDocument.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\Extensions\2.0.0\System.Runtime.InteropServices.WindowsRuntime.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\NetStandard\ref\2.1.0\netstandard.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\PlaybackEngines\AndroidPlayer\Unity.Android.Gradle.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\PlaybackEngines\AndroidPlayer\Unity.Android.Types.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\PlaybackEngines\AndroidPlayer\UnityEditor.Android.Extensions.dll" "C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Data\PlaybackEngines\WindowsStandaloneSupport\UnityEditor.WindowsStandalone.Extensions.dll" "Library\PackageCache\com.unity.collab-proxy@e566cd3e7623\Lib\Editor\log4netPlastic.dll" "Library\PackageCache\com.unity.collab-proxy@e566cd3e7623\Lib\Editor\Unity.Plastic.Antlr3.Runtime.dll" "Library\PackageCache\com.unity.collab-proxy@e566cd3e7623\Lib\Editor\Unity.Plastic.Newtonsoft.Json.dll" "Library\PackageCache\com.unity.collab-proxy@e566cd3e7623\Lib\Editor\unityplastic.dll" "Library\PackageCache\com.unity.collections@aea9d3bd5e19\Unity.Collections.LowLevel.ILSupport\Unity.Collections.LowLevel.ILSupport.dll" "Library\PackageCache\com.unity.collections@aea9d3bd5e19\Unity.Collections.Tests\System.IO.Hashing\System.IO.Hashing.dll" "Library\PackageCache\com.unity.collections@aea9d3bd5e19\Unity.Collections.Tests\System.Runtime.CompilerServices.Unsafe\System.Runtime.CompilerServices.Unsafe.dll" "Library\PackageCache\com.unity.ext.nunit@d8c07649098d\net40\unity-custom\nunit.framework.dll" "Library\PackageCache\com.unity.nuget.mono-cecil@ecb9724e46ff\Mono.Cecil.dll" "Library\PackageCache\com.unity.nuget.newtonsoft-json@4dfd81071c64\Runtime\Newtonsoft.Json.dll" "Library\PackageCache\com.unity.visualscripting@191c0d7e3b69\Editor\VisualScripting.Core\Dependencies\DotNetZip\Unity.VisualScripting.IonicZip.dll" "Library\PackageCache\com.unity.visualscripting@191c0d7e3b69\Editor\VisualScripting.Core\Dependencies\YamlDotNet\Unity.VisualScripting.YamlDotNet.dll" "Library\PackageCache\com.unity.visualscripting@191c0d7e3b69\Editor\VisualScripting.Core\EditorAssetResources\Unity.VisualScripting.TextureAssets.dll" "Library\PackageCache\com.unity.visualscripting@191c0d7e3b69\Runtime\VisualScripting.Flow\Dependencies\NCalc\Unity.VisualScripting.Antlr3.Runtime.dll"
+Library/Bee\artifacts\1900b0aE.dag\Unity.Collections.dll.mvfrm.rsp:73:Library\Bee\artifacts\mvdfrm\UnityEngine.CoreModule.dll_58CD0762095B2B0B.mvfrm
+
+collab: Wait
+  ✓ GameplayRoot/CrowdRoot 실행 순서와 Unity API 경계 조사
+  → Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+  → 패키지·빌드 설정·헤드리스 측정 경로 조사
+  • 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+collab: Wait
+2026-07-15T19:29:25.559450Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 0.6 seconds
+Output:
+
+2026-07-15T19:29:31.831221Z ERROR codex_core::tools::router: error=Exit code: 1
+Wall time: 3.1 seconds
+Output:
+Library/PackageCache\com.unity.test-framework@0b7a23ab2e1d\UnityEditor.TestRunner\UnityTestProtocol\UnityTestProtocolStarter.cs:27:            return commandLineArgs.Contains("-automated") && commandLineArgs.Contains("-runTests");
+Library/PackageCache\com.unity.test-framework.performance@0840f58e4562\Documentation~\cmd-line-args.md:24:Unity.exe -runTests -batchmode -projectPath PATH_TO_YOUR_PROJECT -testResults C:\temp\results.xml -perfTestResults C:\temp\perfResults.json
+Library/PackageCache\com.unity.test-framework@0b7a23ab2e1d\CHANGELOG.md:133:- Fixed Xcode not closing after building iOS/tvOS project via batchmode `-runTests` command (ANT-679).
+Library/PackageCache\com.unity.test-framework@0b7a23ab2e1d\CHANGELOG.md:294:- Passing a non-full-path of XML file for -testResults in Unity Batchmode issue resolved, now passing "result.xml" creates the result file in the project file directory (case 959078)
+Library/PackageCache\com.unity.test-framework@0b7a23ab2e1d\UnityEditor.TestRunner\NUnitExtension\Attributes\TestPlayerBuildModifierAttribute.cs:95:    ///             return commandLineArgs.Any(value =&gt; value == "-runTests");
+Library/PackageCache\com.unity.test-framework@0b7a23ab2e1d\UnityEditor.TestRunner\Api\Analytics\AnalyticsReporter.cs:66:                isFromCommandLine = IsCommandLineArgSet("-runTests"),
+Library/PackageCache\com.unity.render-pipelines.universal@7327e77c1cc2\Editor\AssetPostProcessors\MaterialPostprocessor.cs:66:                        bool inTestSuite = commandLineOptions.Contains("-testResults");
+Library/PackageCache\com.unity.render-pipelines.universal@7327e77c1cc2\Editor\AssetPostProcessors\MaterialPostprocessor.cs:97:            bool inTestSuite = commandLineOptions.Contains("-testResults");
+Library/PackageCache\com.unity.render-pipelines.universal@7327e77c1cc2\CHANGELOG.md:1266:- Fixed an issue that caused an infinite asset database reimport when running Unity in command line with -testResults argument.
+rg: -g: 지정된 파일을 찾을 수 없습니다. (os error 2)
+rg: *.md: 파일 이름, 디렉터리 이름 또는 볼륨 레이블 구문이 잘못되었습니다. (os error 123)
+rg: -g: 지정된 파일을 찾을 수 없습니다. (os error 2)
+rg: *.txt: 파일 이름, 디렉터리 이름 또는 볼륨 레이블 구문이 잘못되었습니다. (os error 123)
+
+collab: Wait
+codex
+첫 조사 결과, 수치 상태는 이미 “관리형 SoA에 가까운 혼합 구조”이고 tick 중 상시 GC는 주병목이 아닙니다. 더 큰 구조적 비용은 800개 기준 매 tick 전원 `CharacterController.Move`, Transform 복원/재읽기, 회전·Animator 갱신, 그리고 매 렌더 프레임 보간 Transform 쓰기입니다. 따라서 권장안은 NativeArray 전환만이 아니라 Unity API 브리지의 횟수와 단계 경계를 보존하면서 수치 커널을 분리하는 방향이 될 가능성이 큽니다.
+collab: Wait
+  ✓ GameplayRoot/CrowdRoot 실행 순서와 Unity API 경계 조사
+  → Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+  ✓ 패키지·빌드 설정·헤드리스 측정 경로 조사
+  • 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+collab: Wait
+collab: Wait
+codex
+코어 분석도 확인됐습니다. `AgentBuffer` 자체는 이미 AoS가 아니라 managed SoA이며, 실제 캐시 비친화 핵심은 `SpatialGrid`의 해시 버킷 연결 체인, 반복 후보 쿼리/거리 계산, Combat의 재스캔·삽입 정렬, 그리고 managed/Unity 오브젝트 경계를 왕복하는 구조입니다. 첫 구현부터 알고리즘을 융합하기보다는, 기존 두 Resolver의 순서와 출력이 바이트 단위로 일치하는 NativeArray 순차 커널을 먼저 만든 뒤 병렬화를 여는 것이 안전합니다.
+collab: Wait
+세 조사 결과를 성공 기준과 대조했고, 코드 변경 없이 설계안을 확정했습니다.
+  ✓ GameplayRoot/CrowdRoot 실행 순서와 Unity API 경계 조사
+  ✓ Core 데이터 레이아웃·복잡도·결정론 의존성 조사
+  ✓ 패키지·빌드 설정·헤드리스 측정 경로 조사
+  ✓ 증거를 통합해 권장 설계와 단계별 결정론 게이트 작성
+codex
+# [권장 접근법+근거]
+
+권장안은 **기존 GameObject/`CharacterController` 표현 계층을 유지한 `Jobs + Burst + NativeArray 기반 SoA 하이브리드`**입니다.
+
+핵심 방향은 다음과 같습니다.
+
+- `CrowdRoot`가 Native 컨테이너와 Job 수명을 계속 소유한다.
+- 수치 상태와 공간 검색을 연속 메모리 SoA로 옮긴다.
+- 처음에는 순차 `IJob + Burst Strict`로 기존 계산 순서를 그대로 이식한다.
+- 결과가 바이트 단위로 일치하는 것이 확인된 커널만 `IJobParallelFor`로 전환한다.
+- `CharacterController.Move`, Transform, Animator, Physics, RNG, 이벤트는 기존 메인 스레드 순서를 유지한다.
+- 첫 구현에서 Resolver 융합, unordered pair traversal, DOTS 전환은 하지 않는다.
+
+접근법 비교:
+
+| 접근법 | 판단 |
+|---|---|
+| Jobs + Burst + NativeArray | 권장. 현재 구조를 유지하면서 연속 메모리·Burst·멀티코어를 얻고 IL2CPP 수명 관리도 명확하다. |
+| DOTS/Entities | 비권장. `CharacterController`, `Human`, Transform, 이벤트를 그대로 job화할 수 없어 사실상 전체 표현 계층 재작성이다. 결정론 위험도 가장 크다. |
+| 순수 unsafe 포인터 SoA | 1차 선택으로 비권장. NativeArray도 연속 unmanaged 메모리이며, 포인터 방식은 수명·aliasing·bounds 위험만 증가한다. |
+| UniTask | 불필요. CPU 고정 tick 커널 병렬화 수단이 아니며 Unity Physics/Transform도 비동기 스레드에서 접근할 수 없다. |
+
+중요한 한계가 있습니다. 수치 커널만 Burst화해도 `CharacterController.Move`와 Transform/Animator 브리지가 현재 비용의 큰 비중이라면 800개 목표를 달성하지 못할 수 있습니다. 그런 경우 다음 단계는 DOTS가 아니라 **시뮬레이션 Transform과 보간용 Visual Transform 분리** 또는 neutral의 충돌 모델 변경인데, 후자는 현재 동작 동일성 제약과 충돌하므로 별도 승인이 필요합니다.
+
+설계 Decision Log:
+
+```text
+1. Target feature owner: CrowdRoot
+2. New file location: Assets/@Project/Crowd/Core 및 필요 시 Crowd/Scripts 내부
+3. State location: CrowdRoot 소유 RuntimeModel/NativeArray; SO·SaveData 변경 없음
+4. Communication method: GameplayRoot→CrowdRoot direct call, 기존 동기 이벤트 발행 유지
+5. Affected files: CrowdRoot, AgentBuffer, SpatialGrid, RecruitResolver,
+   CombatResolver, Core asmdef, 관련 EditMode 테스트 및 신규 golden/performance harness
+```
+
+# [병목 진단]
+
+현재 [GameplayRoot.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs)는 프레임마다 accumulator를 갱신하고, 0.02초 fixed step을 최대 4회 실행한 뒤 프레임당 한 번 보간합니다. 느린 프레임에서는 crowd 비용이 한 `Update()`에 최대 4배 집중됩니다.
+
+[ CrowdRoot.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Scripts/CrowdRoot.cs)의 `SimTick()` 순서는 다음과 같이 고정돼 있습니다.
+
+```text
+pending match state
+→ 보간으로 변경된 Transform을 _visualCur로 복원
+→ UpdateHeadings
+→ MoveLeaders
+→ SteerFollowersAndNeutrals
+→ MirrorPositionsToBuffer
+→ SpatialGrid.Rebuild
+→ RecruitResolver.Resolve
+→ CombatResolver.Resolve
+→ CommitOutcomes
+→ PublishTickEvents
+```
+
+이 순서는 의미론의 일부입니다. 특히 Rival AI와 follower separation은 이동 전 snapshot을 읽고, Recruit/Combat은 모든 이동이 끝난 뒤 재구축한 최신 snapshot을 읽습니다.
+
+주요 병목 후보:
+
+| 패스 | 복잡도 | 캐시/CPU 문제 |
+|---|---:|---|
+| Transform 복원·미러·보간 | 각각 `O(N)` | managed↔native Unity API 브리지, 전원 반복 |
+| `CharacterController.Move` | `O(N)` | 메인 스레드 PhysX/native 호출, Burst 불가 |
+| SpatialGrid rebuild | `O(tableSize + N)` | rebuild 자체보다 bucket chain 검색이 비연속적 |
+| follower separation | 평균 `O(F·k)`, 밀집 시 `O(F·N)` | agent마다 후보 query와 거리 계산 반복 |
+| Recruit | 평균 `O(N·k)`, 고정 면적 밀집 시 `O(N²)` 접근 | neutral마다 grid query |
+| Combat 접촉 | 평균 `O(N·k)` | 같은 pair의 거리 계산 반복 |
+| Combat victim 처리 | `O(T²N)` 재스캔 + 최악 `O(V²)` insertion sort | 동일 배열 반복 순회 |
+| Commit follower 제거 | 최악 `O(C·F)` | `List` 선형 탐색 및 swap-remove |
+
+neutral 800 기준의 대략적인 호출량은 50Hz에서 다음 수준입니다.
+
+- `CharacterController.Move`: 약 40,000회/초
+- tick 시작 Transform position 복원: 약 40,000회/초
+- 60fps 보간 Transform position 쓰기: 약 48,000회/초
+- rotation/Animator 갱신: 약 40,000회/초
+- 여기에 Transform position read와 clamp write가 추가됨
+
+따라서 **수치 커널이 99% 중 일부를 차지하더라도, 전체 crowd 비용에서는 CharacterController/Transform/Animator가 상한을 만들 가능성이 높습니다.** 정확한 비중은 현재 Profiler 캡처나 단계별 marker가 없어 코드만으로 정량화할 수 없습니다.
+
+현재 `AgentBuffer`는 AoS가 아닙니다. `Id[]`, `Team[]`, `IsLeader[]`, `Pos[]`, `Scale[]`의 **managed SoA**입니다. `CrowdRoot`의 Transform, Controller, velocity, visual position, wander 상태도 agent index 기준 병렬 배열입니다. 문제는 다음입니다.
+
+- managed 배열이라 Job 입력으로 직접 사용할 수 없음
+- Unity 객체 참조 배열과 `CrowdModel`의 `List<int>`를 수시로 왕복
+- `SpatialGrid`가 `_bucketHead → _nextInBucket` 연결 체인이라 후보 순회 시 인덱스 점프 발생
+- Combat이 같은 데이터와 victim을 여러 번 재스캔
+- tick 중 GC보다는 메모리 트래픽과 Unity API 호출이 지배적
+
+GC 측면에서는 대부분 초기 capacity가 확보돼 있습니다. 다만 `CrowdModel.FollowerCapacity`와 `RivalAiDriver._neutralQuery`가 160이어서 neutral 800에서는 런타임 성장 재할당과 복사가 발생할 수 있습니다.
+
+# [데이터 레이아웃]
+
+권장 런타임 레이아웃은 “하나의 큰 `AgentState` AoS”가 아니라 접근 패턴별 SoA입니다.
+
+```text
+NativeArray<int>    id
+NativeArray<byte>   team
+NativeArray<byte>   flags          // leader/alive 등
+NativeArray<float>  scale
+NativeArray<float2> simPositionXZ
+NativeArray<float2> velocityXZ
+NativeArray<float2> desiredMoveXZ
+NativeArray<float>  headingDeg
+NativeArray<float>  wanderTimer
+NativeArray<float3> visualPrev
+NativeArray<float3> visualCur
+NativeArray<int>    followerOrder
+```
+
+원칙:
+
+- position처럼 항상 함께 읽는 x/z는 `float2`가 적절하다.
+- team/scale/position 등 일부만 필요한 커널이 전체 agent record를 읽지 않도록 한다.
+- `Transform`, `CharacterController`, `Human` 참조는 기존 managed 배열에 남기고 메인 스레드 브리지에서만 사용한다.
+- Native 컨테이너는 `CrowdRoot.Initialize`에서 한 번 생성하고 동일 lifecycle의 `Dispose/Clear`에서 해제한다.
+- tick 중 resize, `NativeList` append, LINQ, 임시 배열 생성을 없앤다.
+- 최대 agent/team 수를 초기화 시 계산해 scratch까지 영구 할당한다.
+
+## SpatialGrid
+
+현재 hash bucket linked chain은 contiguous cell range 구조로 교체하는 것이 가장 효과적입니다.
+
+```text
+cellCounts[cellCount]
+cellStarts[cellCount + 1]     // prefix sum
+cellWriteCursor[cellCount]
+cellAgents[agentCapacity]     // 셀별 연속 agent index
+```
+
+빌드 과정:
+
+1. agent별 cell index 계산
+2. cell count
+3. prefix sum
+4. stable scatter
+5. query는 `cellAgents[cellStarts[c]..cellStarts[c+1])` 선형 순회
+
+현재 `QueryCircle` 순서를 보존하려면 다음까지 고정해야 합니다.
+
+- cell 순회: 기존처럼 `cellY`, `cellX` 오름차순
+- 동일 cell 내부: 현재 역삽입 순서를 재현하도록 agent index 내림차순 scatter
+- cell boundary 계산식과 operand 순서 유지
+- city bounds 밖 agent에 대해 새 clamp 규칙을 만들지 말고 기존 hash semantics와 동일한 범위를 정의
+
+`NativeParallelMultiHashMap`은 병렬 삽입 및 열거 순서를 계약할 수 없으므로 사용하지 않는 편이 안전합니다.
+
+결과 버퍼도 공유 append 대신 고정 index를 씁니다.
+
+```text
+Recruit:
+  toTeamByAgent[N]
+  → agent index 오름차순 serial compaction
+
+Combat:
+  nearestEnemyDistSq[N * teamCount]
+  assignedTeam[N]
+  assignedDistSq[N]
+  perAgentPairTouchCount[N * teamCount²]  // 병렬화할 경우
+  fixed-capacity conversions/eliminations
+```
+
+conversion/elimination 출력은 반드시 기존 winner/loser, distance/ID, leader index 순서의 단일 writer가 생성해야 합니다.
+
+# [커널·멀티스레드]
+
+## 권장 파이프라인
+
+```text
+메인: pending state + Transform 복원
+메인: UpdateHeadings (RNG/Raycast 순서 유지)
+메인: MoveLeaders
+메인: job 입력 snapshot 확정
+Job: follower별 desired/separation 계산
+메인: agent index 순 CharacterController.Move + 실제 위치 수집
+메인: neutral RNG/Raycast/Move 기존 순서
+메인: Transform → position SoA mirror
+IJob: stable grid rebuild
+IJob 또는 IJobParallelFor: Recruit 후보 계산
+IJob: Recruit 결과 serial compaction
+IJob: Combat 전체 순차 커널
+메인: CommitOutcomes
+메인: 기존 순서로 이벤트 발행
+```
+
+`CharacterController.Move` 결과를 반영한 actual velocity, tangential projection, blocked damping이 필요하므로 follower 계산은 최소한 다음 두 단계로 분리해야 합니다.
+
+```text
+pre-move job: desired move 계산
+main thread: CharacterController.Move 및 실제 displacement 수집
+post-move job: actual velocity/감쇠 계산
+main thread: Transform/Animator 적용
+```
+
+다만 PhysX 호출 순서를 유지해야 하므로 follower job이 실행되는 동안 neutral `Move`를 앞당기는 방식은 피해야 합니다.
+
+## `IJob` 우선 대상
+
+- stable grid count/prefix/scatter
+- Combat의 순서 의존 reduction
+- winner/loser별 victim 정렬 및 conversion 생성
+- leader elimination
+- rate accumulator 갱신
+- 최종 output compaction
+
+이 단계는 단일 스레드여도 Burst와 연속 메모리 덕분에 현재 managed/hash-chain 구현보다 빨라질 수 있으며 결정론 위험이 가장 낮습니다.
+
+## `IJobParallelFor` 허용 대상
+
+- agent별 cell 계산
+- follower별 desired/separation 계산
+- neutral별 Recruit claimant 계산
+- agent별 Combat nearest 후보 행 계산
+- agent별 winning team assignment
+- 결과가 각 agent 전용 index에만 기록되는 후처리
+
+금지 대상:
+
+- `NativeList.ParallelWriter`를 통한 결과 순서 의존 append
+- worker별 결과의 완료 순서 merge
+- 공유 nearest endpoint 갱신
+- 공유 float accumulator
+- worker thread에서 Physics/Transform/Animator/RNG/이벤트 접근
+
+Combat을 병렬화하려면 agent별 scratch에 pair contribution을 기록하고, 후단 `IJob`이 agent index 오름차순으로 정수 합산해야 합니다. 처음부터 unordered spatial pair traversal로 두 endpoint를 동시에 갱신하는 구현은 race와 순서 변경 위험이 큽니다.
+
+Recruit와 Combat contact를 한 번의 pair traversal로 융합하는 최적화는 가능하지만 **첫 구현에서는 제외**해야 합니다. 별도 커널이 완전히 일치하고 프로파일링상 반복 query가 남은 병목일 때만 추가합니다.
+
+# [결정론 전략]
+
+보존해야 할 불변식은 다음과 같습니다.
+
+- fixed step 0.02초, 프레임당 최대 4 tick, accumulator 초과 폐기
+- 이동 전 snapshot과 이동 후 snapshot의 사용 경계
+- spawn 위치를 모든 Instantiate 전에 결정하는 순서
+- `Physics.CheckSphere` 호출 횟수와 순서
+- neutral spawn attempt마다 x/z RNG 2회, 성공 시 heading/timer RNG 소비
+- neutral repick의 timer draw 및 최대 8회 heading draw 순서
+- Rival AI raycast와 동률일 때만 발생하는 RNG 소비
+- follower swap-remove 이후의 순회 순서
+- Recruit 결과의 neutral agent index 오름차순
+- Combat winner/loser 오름차순
+- victim `(distance, Id)` 정렬
+- 동률 시 낮은 team/agent ID 선택
+- count 이벤트 team 오름차순
+- elimination 이벤트 player 우선, 이후 team 1..N
+- 이벤트 발행 후에만 combat outcome clear
+- 이벤트 재진입으로 발생한 match state는 다음 tick 시작에서 소비
+
+Core Resolver에는 현재 production RNG, Physics, 이벤트가 없습니다. 따라서 snapshot 경계를 유지한 채 Core만 옮기면 RejectionRate와 RNG를 직접 변경하지 않습니다.
+
+Burst는 다음부터 시작합니다.
+
+```csharp
+[BurstCompile(
+    FloatMode = FloatMode.Strict,
+    FloatPrecision = FloatPrecision.Standard)]
+```
+
+추가 규칙:
+
+- `FloatMode.Fast` 금지
+- `dx * dx + dy * dy` 등의 operand 순서 유지
+- 기존 식을 임의로 `math.lengthsq`나 다른 근사 함수로 변경하지 않음
+- float accumulator의 덧셈 순서 유지
+- `Mathf.FloorToInt` 경계 parity를 별도 테스트
+- Burst on/off 결과를 bitwise 비교
+- x64와 Android ARM64 golden을 별도로 보관
+
+Burst Strict도 기존 managed `Mathf` 결과 또는 PhysX 결과의 cross-platform bitwise 동일성을 자동 보장하지 않습니다. 포팅한 식이 bitwise gate를 통과하지 못하면 해당 식은 우선 메인 스레드에 남기거나 기존 scalar 구현과 동일한 코드 생성이 되는 형태로 조정해야 합니다.
+
+`FloatMode.Deterministic`는 이번 1차 baseline으로 권장하지 않습니다. 기존 managed 결과와 같아지는 옵션이 아니며, 64-bit 플랫폼 제약과 별도 golden 재설정 문제가 있습니다.
+
+# [필요 패키지]
+
+현재 설치 상태:
+
+- Burst 1.8.28: URP 경유 transitive
+- Collections 2.6.2: transitive
+- Mathematics 1.3.3: transitive
+- Entities: 없음
+- UniTask: 없음
+- `allowUnsafeCode=0`
+- Core asmdef `allowUnsafeCode=false`
+- Android IL2CPP, ARM64 설정으로 확인됨
+
+직접 코드를 의존시키므로 [manifest.json](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/manifest.json)에 다음 버전을 direct dependency로 고정하는 것이 적절합니다.
+
+```json
+"com.unity.burst": "1.8.28",
+"com.unity.collections": "2.6.2",
+"com.unity.mathematics": "1.3.3"
+```
+
+`com.unity.jobs`는 별도 설치가 필요하지 않습니다. Unity 6000.3.9f1에서 `IJob`, `IJobFor`, `IJobParallelFor`는 CoreModule에 포함돼 있습니다.
+
+[Project.CrowdCity.Core.asmdef](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef)에는 다음 참조를 추가합니다.
+
+```text
+Unity.Burst
+Unity.Collections
+Unity.Mathematics
+```
+
+NativeArray 안전 API만 사용한다면 다음은 그대로 유지합니다.
+
+```text
+ProjectSettings.allowUnsafeCode = 0
+Core asmdef allowUnsafeCode = false
+```
+
+`UnsafeUtility.Malloc`, raw pointer, `GetUnsafePtr`가 측정으로 반드시 필요하다고 입증된 경우에만 Core asmdef 단위로 unsafe를 허용해야 합니다. 전역 unsafe 허용은 불필요합니다.
+
+Entities와 UniTask는 추가하지 않습니다.
+
+# [성능 측정법]
+
+## Headless 측정 가능 여부
+
+가능합니다. 단, 두 종류를 구분해야 합니다.
+
+1. 순수 Core 커널: EditMode batchmode + `Stopwatch.GetTimestamp()`
+2. 전체 crowd: PlayMode/full-scene batch harness + 단계별 Stopwatch/ProfilerMarker
+
+`-batchmode -nographics`에서도 Transform과 PhysX는 실행되지만, Editor/Desktop 수치는 Android IL2CPP 절대 성능을 대표하지 않습니다. 알고리즘 전후 상대 비교와 회귀 탐지에 사용해야 합니다.
+
+## 측정 조건
+
+```text
+neutralCount: 100, 300, 500, 800, 1200
+fixed dt: 0.02
+seed/input/snapshot: 고정
+Burst warm-up: 최소 200 tick
+measurement: 1,000 tick × 5회
+보고값: median, p95, p99, max, GC alloc/tick
+Job 시간: Schedule부터 Complete까지 포함
+```
+
+다음 구간을 별도로 계측합니다.
+
+```text
+Heading/AI
+Leader Move
+Follower steering compute
+CharacterController.Move/apply
+Neutral movement
+Transform mirror
+SpatialGrid
+Recruit
+Combat
+Commit/event
+RenderInterpolate
+전체 SimTick
+```
+
+로그 출력은 측정 루프 밖에서만 수행합니다.
+
+비교 표는 최소 다음 형태여야 합니다.
+
+| Neutral | Legacy ms/tick | New ms/tick | CC/Transform ms | Core ms | p95 | p99 | Alloc/tick |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 |  |  |  |  |  |  |  |
+| 300 |  |  |  |  |  |  |  |
+| 500 |  |  |  |  |  |  |  |
+| 800 |  |  |  |  |  |  |  |
+| 1200 |  |  |  |  |  |  |  |
+
+## 60fps 최대 neutralCount 추정
+
+측정값을 다음 모델에 적합시킵니다.
+
+```text
+T_crowd(N) = a + bN + cN²
+```
+
+- `bN`: Move/Transform/grid rebuild 등 선형 패스
+- `cN²`: 고정 면적에서 증가하는 근접 후보 밀도와 Combat/Recruit
+- 가능하면 grid/query와 Unity API 패스를 따로 fitting
+
+기기 허용 crowd budget:
+
+```text
+B = 16.667ms
+    - p95(non-crowd main-thread CPU)
+    - safety margin
+```
+
+안전마진은 최소 20% 또는 2~3ms 중 큰 값을 권장합니다. `p95(T_crowd(N)) <= B`인 최대 N을 모델로 추정한 뒤, 저사양 Android IL2CPP Development build에서 50 단위 binary search로 확정합니다.
+
+50Hz simulation이므로 평상시에는 0/1 tick 프레임이 섞이지만, catch-up 2~4 tick 프레임의 p99도 별도로 기록해야 합니다. 5~10분 열 안정화 후 big.LITTLE 스케줄링과 thermal throttling까지 포함해 측정해야 합니다.
+
+현재 데이터만으로 “800이 60fps를 보장한다”는 수치를 산출할 수는 없습니다.
+
+# [구현 단계]
+
+## 0. Baseline 고정
+
+- 기존 코드에 단계별 marker/Stopwatch 추가
+- legacy full-state snapshot 생성
+- RNG draw trace, Physics call trace, event trace 추가
+- N=100/300/500/800 baseline 저장
+
+게이트:
+
+- CombatResolver 26/26
+- RecruitResolver 6/6
+- Grid/Steering 3/3
+- MatchRules 8/8
+- 동일 seed의 RejectionRate와 초기 배치 snapshot 동일
+
+## 1. Capacity와 할당 정리
+
+- follower/query capacity를 실제 최대 agent 수 기준으로 초기화
+- 모든 결과/scratch 버퍼 영구 할당
+- tick 중 resize 및 GC 0 확인
+
+게이트:
+
+- 전체 snapshot 동일
+- event/RNG/Physics trace 동일
+- GC alloc/tick 0
+
+## 2. Native SoA mirror 도입
+
+- 기존 managed 경로를 권위 경로로 유지
+- 같은 입력을 managed와 Native 양쪽에 공급하는 dual-run
+- 알고리즘과 순회 순서는 변경하지 않음
+
+게이트:
+
+- 모든 필드 bitwise 동일
+- Recruit/Combat output count·순서·agent/team 동일
+- accumulator float bits 동일
+
+## 3. Contiguous SpatialGrid 교체
+
+- cell count → prefix sum → stable scatter
+- 기존 cell 및 동일-cell 후보 순서 재현
+- legacy/new query 후보 sequence 직접 비교
+
+게이트:
+
+- 모든 query의 ordered candidate sequence 동일
+- cell boundary/범위 밖 위치 테스트
+- Resolver 32개 테스트 및 golden snapshot 동일
+
+## 4. 순차 `IJob + Burst Strict`
+
+- grid/recruit/combat를 우선 단일 writer로 이식
+- 기존 winner/loser 및 victim 순서 유지
+- Burst on/off dual-run
+
+게이트:
+
+- Burst off/on byte snapshot 동일
+- Android ARM64 AOT에서 같은 golden 확인
+- 기존 테스트 전부 통과
+
+## 5. 안전한 per-agent 병렬화
+
+- follower desired 계산
+- Recruit claimant 계산
+- agent별 cell 계산
+- 필요하면 Combat nearest row 계산
+
+공유 결과는 후단 serial reduction/compaction으로 고정합니다.
+
+게이트:
+
+- worker 수와 batch size를 바꿔도 output bytes 동일
+- batch size 1/16/32/64 비교
+- 이벤트/Physics/Transform 적용 순서 동일
+- N=300에서 스케줄 오버헤드가 이득보다 큰지 확인
+
+## 6. Unity API 브리지 최적화
+
+Core 최적화 후에도 `CharacterController.Move`/Transform이 지배적일 때만 진행합니다.
+
+우선 검토안:
+
+- CharacterController를 가진 SimulationRoot는 tick pose에 유지
+- child VisualRoot만 렌더 보간
+- tick 시작 전체 simulation Transform 복원을 제거
+- presentation update를 별도 선형 패스로 통합
+
+게이트:
+
+- collider/grounding/displacement snapshot 동일
+- 화면 position/rotation/Animator state 동일
+- prefab hierarchy 및 pooling lifecycle 검증
+- Android 기기 프로파일에서 실제 이득 확인
+
+neutral의 `CharacterController` 제거 또는 단순 grid collision로 대체하는 방안은 성능 효과가 클 수 있지만 동작 동일성이 깨지므로 이번 설계의 자동 실행 범위에는 포함하지 않습니다.
+
+## 7. 선택적 고급 최적화
+
+프로파일러로 필요성이 입증된 경우에만:
+
+- Recruit/Combat contact traversal 융합
+- Combat victim sort 개선
+- 반복 pair 거리 계산 제거
+- 낮은 N에서는 serial, 높은 N에서는 parallel인 threshold 도입
+
+각 변경은 독립 golden 게이트를 통과해야 하며 여러 최적화를 한 단계에서 섞지 않습니다.
+
+# [리스크]
+
+- `CharacterController.Move`, Transform, Animator 비중이 크면 Burst 숫자 커널만으로 800 목표를 달성하지 못할 수 있습니다.
+- Unity PhysX 결과는 Editor x64와 Android ARM64 사이의 bitwise cross-platform 결정론을 보장하지 않습니다.
+- Burst Strict도 기존 managed `Mathf`와 자동으로 bitwise 동일하지 않습니다.
+- grid의 fixed bounds가 모든 runtime 위치를 포함하지 않으면 새 overflow 정책이 동작을 바꿀 수 있습니다.
+- `NativeParallelMultiHashMap`, shared append, worker merge 순서를 사용하면 결과 순서가 깨질 수 있습니다.
+- follower 목록의 swap-remove 순서를 dense team 재배치로 바꾸면 다음 tick separation 결과가 달라질 수 있습니다.
+- Combat scratch를 단순히 `N × T²`로 잡으면 팀 수 증가 시 메모리가 커지므로 실제 최대 team 수를 기준으로 계산해야 합니다.
+- N=300 정도에서는 Job scheduling 비용이 이득을 상쇄할 수 있어 serial Burst와 parallel Burst를 모두 측정해야 합니다.
+- transitive package에 직접 의존한 채 manifest 고정을 하지 않으면 URP dependency 변경으로 빌드가 깨질 수 있습니다.
+- 현재 테스트는 resolver 결과를 잘 검증하지만 RNG 소비, ordered grid query, event sequence, full-state float bits까지 고정하지는 않습니다. 병렬화 전에 golden harness가 필수입니다.
+- 현재 작업은 읽기 전용 설계 검토이므로 파일 변경과 Unity Test Runner 실행은 하지 않았습니다. 기존 사용자 변경 파일도 건드리지 않았습니다.
+tokens used
+64,687
+# [권장 접근법+근거]
+
+권장안은 **기존 GameObject/`CharacterController` 표현 계층을 유지한 `Jobs + Burst + NativeArray 기반 SoA 하이브리드`**입니다.
+
+핵심 방향은 다음과 같습니다.
+
+- `CrowdRoot`가 Native 컨테이너와 Job 수명을 계속 소유한다.
+- 수치 상태와 공간 검색을 연속 메모리 SoA로 옮긴다.
+- 처음에는 순차 `IJob + Burst Strict`로 기존 계산 순서를 그대로 이식한다.
+- 결과가 바이트 단위로 일치하는 것이 확인된 커널만 `IJobParallelFor`로 전환한다.
+- `CharacterController.Move`, Transform, Animator, Physics, RNG, 이벤트는 기존 메인 스레드 순서를 유지한다.
+- 첫 구현에서 Resolver 융합, unordered pair traversal, DOTS 전환은 하지 않는다.
+
+접근법 비교:
+
+| 접근법 | 판단 |
+|---|---|
+| Jobs + Burst + NativeArray | 권장. 현재 구조를 유지하면서 연속 메모리·Burst·멀티코어를 얻고 IL2CPP 수명 관리도 명확하다. |
+| DOTS/Entities | 비권장. `CharacterController`, `Human`, Transform, 이벤트를 그대로 job화할 수 없어 사실상 전체 표현 계층 재작성이다. 결정론 위험도 가장 크다. |
+| 순수 unsafe 포인터 SoA | 1차 선택으로 비권장. NativeArray도 연속 unmanaged 메모리이며, 포인터 방식은 수명·aliasing·bounds 위험만 증가한다. |
+| UniTask | 불필요. CPU 고정 tick 커널 병렬화 수단이 아니며 Unity Physics/Transform도 비동기 스레드에서 접근할 수 없다. |
+
+중요한 한계가 있습니다. 수치 커널만 Burst화해도 `CharacterController.Move`와 Transform/Animator 브리지가 현재 비용의 큰 비중이라면 800개 목표를 달성하지 못할 수 있습니다. 그런 경우 다음 단계는 DOTS가 아니라 **시뮬레이션 Transform과 보간용 Visual Transform 분리** 또는 neutral의 충돌 모델 변경인데, 후자는 현재 동작 동일성 제약과 충돌하므로 별도 승인이 필요합니다.
+
+설계 Decision Log:
+
+```text
+1. Target feature owner: CrowdRoot
+2. New file location: Assets/@Project/Crowd/Core 및 필요 시 Crowd/Scripts 내부
+3. State location: CrowdRoot 소유 RuntimeModel/NativeArray; SO·SaveData 변경 없음
+4. Communication method: GameplayRoot→CrowdRoot direct call, 기존 동기 이벤트 발행 유지
+5. Affected files: CrowdRoot, AgentBuffer, SpatialGrid, RecruitResolver,
+   CombatResolver, Core asmdef, 관련 EditMode 테스트 및 신규 golden/performance harness
+```
+
+# [병목 진단]
+
+현재 [GameplayRoot.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Game/Scripts/GameplayRoot.cs)는 프레임마다 accumulator를 갱신하고, 0.02초 fixed step을 최대 4회 실행한 뒤 프레임당 한 번 보간합니다. 느린 프레임에서는 crowd 비용이 한 `Update()`에 최대 4배 집중됩니다.
+
+[ CrowdRoot.cs](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Scripts/CrowdRoot.cs)의 `SimTick()` 순서는 다음과 같이 고정돼 있습니다.
+
+```text
+pending match state
+→ 보간으로 변경된 Transform을 _visualCur로 복원
+→ UpdateHeadings
+→ MoveLeaders
+→ SteerFollowersAndNeutrals
+→ MirrorPositionsToBuffer
+→ SpatialGrid.Rebuild
+→ RecruitResolver.Resolve
+→ CombatResolver.Resolve
+→ CommitOutcomes
+→ PublishTickEvents
+```
+
+이 순서는 의미론의 일부입니다. 특히 Rival AI와 follower separation은 이동 전 snapshot을 읽고, Recruit/Combat은 모든 이동이 끝난 뒤 재구축한 최신 snapshot을 읽습니다.
+
+주요 병목 후보:
+
+| 패스 | 복잡도 | 캐시/CPU 문제 |
+|---|---:|---|
+| Transform 복원·미러·보간 | 각각 `O(N)` | managed↔native Unity API 브리지, 전원 반복 |
+| `CharacterController.Move` | `O(N)` | 메인 스레드 PhysX/native 호출, Burst 불가 |
+| SpatialGrid rebuild | `O(tableSize + N)` | rebuild 자체보다 bucket chain 검색이 비연속적 |
+| follower separation | 평균 `O(F·k)`, 밀집 시 `O(F·N)` | agent마다 후보 query와 거리 계산 반복 |
+| Recruit | 평균 `O(N·k)`, 고정 면적 밀집 시 `O(N²)` 접근 | neutral마다 grid query |
+| Combat 접촉 | 평균 `O(N·k)` | 같은 pair의 거리 계산 반복 |
+| Combat victim 처리 | `O(T²N)` 재스캔 + 최악 `O(V²)` insertion sort | 동일 배열 반복 순회 |
+| Commit follower 제거 | 최악 `O(C·F)` | `List` 선형 탐색 및 swap-remove |
+
+neutral 800 기준의 대략적인 호출량은 50Hz에서 다음 수준입니다.
+
+- `CharacterController.Move`: 약 40,000회/초
+- tick 시작 Transform position 복원: 약 40,000회/초
+- 60fps 보간 Transform position 쓰기: 약 48,000회/초
+- rotation/Animator 갱신: 약 40,000회/초
+- 여기에 Transform position read와 clamp write가 추가됨
+
+따라서 **수치 커널이 99% 중 일부를 차지하더라도, 전체 crowd 비용에서는 CharacterController/Transform/Animator가 상한을 만들 가능성이 높습니다.** 정확한 비중은 현재 Profiler 캡처나 단계별 marker가 없어 코드만으로 정량화할 수 없습니다.
+
+현재 `AgentBuffer`는 AoS가 아닙니다. `Id[]`, `Team[]`, `IsLeader[]`, `Pos[]`, `Scale[]`의 **managed SoA**입니다. `CrowdRoot`의 Transform, Controller, velocity, visual position, wander 상태도 agent index 기준 병렬 배열입니다. 문제는 다음입니다.
+
+- managed 배열이라 Job 입력으로 직접 사용할 수 없음
+- Unity 객체 참조 배열과 `CrowdModel`의 `List<int>`를 수시로 왕복
+- `SpatialGrid`가 `_bucketHead → _nextInBucket` 연결 체인이라 후보 순회 시 인덱스 점프 발생
+- Combat이 같은 데이터와 victim을 여러 번 재스캔
+- tick 중 GC보다는 메모리 트래픽과 Unity API 호출이 지배적
+
+GC 측면에서는 대부분 초기 capacity가 확보돼 있습니다. 다만 `CrowdModel.FollowerCapacity`와 `RivalAiDriver._neutralQuery`가 160이어서 neutral 800에서는 런타임 성장 재할당과 복사가 발생할 수 있습니다.
+
+# [데이터 레이아웃]
+
+권장 런타임 레이아웃은 “하나의 큰 `AgentState` AoS”가 아니라 접근 패턴별 SoA입니다.
+
+```text
+NativeArray<int>    id
+NativeArray<byte>   team
+NativeArray<byte>   flags          // leader/alive 등
+NativeArray<float>  scale
+NativeArray<float2> simPositionXZ
+NativeArray<float2> velocityXZ
+NativeArray<float2> desiredMoveXZ
+NativeArray<float>  headingDeg
+NativeArray<float>  wanderTimer
+NativeArray<float3> visualPrev
+NativeArray<float3> visualCur
+NativeArray<int>    followerOrder
+```
+
+원칙:
+
+- position처럼 항상 함께 읽는 x/z는 `float2`가 적절하다.
+- team/scale/position 등 일부만 필요한 커널이 전체 agent record를 읽지 않도록 한다.
+- `Transform`, `CharacterController`, `Human` 참조는 기존 managed 배열에 남기고 메인 스레드 브리지에서만 사용한다.
+- Native 컨테이너는 `CrowdRoot.Initialize`에서 한 번 생성하고 동일 lifecycle의 `Dispose/Clear`에서 해제한다.
+- tick 중 resize, `NativeList` append, LINQ, 임시 배열 생성을 없앤다.
+- 최대 agent/team 수를 초기화 시 계산해 scratch까지 영구 할당한다.
+
+## SpatialGrid
+
+현재 hash bucket linked chain은 contiguous cell range 구조로 교체하는 것이 가장 효과적입니다.
+
+```text
+cellCounts[cellCount]
+cellStarts[cellCount + 1]     // prefix sum
+cellWriteCursor[cellCount]
+cellAgents[agentCapacity]     // 셀별 연속 agent index
+```
+
+빌드 과정:
+
+1. agent별 cell index 계산
+2. cell count
+3. prefix sum
+4. stable scatter
+5. query는 `cellAgents[cellStarts[c]..cellStarts[c+1])` 선형 순회
+
+현재 `QueryCircle` 순서를 보존하려면 다음까지 고정해야 합니다.
+
+- cell 순회: 기존처럼 `cellY`, `cellX` 오름차순
+- 동일 cell 내부: 현재 역삽입 순서를 재현하도록 agent index 내림차순 scatter
+- cell boundary 계산식과 operand 순서 유지
+- city bounds 밖 agent에 대해 새 clamp 규칙을 만들지 말고 기존 hash semantics와 동일한 범위를 정의
+
+`NativeParallelMultiHashMap`은 병렬 삽입 및 열거 순서를 계약할 수 없으므로 사용하지 않는 편이 안전합니다.
+
+결과 버퍼도 공유 append 대신 고정 index를 씁니다.
+
+```text
+Recruit:
+  toTeamByAgent[N]
+  → agent index 오름차순 serial compaction
+
+Combat:
+  nearestEnemyDistSq[N * teamCount]
+  assignedTeam[N]
+  assignedDistSq[N]
+  perAgentPairTouchCount[N * teamCount²]  // 병렬화할 경우
+  fixed-capacity conversions/eliminations
+```
+
+conversion/elimination 출력은 반드시 기존 winner/loser, distance/ID, leader index 순서의 단일 writer가 생성해야 합니다.
+
+# [커널·멀티스레드]
+
+## 권장 파이프라인
+
+```text
+메인: pending state + Transform 복원
+메인: UpdateHeadings (RNG/Raycast 순서 유지)
+메인: MoveLeaders
+메인: job 입력 snapshot 확정
+Job: follower별 desired/separation 계산
+메인: agent index 순 CharacterController.Move + 실제 위치 수집
+메인: neutral RNG/Raycast/Move 기존 순서
+메인: Transform → position SoA mirror
+IJob: stable grid rebuild
+IJob 또는 IJobParallelFor: Recruit 후보 계산
+IJob: Recruit 결과 serial compaction
+IJob: Combat 전체 순차 커널
+메인: CommitOutcomes
+메인: 기존 순서로 이벤트 발행
+```
+
+`CharacterController.Move` 결과를 반영한 actual velocity, tangential projection, blocked damping이 필요하므로 follower 계산은 최소한 다음 두 단계로 분리해야 합니다.
+
+```text
+pre-move job: desired move 계산
+main thread: CharacterController.Move 및 실제 displacement 수집
+post-move job: actual velocity/감쇠 계산
+main thread: Transform/Animator 적용
+```
+
+다만 PhysX 호출 순서를 유지해야 하므로 follower job이 실행되는 동안 neutral `Move`를 앞당기는 방식은 피해야 합니다.
+
+## `IJob` 우선 대상
+
+- stable grid count/prefix/scatter
+- Combat의 순서 의존 reduction
+- winner/loser별 victim 정렬 및 conversion 생성
+- leader elimination
+- rate accumulator 갱신
+- 최종 output compaction
+
+이 단계는 단일 스레드여도 Burst와 연속 메모리 덕분에 현재 managed/hash-chain 구현보다 빨라질 수 있으며 결정론 위험이 가장 낮습니다.
+
+## `IJobParallelFor` 허용 대상
+
+- agent별 cell 계산
+- follower별 desired/separation 계산
+- neutral별 Recruit claimant 계산
+- agent별 Combat nearest 후보 행 계산
+- agent별 winning team assignment
+- 결과가 각 agent 전용 index에만 기록되는 후처리
+
+금지 대상:
+
+- `NativeList.ParallelWriter`를 통한 결과 순서 의존 append
+- worker별 결과의 완료 순서 merge
+- 공유 nearest endpoint 갱신
+- 공유 float accumulator
+- worker thread에서 Physics/Transform/Animator/RNG/이벤트 접근
+
+Combat을 병렬화하려면 agent별 scratch에 pair contribution을 기록하고, 후단 `IJob`이 agent index 오름차순으로 정수 합산해야 합니다. 처음부터 unordered spatial pair traversal로 두 endpoint를 동시에 갱신하는 구현은 race와 순서 변경 위험이 큽니다.
+
+Recruit와 Combat contact를 한 번의 pair traversal로 융합하는 최적화는 가능하지만 **첫 구현에서는 제외**해야 합니다. 별도 커널이 완전히 일치하고 프로파일링상 반복 query가 남은 병목일 때만 추가합니다.
+
+# [결정론 전략]
+
+보존해야 할 불변식은 다음과 같습니다.
+
+- fixed step 0.02초, 프레임당 최대 4 tick, accumulator 초과 폐기
+- 이동 전 snapshot과 이동 후 snapshot의 사용 경계
+- spawn 위치를 모든 Instantiate 전에 결정하는 순서
+- `Physics.CheckSphere` 호출 횟수와 순서
+- neutral spawn attempt마다 x/z RNG 2회, 성공 시 heading/timer RNG 소비
+- neutral repick의 timer draw 및 최대 8회 heading draw 순서
+- Rival AI raycast와 동률일 때만 발생하는 RNG 소비
+- follower swap-remove 이후의 순회 순서
+- Recruit 결과의 neutral agent index 오름차순
+- Combat winner/loser 오름차순
+- victim `(distance, Id)` 정렬
+- 동률 시 낮은 team/agent ID 선택
+- count 이벤트 team 오름차순
+- elimination 이벤트 player 우선, 이후 team 1..N
+- 이벤트 발행 후에만 combat outcome clear
+- 이벤트 재진입으로 발생한 match state는 다음 tick 시작에서 소비
+
+Core Resolver에는 현재 production RNG, Physics, 이벤트가 없습니다. 따라서 snapshot 경계를 유지한 채 Core만 옮기면 RejectionRate와 RNG를 직접 변경하지 않습니다.
+
+Burst는 다음부터 시작합니다.
+
+```csharp
+[BurstCompile(
+    FloatMode = FloatMode.Strict,
+    FloatPrecision = FloatPrecision.Standard)]
+```
+
+추가 규칙:
+
+- `FloatMode.Fast` 금지
+- `dx * dx + dy * dy` 등의 operand 순서 유지
+- 기존 식을 임의로 `math.lengthsq`나 다른 근사 함수로 변경하지 않음
+- float accumulator의 덧셈 순서 유지
+- `Mathf.FloorToInt` 경계 parity를 별도 테스트
+- Burst on/off 결과를 bitwise 비교
+- x64와 Android ARM64 golden을 별도로 보관
+
+Burst Strict도 기존 managed `Mathf` 결과 또는 PhysX 결과의 cross-platform bitwise 동일성을 자동 보장하지 않습니다. 포팅한 식이 bitwise gate를 통과하지 못하면 해당 식은 우선 메인 스레드에 남기거나 기존 scalar 구현과 동일한 코드 생성이 되는 형태로 조정해야 합니다.
+
+`FloatMode.Deterministic`는 이번 1차 baseline으로 권장하지 않습니다. 기존 managed 결과와 같아지는 옵션이 아니며, 64-bit 플랫폼 제약과 별도 golden 재설정 문제가 있습니다.
+
+# [필요 패키지]
+
+현재 설치 상태:
+
+- Burst 1.8.28: URP 경유 transitive
+- Collections 2.6.2: transitive
+- Mathematics 1.3.3: transitive
+- Entities: 없음
+- UniTask: 없음
+- `allowUnsafeCode=0`
+- Core asmdef `allowUnsafeCode=false`
+- Android IL2CPP, ARM64 설정으로 확인됨
+
+직접 코드를 의존시키므로 [manifest.json](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Packages/manifest.json)에 다음 버전을 direct dependency로 고정하는 것이 적절합니다.
+
+```json
+"com.unity.burst": "1.8.28",
+"com.unity.collections": "2.6.2",
+"com.unity.mathematics": "1.3.3"
+```
+
+`com.unity.jobs`는 별도 설치가 필요하지 않습니다. Unity 6000.3.9f1에서 `IJob`, `IJobFor`, `IJobParallelFor`는 CoreModule에 포함돼 있습니다.
+
+[Project.CrowdCity.Core.asmdef](D:/UNITY/UNITY_PROJECT/ActionFitPro/AF_CrowdCity/Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef)에는 다음 참조를 추가합니다.
+
+```text
+Unity.Burst
+Unity.Collections
+Unity.Mathematics
+```
+
+NativeArray 안전 API만 사용한다면 다음은 그대로 유지합니다.
+
+```text
+ProjectSettings.allowUnsafeCode = 0
+Core asmdef allowUnsafeCode = false
+```
+
+`UnsafeUtility.Malloc`, raw pointer, `GetUnsafePtr`가 측정으로 반드시 필요하다고 입증된 경우에만 Core asmdef 단위로 unsafe를 허용해야 합니다. 전역 unsafe 허용은 불필요합니다.
+
+Entities와 UniTask는 추가하지 않습니다.
+
+# [성능 측정법]
+
+## Headless 측정 가능 여부
+
+가능합니다. 단, 두 종류를 구분해야 합니다.
+
+1. 순수 Core 커널: EditMode batchmode + `Stopwatch.GetTimestamp()`
+2. 전체 crowd: PlayMode/full-scene batch harness + 단계별 Stopwatch/ProfilerMarker
+
+`-batchmode -nographics`에서도 Transform과 PhysX는 실행되지만, Editor/Desktop 수치는 Android IL2CPP 절대 성능을 대표하지 않습니다. 알고리즘 전후 상대 비교와 회귀 탐지에 사용해야 합니다.
+
+## 측정 조건
+
+```text
+neutralCount: 100, 300, 500, 800, 1200
+fixed dt: 0.02
+seed/input/snapshot: 고정
+Burst warm-up: 최소 200 tick
+measurement: 1,000 tick × 5회
+보고값: median, p95, p99, max, GC alloc/tick
+Job 시간: Schedule부터 Complete까지 포함
+```
+
+다음 구간을 별도로 계측합니다.
+
+```text
+Heading/AI
+Leader Move
+Follower steering compute
+CharacterController.Move/apply
+Neutral movement
+Transform mirror
+SpatialGrid
+Recruit
+Combat
+Commit/event
+RenderInterpolate
+전체 SimTick
+```
+
+로그 출력은 측정 루프 밖에서만 수행합니다.
+
+비교 표는 최소 다음 형태여야 합니다.
+
+| Neutral | Legacy ms/tick | New ms/tick | CC/Transform ms | Core ms | p95 | p99 | Alloc/tick |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 100 |  |  |  |  |  |  |  |
+| 300 |  |  |  |  |  |  |  |
+| 500 |  |  |  |  |  |  |  |
+| 800 |  |  |  |  |  |  |  |
+| 1200 |  |  |  |  |  |  |  |
+
+## 60fps 최대 neutralCount 추정
+
+측정값을 다음 모델에 적합시킵니다.
+
+```text
+T_crowd(N) = a + bN + cN²
+```
+
+- `bN`: Move/Transform/grid rebuild 등 선형 패스
+- `cN²`: 고정 면적에서 증가하는 근접 후보 밀도와 Combat/Recruit
+- 가능하면 grid/query와 Unity API 패스를 따로 fitting
+
+기기 허용 crowd budget:
+
+```text
+B = 16.667ms
+    - p95(non-crowd main-thread CPU)
+    - safety margin
+```
+
+안전마진은 최소 20% 또는 2~3ms 중 큰 값을 권장합니다. `p95(T_crowd(N)) <= B`인 최대 N을 모델로 추정한 뒤, 저사양 Android IL2CPP Development build에서 50 단위 binary search로 확정합니다.
+
+50Hz simulation이므로 평상시에는 0/1 tick 프레임이 섞이지만, catch-up 2~4 tick 프레임의 p99도 별도로 기록해야 합니다. 5~10분 열 안정화 후 big.LITTLE 스케줄링과 thermal throttling까지 포함해 측정해야 합니다.
+
+현재 데이터만으로 “800이 60fps를 보장한다”는 수치를 산출할 수는 없습니다.
+
+# [구현 단계]
+
+## 0. Baseline 고정
+
+- 기존 코드에 단계별 marker/Stopwatch 추가
+- legacy full-state snapshot 생성
+- RNG draw trace, Physics call trace, event trace 추가
+- N=100/300/500/800 baseline 저장
+
+게이트:
+
+- CombatResolver 26/26
+- RecruitResolver 6/6
+- Grid/Steering 3/3
+- MatchRules 8/8
+- 동일 seed의 RejectionRate와 초기 배치 snapshot 동일
+
+## 1. Capacity와 할당 정리
+
+- follower/query capacity를 실제 최대 agent 수 기준으로 초기화
+- 모든 결과/scratch 버퍼 영구 할당
+- tick 중 resize 및 GC 0 확인
+
+게이트:
+
+- 전체 snapshot 동일
+- event/RNG/Physics trace 동일
+- GC alloc/tick 0
+
+## 2. Native SoA mirror 도입
+
+- 기존 managed 경로를 권위 경로로 유지
+- 같은 입력을 managed와 Native 양쪽에 공급하는 dual-run
+- 알고리즘과 순회 순서는 변경하지 않음
+
+게이트:
+
+- 모든 필드 bitwise 동일
+- Recruit/Combat output count·순서·agent/team 동일
+- accumulator float bits 동일
+
+## 3. Contiguous SpatialGrid 교체
+
+- cell count → prefix sum → stable scatter
+- 기존 cell 및 동일-cell 후보 순서 재현
+- legacy/new query 후보 sequence 직접 비교
+
+게이트:
+
+- 모든 query의 ordered candidate sequence 동일
+- cell boundary/범위 밖 위치 테스트
+- Resolver 32개 테스트 및 golden snapshot 동일
+
+## 4. 순차 `IJob + Burst Strict`
+
+- grid/recruit/combat를 우선 단일 writer로 이식
+- 기존 winner/loser 및 victim 순서 유지
+- Burst on/off dual-run
+
+게이트:
+
+- Burst off/on byte snapshot 동일
+- Android ARM64 AOT에서 같은 golden 확인
+- 기존 테스트 전부 통과
+
+## 5. 안전한 per-agent 병렬화
+
+- follower desired 계산
+- Recruit claimant 계산
+- agent별 cell 계산
+- 필요하면 Combat nearest row 계산
+
+공유 결과는 후단 serial reduction/compaction으로 고정합니다.
+
+게이트:
+
+- worker 수와 batch size를 바꿔도 output bytes 동일
+- batch size 1/16/32/64 비교
+- 이벤트/Physics/Transform 적용 순서 동일
+- N=300에서 스케줄 오버헤드가 이득보다 큰지 확인
+
+## 6. Unity API 브리지 최적화
+
+Core 최적화 후에도 `CharacterController.Move`/Transform이 지배적일 때만 진행합니다.
+
+우선 검토안:
+
+- CharacterController를 가진 SimulationRoot는 tick pose에 유지
+- child VisualRoot만 렌더 보간
+- tick 시작 전체 simulation Transform 복원을 제거
+- presentation update를 별도 선형 패스로 통합
+
+게이트:
+
+- collider/grounding/displacement snapshot 동일
+- 화면 position/rotation/Animator state 동일
+- prefab hierarchy 및 pooling lifecycle 검증
+- Android 기기 프로파일에서 실제 이득 확인
+
+neutral의 `CharacterController` 제거 또는 단순 grid collision로 대체하는 방안은 성능 효과가 클 수 있지만 동작 동일성이 깨지므로 이번 설계의 자동 실행 범위에는 포함하지 않습니다.
+
+## 7. 선택적 고급 최적화
+
+프로파일러로 필요성이 입증된 경우에만:
+
+- Recruit/Combat contact traversal 융합
+- Combat victim sort 개선
+- 반복 pair 거리 계산 제거
+- 낮은 N에서는 serial, 높은 N에서는 parallel인 threshold 도입
+
+각 변경은 독립 golden 게이트를 통과해야 하며 여러 최적화를 한 단계에서 섞지 않습니다.
+
+# [리스크]
+
+- `CharacterController.Move`, Transform, Animator 비중이 크면 Burst 숫자 커널만으로 800 목표를 달성하지 못할 수 있습니다.
+- Unity PhysX 결과는 Editor x64와 Android ARM64 사이의 bitwise cross-platform 결정론을 보장하지 않습니다.
+- Burst Strict도 기존 managed `Mathf`와 자동으로 bitwise 동일하지 않습니다.
+- grid의 fixed bounds가 모든 runtime 위치를 포함하지 않으면 새 overflow 정책이 동작을 바꿀 수 있습니다.
+- `NativeParallelMultiHashMap`, shared append, worker merge 순서를 사용하면 결과 순서가 깨질 수 있습니다.
+- follower 목록의 swap-remove 순서를 dense team 재배치로 바꾸면 다음 tick separation 결과가 달라질 수 있습니다.
+- Combat scratch를 단순히 `N × T²`로 잡으면 팀 수 증가 시 메모리가 커지므로 실제 최대 team 수를 기준으로 계산해야 합니다.
+- N=300 정도에서는 Job scheduling 비용이 이득을 상쇄할 수 있어 serial Burst와 parallel Burst를 모두 측정해야 합니다.
+- transitive package에 직접 의존한 채 manifest 고정을 하지 않으면 URP dependency 변경으로 빌드가 깨질 수 있습니다.
+- 현재 테스트는 resolver 결과를 잘 검증하지만 RNG 소비, ordered grid query, event sequence, full-state float bits까지 고정하지는 않습니다. 병렬화 전에 golden harness가 필수입니다.
+- 현재 작업은 읽기 전용 설계 검토이므로 파일 변경과 Unity Test Runner 실행은 하지 않았습니다. 기존 사용자 변경 파일도 건드리지 않았습니다.
+CODEX_EXIT_CODE=0

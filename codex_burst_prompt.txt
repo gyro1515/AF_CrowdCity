@@ -1,0 +1,23 @@
+역할: AF_CrowdCity Unity 프로젝트의 crowd 시뮬레이션 솔버에 대해 "멀티스레드 + Burst 컴파일러" 전환 타당성을 코드 근거로 평가하는 독립 검증자.
+
+배경(이미 확정된 사실, 재확인 불필요하나 코드로 교차확인 가능):
+- crowd 이동은 Phase C에서 CharacterController.Move(PhysX) 병목(800명 SimTick의 ~94%)을 제거하기 위해, 2D SDF 거리장 + 결정적 WallSolver(순수 C# 커널, Crowd/Core)로 치환됨.
+- 커밋 b7739ce가 기본 OFF 스위치(_useSdfSolver) 뒤에 이 치환을 도입, 55c8d19에서 실제 ON + neutral 구성.
+- 커밋 메시지 기준 SimTick @800 = 19.93→1.62ms, 순수 커널(grid/recruit/combat) compute는 SDF 치환 이전 프로파일에서 전체의 ~1.1%에 불과했음.
+- 현재 솔버는 싱글스레드.
+
+평가 대상 질문(각각 코드 파일:라인 근거를 인용해 답할 것):
+1. 기술적 가능성: 현재 crowd 솔버(Crowd/Core 커널, WallSolver, SDF 샘플링, CrowdRoot의 tick 경로)를 Unity Burst + C# Job System(IJobParallelFor 등)으로 전환하는 것이 구조적으로 가능한가? Burst/Job 호환을 막는 요소를 구체적으로 열거하라: managed 참조, 클래스 기반 상태, 가상 호출, Physics API(Raycast/CheckSphere/CharacterController) 호출, GC 할당, static 가변 상태, List/Dictionary 등 managed 컬렉션.
+2. 실이득: 현재 병목 구조(SimTick 1.62ms, 커널 compute ~1% 수준, 실제 상한이 렌더라는 기록)에서 멀티스레드+Burst가 실제 프레임타임에 유의미한 이득을 주는가? 어느 규모(N명)부터 이득이 나타나는가? 아니면 Amdahl 상 무의미한가?
+3. 결정성: 현재 WallSolver는 "로컬 결정적"(같은 필드+입력+FP환경 재현)로 알려짐. IJobParallelFor로 병렬화 시 결정성(동일 시드→동일 결과)이 보존되는가? 부동소수점 순서 의존, 병렬 쓰기 경합, Burst의 FastMath(부정확 부동소수) 여부를 검토하라.
+4. 블로커/전제조건: 전환 전에 반드시 해결해야 할 것(예: 잔존 Physics 호출을 SDF/공간분할로 대체, SoA 데이터 레이아웃, NativeArray 전환, 커널의 combat/recruit 단계 중 병렬화 불가 구간 분리). 각 블로커의 난이도와 위험을 평가하라.
+5. 최종 권고: (A) 지금 할 가치가 있다 / (B) 특정 조건(N명 이상, 특정 기능 추가 시)에서만 / (C) 병목 아님, 하지 말 것 중 하나를 명확히 고르고 1줄 근거.
+
+조사 방법:
+- rg로 Crowd/Core, WallSolver, CrowdRoot, SDF 관련 파일을 찾아 실제 코드를 읽고 근거를 인용하라.
+- CrowdProfileHarness / CrowdOracleHarness가 있으면 성능/결정성 검증 방식을 참고하라.
+- 추측 금지. 코드에서 확인 안 되는 것은 "확인 불가"로 명시하라.
+
+출력 형식(간결하게):
+- 질문 1~5 각각에 대한 결론 + 핵심 코드 근거(파일:라인).
+- 마지막에 "합의 후보" 섹션: 다른 검증자와 합의 가능한 핵심 주장 3~5개를 불릿으로.
