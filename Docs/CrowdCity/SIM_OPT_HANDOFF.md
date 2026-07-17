@@ -1,12 +1,17 @@
 # Crowd Sim CPU 최적화 — 실행 핸드오프 (콜드스타트용)
 
 ## 🔄 다른 PC 재개 마커 (2026-07-17 업데이트)
-- **기준 커밋(baseline HEAD): `fb14a41`** — `origin/feat/crowd-sdf-perf` 에 push 완료. 다른 PC에서는 `git pull` (branch `feat/crowd-sdf-perf`)로 전부 수신됨. 로컬 미커밋/stash 없음 → 유실 없음.
-- **레이(`Physics.Raycast`) 사용 현황 = 벽 전용으로 이미 정리된 상태(커밋됨).** 두 곳뿐: `Assets/@Project/Crowd/Scripts/RivalAiDriver.cs`(`ApplyWallAvoidance`/`ProbeClearance`, 벽 회피)와 `Assets/@Project/Crowd/Scripts/CrowdRoot.cs:1099`(`RepickWanderHeading`, wander 방향 벽 판정). 둘 다 벽/장애물 판정용.
-- **크라우드-크라우드(에이전트 간) 판정은 레이가 아니라 `SpatialGrid.QueryCircle` 경로** (separation=`CrowdRoot.cs:929`, recruit=`RecruitResolver.cs:74`, combat=`CombatResolver.cs:271/461`). → "레이가 crowd에도 돌아 Update를 잡아먹던" 이슈는 **커밋된 코드 기준 재현되지 않음**(이미 해결된 것으로 판단). 진행중 수정본·stash 없음(클린 트리).
+- **기준 커밋(baseline HEAD) = 이 브랜치(`feat/crowd-sdf-perf`)의 최신 push된 커밋** — `origin/feat/crowd-sdf-perf` 에 push 완료(이전 마커의 `fb14a41`에서 진행됨). 다른 PC에서는 `git pull` (branch `feat/crowd-sdf-perf`)로 전부 수신됨. 로컬 미커밋/stash 없음 → 유실 없음.
+- **레이(`Physics.Raycast`) = 벽 판정 용도지만 layermask 버그가 있었고, 이번 세션에 수정 완료.** 두 곳뿐: `Assets/@Project/Crowd/Scripts/RivalAiDriver.cs`(`ApplyWallAvoidance`/`ProbeClearance`, 벽 회피)와 `Assets/@Project/Crowd/Scripts/CrowdRoot.cs:1099`(`RepickWanderHeading`, wander 방향 벽 판정). 용도는 둘 다 벽 판정이지만 **layermask 없이(`Physics.DefaultRaycastLayers`) 쏘고 있어 Unit(crowd) 콜라이더를 벽으로 오판하던 실제 버그였음** — 이전 마커는 레이의 *용도*만 확인하고 layermask를 보지 않아 "이미 정리됨"으로 잘못 판단했다. mask에서 Unit 레이어 제외로 이번 세션에 **FIXED**.
+- **크라우드-크라우드(에이전트 간) 판정은 레이가 아니라 `SpatialGrid.QueryCircle` 경로** (separation=`CrowdRoot.cs:929`, recruit=`RecruitResolver.cs:74`, combat=`CombatResolver.cs:271/461`). → 다만 위 벽 레이 2곳은 layermask 누락으로 **crowd(Unit)를 실제로 맞고 있었음**(오판) — 이번 세션에 mask에서 Unit 제외로 **수정 완료**. 단 이 오판은 correctness 문제일 뿐 프레임 시간(Update self)의 주원인은 아래 진단대로 QueryCircle·SDF다.
 - **다음 작업(사용자 의도) = Burst 컴파일러 + Job 시스템 = 계획서 §3 `M-sim-2`(=M2).** 3분할: M2-a(Native SoA) → M2-b(Burst canonical) → M2-c(IJobParallelFor).
 - **단, 계획/게이트상 M2 선행 조건:** `M-sim-0` 실측(아직 미실행, 베이스라인 산출물 미커밋) → `M-sim-1`(grid 쿼리 밀도 캡핑). 사용자 의도(바로 Burst)와 계획 순서(측정 먼저)가 갈리는 지점 — 재개 시 확정 필요.
 - ⚠ **메모리(로컬 `~/.claude`)는 PC 간 동기화 안 됨.** 이 문서(git 추적)가 PC 간 유일한 인수인계 소스.
+
+### 📌 진단 갱신 (2026-07-17, 프로파일러 근거 `Docs/Photo/PRO.PNG`, `PRO2.PNG`)
+- **프레임 핫스팟 = `GameplayRoot.Update()` self 14.86ms(32.4%)**, 66ms(15FPS)까지 스파이크. 실제 `PhysX.Simulate`는 1.53ms뿐 → 물리 솔버가 아니라 **크라우드 틱 내부 연산**이 원인.
+- **원인:** `MaxStepsPerFrame=4`(GameplayRoot.cs:13)로 SimTick이 프레임당 ~3회 실행 × 매 틱 [4개 `SpatialGrid.QueryCircle` 이웃질의(separation=`CrowdRoot.cs:929` / recruit=`RecruitResolver.cs:74` / combat=`CombatResolver.cs:271,461`) + 에이전트별 SDF `WallSolver.Resolve`(`CrowdRoot.cs:1125`)]. 커스텀 `CrowdSimProfiler`가 Unity ProfilerMarker를 안 써서 하위 단계가 전부 `GameplayRoot.Update` self로 뭉쳐 보임. → **M-sim-1(쿼리 밀도 캡핑)·M-sim-2(Burst)가 노리는 지점.** 기존 M-sim-0 베이스라인("dominant = SDF move-solve")과 일치.
+- **별개 correctness 버그 — 이번 세션 수정 완료:** 벽 감지 레이 2곳(`CrowdRoot.RepickWanderHeading` @~1099, `RivalAiDriver.ProbeClearance` @~199)이 layermask 없이 `Physics.DefaultRaycastLayers`로 쏴 Unit(crowd) 콜라이더를 벽으로 오판. `Physics.IgnoreLayerCollision(Unit,Unit)`은 raycast에 무효라 유닛 물리충돌을 꺼도 레이는 crowd를 맞음. → mask에서 Unit 레이어 제외(`Physics.DefaultRaycastLayers & ~(1<<unitLayer)`, 신규 직렬화 필드 없이 코드로 계산)로 수정. **오판 제거일 뿐 14.86ms와는 무관** (프레임 시간은 위 쿼리·SDF가 원인).
 
 > **이 문서의 용도**: 별도 세션(대화 컨텍스트 없음)이 이 문서 하나로 crowd sim CPU 최적화 작업을 **바로 시작**할 수 있게 하는 진입점이다. 상세 설계는 [`SIM_OPT_PLAN.md`](SIM_OPT_PLAN.md)에 있다. 이 문서는 "어떻게 부팅하고 무엇부터 하는가"만 담는다.
 > **선행 조건**: 사용자의 별도 구조 리팩토링이 **완료된 뒤** 시작한다. 리팩토링은 `Crowd/Core` + `CrowdRoot`를 전부 건드리므로, 이 계획은 라인이 아니라 **책임 단위로 rebase**한다.

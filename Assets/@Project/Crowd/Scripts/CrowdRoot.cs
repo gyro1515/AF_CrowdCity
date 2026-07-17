@@ -103,6 +103,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private int _teamCount;
     private int _agentCapacity;
     private int _unitLayer = -1;         // 모든 Human root의 물리 레이어. -1이면 레이어 미해결(무시 설정/레이어 지정을 건너뜀).
+    private int _wallProbeMask;          // 벽 탐지 raycast용 레이어 마스크(기본 raycast 레이어에서 Unit 제외). Initialize에서 1회 계산.
     private Vector2 _playerHeadingDir;
     private bool _playerHasHeading;
     private float _aiTimer;
@@ -191,6 +192,9 @@ public sealed class CrowdRoot : MonoBehaviour
         // 자기 자신과의 충돌만 끈다. 환경(건물/소품/차량/공원, Default)과의 충돌은 기본값 그대로 유지한다.
         // 레이어가 없으면 오류를 한 번 남기고 무시 설정을 건너뛴다(fail-safe: 크래시 대신 유닛끼리 충돌 복귀).
         _unitLayer = LayerMask.NameToLayer(UnitLayerName);
+        // 벽 탐지 raycast(배회/라이벌)는 IgnoreLayerCollision의 영향을 받지 않으므로, 유닛 캡슐을 벽으로 오인하지 않도록
+        // 기본 raycast 레이어를 기준으로 두고 아래에서 Unit 레이어가 해결되면 마스크에서 제외한다(미해결이면 기본 마스크 그대로).
+        _wallProbeMask = Physics.DefaultRaycastLayers;
         if (_unitLayer < 0)
         {
             Debug.LogError(
@@ -200,6 +204,7 @@ public sealed class CrowdRoot : MonoBehaviour
         else
         {
             Physics.IgnoreLayerCollision(_unitLayer, _unitLayer, true);
+            _wallProbeMask &= ~(1 << _unitLayer); // 유닛(_unitLayer) 캡슐을 벽 탐지 raycast에서 제외.
         }
 
         if (config == null)
@@ -1096,7 +1101,7 @@ public sealed class CrowdRoot : MonoBehaviour
             float heading = (float)(_rng.NextDouble() * 360.0);
             float rad = heading * Mathf.Deg2Rad;
             Vector3 dir = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad));
-            if (!Physics.Raycast(origin, dir, WanderRayDistance))
+            if (!Physics.Raycast(origin, dir, WanderRayDistance, _wallProbeMask))
             {
                 _wanderHeadingDeg[agentIndex] = heading;
                 CrowdOracleRecorder.RecordWanderRepick(agentIndex, attempt + 1, true); // 무침습 관찰(Enabled=false면 no-op).

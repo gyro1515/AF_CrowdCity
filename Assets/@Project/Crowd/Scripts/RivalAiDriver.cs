@@ -18,6 +18,11 @@ public sealed class RivalAiDriver
     // 방향 vector가 사실상 0인지 판별하는 임계값(제곱 크기).
     private const float DegenerateSqr = 1e-6f;
 
+    // 벽 탐지 raycast용 레이어 마스크. IgnoreLayerCollision은 raycast에 영향을 주지 않으므로,
+    // 유닛(크라우드 CharacterController, "Unit" 레이어)을 벽으로 오인하지 않도록 기본 raycast 레이어에서 Unit만 제외해
+    // 타입 최초 사용 시 1회 계산한다(레이어당 NameToLayer 반복 호출 방지).
+    private static readonly int WallProbeMask = Physics.DefaultRaycastLayers & ~(1 << LayerMask.NameToLayer("Unit"));
+
     private readonly int _teamId;
     private readonly GameConfigSO _config;
     private readonly System.Random _random;
@@ -196,7 +201,7 @@ public sealed class RivalAiDriver
         float rad = headingDeg * Mathf.Deg2Rad;
         Vector3 direction = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad));
         RaycastHit hit;
-        if (Physics.Raycast(origin, direction, out hit, maxDistance))
+        if (Physics.Raycast(origin, direction, out hit, maxDistance, WallProbeMask))
         {
             return hit.distance;
         }
