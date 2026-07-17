@@ -19,6 +19,20 @@ This `CLAUDE.md` applies to the repository root and everything below it. The sou
 - Never allow two or more subagents to edit the same file concurrently. Assign one owner per file before delegation, and confirm that earlier work has ended before transferring ownership.
 - For non-trivial work, assign implementation and verification to different subagents. One subagent may execute and verify a trivial task, but the main agent still has no exception to implement or verify it directly.
 - Compare every subagent report against the success criteria. If evidence is insufficient, delegate corrective work within the same scope. Never report unverified work as complete.
+- While subagents are running (especially in the background), periodically verify they are still making progress — check roughly every 10 minutes. If a subagent has stalled or gone idle without completing, intervene (re-prompt, reassign, or restart); never passively wait on a subagent that has stopped progressing.
+
+## Cross-Verification: Codex ↔ Claude (Mandatory)
+
+For every non-trivial code task, both the **work plan** (before implementation) and the **post-work verification** (after implementation) must be cross-reviewed by two independent agents, each acting as a **Unity senior game programmer** — one Codex, one Claude. Each independently critiques the other's plan/result; iterate in rounds until they reach **explicit consensus**. Do not conclude a phase (plan or verification) while the two still disagree: record the open disagreement and run another round until it is resolved. The main agent orchestrates the exchange and judges convergence; a single agent's approval never substitutes for the cross-review. Trivial edits are exempt (use judgment).
+
+Agent settings:
+
+- **Codex** — model `gpt-5.6-sol`, effort `ultra`, speed `fast` (invoke: `codex exec -m gpt-5.6-sol -c model_reasoning_effort=ultra -c service_tier=fast`; requires codex-cli ≥ 0.144.5).
+- **Claude** — model `Opus 4.8`, effort `xhigh`.
+
+## Working Language
+
+Do all work in **English** — tasks, plans, and agent-to-agent communication (subagent/`Agent`-tool prompts, workflow scripts, harnesses). Use **Korean only for communication with the user** (questions, reports, and chat). English harness prompts are marginally more reliable and more token-efficient; Korean keeps the user-facing exchange clear.
 
 ## Behavioral Guidelines to Reduce Common LLM Coding Mistakes
 
