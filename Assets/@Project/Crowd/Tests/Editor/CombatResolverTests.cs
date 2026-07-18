@@ -80,7 +80,7 @@ public sealed class CombatResolverTests
     [Test]
     public void RateLimited_ConversionAccumulator_ClampSaturates_ConvertsOnFourthCall()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 6명(리더 1 + 팔로워 5), 반경 안에 밀집.
         buffer.Add(0, 0, true, V(0.00f, 0.00f));
         buffer.Add(1, 0, false, V(0.10f, 0.00f));
@@ -127,7 +127,7 @@ public sealed class CombatResolverTests
     [Test]
     public void RateLimited_ConversionRate_FractionalClamp_ConvertsOnSecondCall()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(승자): 4명 원점 밀집.
         buffer.Add(0, 0, true, V(0.00f, 0.00f));
         buffer.Add(1, 0, false, V(0.05f, 0.00f));
@@ -162,7 +162,7 @@ public sealed class CombatResolverTests
     [Test]
     public void RateLimited_Accumulator_ResetsWhenContactBreaks()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 5명.
         buffer.Add(0, 0, true, V(0.00f, 0.00f));
         buffer.Add(1, 0, false, V(0.10f, 0.00f));
@@ -232,7 +232,7 @@ public sealed class CombatResolverTests
     [Test]
     public void EqualSize_Inert()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0 3명, team1 3명 밀집(동수).
         buffer.Add(0, 0, true, V(0.00f, 0.00f));
         buffer.Add(1, 0, false, V(0.10f, 0.00f));
@@ -261,7 +261,7 @@ public sealed class CombatResolverTests
     [Test]
     public void FlowFlips_WhenSizesCross()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0 5명(리더 id0 + 팔로워 id1..4), team1 3명(리더 id5 + 팔로워 id6,7). 밀집.
         buffer.Add(0, 0, true, V(0.00f, 0.00f));
         buffer.Add(1, 0, false, V(0.10f, 0.00f));
@@ -342,7 +342,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Elimination_Attribution_MaxLocalCountWins()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 홀로 남은 리더(ownLocal=1).
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         // team1: 리더 근처 국소 2명(한쪽).
@@ -377,7 +377,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Elimination_Attribution_TieFavorsLowerTeam()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 홀로 남은 리더(ownLocal=1).
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         // team1: 리더 근처 국소 2명(한쪽).
@@ -407,7 +407,7 @@ public sealed class CombatResolverTests
     [Test]
     public void BothLoneLeaders_Inert()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         buffer.Add(1, 1, true, V(0.5f, 0.0f));
 
@@ -432,7 +432,7 @@ public sealed class CombatResolverTests
     {
         // (a) team1이 리더 반경 안 국소 2명(> 1)이면 team0 리더가 제거된다.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
             buffer.Add(1, 1, true, V(0.5f, 0.0f));
             buffer.Add(2, 1, false, V(0.4f, 0.3f));
@@ -450,7 +450,7 @@ public sealed class CombatResolverTests
 
         // (b) team1도 홀로(전역 count 1)면 team0과 전역 동수라 strict > 전역 가드가 막아 제거되지 않는다(국소는 rule B 임계값 충족).
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
             buffer.Add(1, 1, true, V(0.5f, 0.0f));
 
@@ -472,7 +472,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Leader_LocallyOutnumbered_EliminatedDespiteDistantStragglers()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(코너에 몰린 팀): 리더 + 반경 밖 멀리 떨어진 straggler 2명 -> 전역 count 3.
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         buffer.Add(1, 0, false, V(50.0f, 0.0f));
@@ -508,7 +508,7 @@ public sealed class CombatResolverTests
     [Test]
     public void LoneExposedLeader_EliminatedInBothModes()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0: 홀로 남은 리더(ownLocal=1).
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         // team1: 리더는 team0 리더 반경 안(거리 0.9) 국소 1명만 보이게, 팔로워는 team0 반경 밖·team1 리더 반경 안(거리 0.6).
@@ -555,7 +555,7 @@ public sealed class CombatResolverTests
         //     호위는 적 클러스터(+x) 반대편(-x)이라 가장 가까운 적과도 거리 1.4 > 접촉 반경 1.0 => 3단계 전향 없음 =>
         //     ownLocal=2 유지 => 리더는 국소 열세여도 면역(rule B: ownLocal<=1이 아니라 제거 불가). 구 규칙이면 3>2로 제거됐을 것.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
             buffer.Add(1, 0, false, V(-0.9f, 0.0f));
             buffer.Add(10, 1, true, V(0.5f, 0.0f));
@@ -578,7 +578,7 @@ public sealed class CombatResolverTests
         // (ii) 같은 배치에서 호위(id1)만 제거: team0 리더가 홀로 노출(ownLocal=1) + 국소 적 3(enemyLocal=3)
         //      + 전역 가드(team1 3 > team0 1) => 같은 team1에게 제거+흡수된다.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
             buffer.Add(10, 1, true, V(0.5f, 0.0f));
             buffer.Add(11, 1, false, V(0.5f, 0.3f));
@@ -609,7 +609,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Leader_NotEliminated_ByGloballySmallerButLocallyDenserEnemy()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(전역 큼, 6명): 리더는 원점, 팔로워 5명은 CombatRadius(1.0) 밖 멀리 => 리더의 국소 호위 = 0.
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         buffer.Add(1, 0, false, V(10.0f, 0.0f));
@@ -643,7 +643,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Leader_Eliminated_ByGloballyLargerEnemy_DespiteEnemyStragglers()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team1(피해자, 전역 3): 리더는 원점, straggler 2명은 반경 밖 멀리 => 전역 count 3(>1)이지만 국소는 리더 홀로.
         buffer.Add(10, 1, true, V(0.0f, 0.0f));
         buffer.Add(11, 1, false, V(50.0f, 0.0f));
@@ -679,7 +679,7 @@ public sealed class CombatResolverTests
     [Test]
     public void EqualGlobalSize_NoLeaderElimination_InBothModes()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(전역 3): 리더는 원점, 팔로워 2명은 반경 밖 멀리 => 리더 국소 호위 0.
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         buffer.Add(1, 0, false, V(50.0f, 0.0f));
@@ -712,7 +712,7 @@ public sealed class CombatResolverTests
     [Test]
     public void RateLimited_VictimClaimableByTwoTeams_NearestWins_OtherBudgetRetained()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team2(패자): victim v(id 100)는 원점, 리더(id 101)는 멀리.
         buffer.Add(100, 2, false, V(0.0f, 0.0f));
         buffer.Add(101, 2, true, V(40.0f, 40.0f));
@@ -765,7 +765,7 @@ public sealed class CombatResolverTests
     [Test]
     public void EliminationPass_LeaderConversions_DoNotFeedOtherEliminations()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team1: 홀로 남은 리더 (0.6,0) -> team3에게 제거된다(먼저 처리되는 낮은 팀 id).
         buffer.Add(1, 1, true, V(0.6f, 0.0f));
         // team2: 홀로 남은 리더 (0,0) -> team1과만 접촉(거리 0.6), team3과는 비접촉(거리 1.4).
@@ -805,7 +805,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Instant_AllContactingFollowers_ConvertInSingleCall()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(승자): 6명(리더 1 + 팔로워 5), 원점 부근 밀집.
         buffer.Add(0, 0, true, V(0.00f, 0.00f));
         buffer.Add(1, 0, false, V(0.10f, 0.00f));
@@ -846,7 +846,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Instant_SmallTeamSurrounded_AllMembersFlipInSingleCall()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(작은 팀, 3명): 리더 + 팔로워 2, 중심에 밀집.
         buffer.Add(100, 0, true, V(0.00f, 0.00f));
         buffer.Add(101, 0, false, V(0.10f, 0.00f));
@@ -888,7 +888,7 @@ public sealed class CombatResolverTests
     [Test]
     public void Instant_VictimClaimableByTwoTeams_NearestWins()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team2(패자): victim v(id 100)는 원점, 리더(id 101)는 멀리.
         buffer.Add(100, 2, false, V(0.0f, 0.0f));
         buffer.Add(101, 2, true, V(40.0f, 40.0f));
@@ -923,7 +923,7 @@ public sealed class CombatResolverTests
     [Test]
     public void ModeOff_EqualGlobalLoneLeaders_NoCyclicElimination()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0, team1의 lone leader가 CombatRadius(1.0) 안(거리 0.5)에서 접촉. 각 전역 count=1로 동수.
         buffer.Add(0, 0, true, V(0.0f, 0.0f));
         buffer.Add(1, 1, true, V(0.5f, 0.0f));
@@ -950,7 +950,7 @@ public sealed class CombatResolverTests
     [Test]
     public void ChainElimination_MiddleTeamAlsoEliminated_EmitsChainRecords()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team1(생존, 국소 강): 리더 + 원점 팔로워 2 + 반경 밖 팔로워 1. 원점 밀집 3명이 team0 리더를 국소 열세로
         // 만들고, 전역 count 4 > team0 전역 count 3이라 전역 가드를 통과해 team0 리더의 killer가 될 수 있다.
         buffer.Add(10, 1, true, V(0.0f, 0.0f));
@@ -989,7 +989,7 @@ public sealed class CombatResolverTests
     [Test]
     public void SizeAware_LargeUnit_ConvertsEnemyBeyondBaseRadius()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(승자, 3명 > team1 2명):
         buffer.Add(0, 0, true, V(40.0f, 40.0f));           // 리더: 멀리(stage-4 리더 제거 배제, 접촉 유닛 아님).
         buffer.Add(1, 0, false, V(1.1f, 0.0f), 1.5f);      // 큰 유닛(스케일 1.5): victim에 거리 1.1(radius 1.0 초과, radius*1.25=1.25 이내).
@@ -1020,7 +1020,7 @@ public sealed class CombatResolverTests
     [Test]
     public void SizeAware_BaselineUnit_DoesNotConvertBeyondBaseRadius()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // team0(승자, 3명 > team1 2명):
         buffer.Add(0, 0, true, V(40.0f, 40.0f));           // 리더: 멀리.
         buffer.Add(1, 0, false, V(1.1f, 0.0f));            // 접촉 유닛(스케일 1, 기본): victim에 거리 1.1(base radius 1.0 초과).
@@ -1055,7 +1055,7 @@ public sealed class CombatResolverTests
         // (i-a) 넓힌 LeaderAloneRadius(2.0): 아군 호위(거리 1.5)가 ownLocal에 잡혀 리더 면역.
         //   호위(id1)는 적 클러스터(+x) 반대편(-x)에 두어 적 접촉 반경(CombatRadius) 밖 -> 3단계에서 전향되지 않고 ownLocal에 남는다.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));    // team0 리더(원점).
             buffer.Add(1, 0, false, V(-1.5f, 0.0f));  // 아군 호위: 거리 1.5 (CombatRadius 1.0 < 1.5 <= LeaderAloneRadius 2.0).
             // team1(전역 3 > team0 전역 2): 리더 CombatRadius 안 국소 3명(+x쪽).
@@ -1077,7 +1077,7 @@ public sealed class CombatResolverTests
 
         // (i-b) 동일 배치에서 LeaderAloneRadius==CombatRadius(1.0): 거리 1.5 호위는 집계되지 않아 리더 홀로(ownLocal=1) -> 제거.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));
             buffer.Add(1, 0, false, V(-1.5f, 0.0f));
             buffer.Add(10, 1, true, V(0.5f, 0.0f));
@@ -1101,7 +1101,7 @@ public sealed class CombatResolverTests
         //   리더는 홀로(ownLocal=1)이고 전역 가드도 통과(team1 3 > team0 1)하지만 유일한 적이 CombatRadius 밖이라 제거되지 않는다.
         //   적 탐지가 LeaderAloneRadius로 잘못 넓혀졌다면 이 리더는 제거되었을 것이다.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, 0, true, V(0.0f, 0.0f));     // team0 리더(홀로, 호위 없음).
             buffer.Add(10, 1, true, V(1.5f, 0.0f));    // 적(거리 1.5): CombatRadius 1.0 밖, LeaderAloneRadius 2.0 안.
             buffer.Add(11, 1, false, V(50.0f, 50.0f)); // team1 전역 count 채우기(원거리, 국소 무관).
@@ -1204,7 +1204,7 @@ public sealed class CombatResolverTests
     // 주어진 삽입 순서로 시나리오를 실행하고, Id 기준으로 정규화한 결과 서명을 돌려준다.
     private static string RunScenario(Spec[] specs, int[] order, float dt)
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int k = 0; k < order.Length; k++)
         {
             Spec s = specs[order[k]];

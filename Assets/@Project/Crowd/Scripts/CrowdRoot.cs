@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 /// <summary>
@@ -82,7 +83,9 @@ public sealed class CrowdRoot : MonoBehaviour
     private float _groundY;
 
     // simulation kernel (Project.CrowdCity.Core)
-    private AgentBuffer _buffer;
+    // M2-a1: 권한 있는 agent 상태(SoA buffer + 조향 상태)의 Persistent NativeArray 소유자. Initialize에서 1회 생성, Shutdown에서 1회 해제.
+    private CrowdSimState _simState;
+    private AgentBuffer _buffer;         // _simState.Agents 별칭(캐시). 소유/해제는 _simState가 한다.
     private SpatialGrid _grid;
     private RecruitResolver _recruitResolver;
     private CombatResolver _combatResolver;
@@ -101,12 +104,13 @@ public sealed class CrowdRoot : MonoBehaviour
     private Human[] _humanByAgent;
     private Transform[] _transformByAgent;
     private CharacterController[] _controllerByAgent;
-    private Vector2[] _followerVelocity; // 팔로워 조향의 현재 속도 상태(agent index별). 가속 제한 적분에 쓴다.
+    // 아래 4개는 _simState 소유 NativeArray의 별칭(캐시)이다. 인덱싱 읽기/쓰기는 공유 메모리로 반영되며, 해제는 _simState만 한다.
+    private NativeArray<Vector2> _followerVelocity; // 팔로워 조향의 현재 속도 상태(agent index별). 가속 제한 적분에 쓴다.
     private Vector3[] _visualPrev;       // 렌더 보간용 직전 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
     private Vector3[] _visualCur;        // 렌더 보간용 최신 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
-    private float[] _leaderYawDeg;       // team별 리더의 현재 실제 yaw(도).
-    private float[] _wanderHeadingDeg;   // 중립 agent의 배회 heading(도).
-    private float[] _wanderTimer;        // 중립 agent의 방향 재선택 잔여 시간(초).
+    private NativeArray<float> _leaderYawDeg;       // team별 리더의 현재 실제 yaw(도).
+    private NativeArray<float> _wanderHeadingDeg;   // 중립 agent의 배회 heading(도).
+    private NativeArray<float> _wanderTimer;        // 중립 agent의 방향 재선택 잔여 시간(초).
     private int[] _lastPublishedCounts;  // team별 마지막 발행 인원 수(coalesce 기준).
 
     // ---- GPU-anim Stage 1 Chunk B presentation 상태(시각 전용, 커널/미러/이벤트 미참조) ----
@@ -256,7 +260,10 @@ public sealed class CrowdRoot : MonoBehaviour
         _teamCount = 1 + config.RivalCount;
         _agentCapacity = _teamCount + config.NeutralCount;
 
-        _buffer = new AgentBuffer(_agentCapacity);
+        // M2-a1: 권한 있는 agent 상태를 Persistent NativeArray로 1회 할당한다(storage 이관, 결과 byte-identical).
+        // _buffer와 아래 조향 필드는 _simState 소유 배열의 별칭이다(해제는 Shutdown에서 _simState만).
+        _simState = new CrowdSimState(_agentCapacity, _teamCount);
+        _buffer = _simState.Agents;
         _grid = new SpatialGrid(GridCellSize, _agentCapacity);
         _recruitResolver = new RecruitResolver();
         _combatResolver = new CombatResolver(_teamCount, _agentCapacity);
@@ -278,12 +285,13 @@ public sealed class CrowdRoot : MonoBehaviour
         _humanByAgent = new Human[_agentCapacity];
         _transformByAgent = new Transform[_agentCapacity];
         _controllerByAgent = new CharacterController[_agentCapacity];
-        _followerVelocity = new Vector2[_agentCapacity];
+        // 조향 상태는 _simState 소유 NativeArray를 별칭으로 캐시한다(별도 할당 없음; 인덱싱은 공유 메모리에 반영).
+        _followerVelocity = _simState.FollowerVelocity;
+        _leaderYawDeg = _simState.LeaderYawDeg;
+        _wanderHeadingDeg = _simState.WanderHeadingDeg;
+        _wanderTimer = _simState.WanderTimer;
         _visualPrev = new Vector3[_agentCapacity];
         _visualCur = new Vector3[_agentCapacity];
-        _leaderYawDeg = new float[_teamCount];
-        _wanderHeadingDeg = new float[_agentCapacity];
-        _wanderTimer = new float[_agentCapacity];
         _visualSpeed01 = new float[_agentCapacity]; // 시각 전용(기본 0=정지 포즈, 첫 Playing 틱에서 갱신).
         _phase01 = new float[_agentCapacity];
         _lastPublishedCounts = new int[_teamCount];
@@ -668,6 +676,14 @@ public sealed class CrowdRoot : MonoBehaviour
         {
             _wallField.Dispose();
             _wallField = null;
+        }
+
+        // M2-a1: 권한 있는 agent 상태의 Persistent NativeArray를 해제한다(소유자 lifecycle; humanByAgent 미할당 경로의 이른 return 이전, WallField와 동일 규약).
+        // idempotent(IsCreated 가드). 별칭 필드(_buffer/_followerVelocity 등)는 여기서 해제하지 않는다(_simState가 유일 소유자).
+        if (_simState != null)
+        {
+            _simState.Dispose();
+            _simState = null;
         }
 
         if (_humanByAgent == null)
@@ -1324,7 +1340,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private void MirrorPositionsToBuffer()
     {
         int agentCount = _buffer.Count;
-        Vector2[] bufferPos = _buffer.Pos;
+        NativeArray<Vector2> bufferPos = _buffer.Pos;
         for (int i = 0; i < agentCount; i++)
         {
             Vector3 pos = _transformByAgent[i].position;

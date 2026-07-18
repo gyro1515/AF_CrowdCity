@@ -47,7 +47,7 @@ public sealed class RecruitResolverTests
 
         // 반경 안.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
             buffer.Add(1, 0, true, V(0.5f, 0f));
             SpatialGrid grid = NewGrid(buffer);
@@ -60,7 +60,7 @@ public sealed class RecruitResolverTests
 
         // 반경 밖.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
             buffer.Add(1, 0, true, V(5f, 0f));
             SpatialGrid grid = NewGrid(buffer);
@@ -76,7 +76,7 @@ public sealed class RecruitResolverTests
     [Test]
     public void Contested_NearestClaimantWins()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
         buffer.Add(1, 0, true, V(0.5f, 0f));  // 거리 0.5
         buffer.Add(2, 1, true, V(0.3f, 0f));  // 거리 0.3 (더 가까움)
@@ -98,7 +98,7 @@ public sealed class RecruitResolverTests
     {
         // team0 claimant의 Id가 더 낮은 경우 -> team0 승.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
             buffer.Add(1, 0, true, V(0.5f, 0f));   // Id 1, 거리 0.5
             buffer.Add(2, 1, true, V(-0.5f, 0f));  // Id 2, 거리 0.5 (동률)
@@ -113,7 +113,7 @@ public sealed class RecruitResolverTests
 
         // claimant Id를 뒤집으면(team1이 더 낮은 Id) -> team1 승. 결과가 Id 기준임을 확인.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
             buffer.Add(9, 0, true, V(0.5f, 0f));   // Id 9, 거리 0.5
             buffer.Add(2, 1, true, V(-0.5f, 0f));  // Id 2, 거리 0.5 (동률, 더 낮은 Id)
@@ -135,7 +135,7 @@ public sealed class RecruitResolverTests
     {
         int forwardResult;
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
             buffer.Add(3, 0, true, V(0.5f, 0f));
             buffer.Add(7, 1, true, V(-0.5f, 0f));
@@ -148,7 +148,7 @@ public sealed class RecruitResolverTests
 
         int reversedResult;
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(7, 1, true, V(-0.5f, 0f));
             buffer.Add(3, 0, true, V(0.5f, 0f));
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
@@ -169,7 +169,7 @@ public sealed class RecruitResolverTests
     [Test]
     public void MultipleNeutrals_OneClaimEach()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));    // team0 근처
         buffer.Add(1, AgentBuffer.NeutralTeam, false, V(10f, 0f));  // team1 근처
         buffer.Add(2, AgentBuffer.NeutralTeam, false, V(50f, 0f));  // 아무도 없음
@@ -198,7 +198,7 @@ public sealed class RecruitResolverTests
 
         // (a) 큰 중립(스케일 1.5): pairR = 1.2*0.5*(1.5+1.0)=1.5 > 1.35 => 영입된다.
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f), 1.5f);
             buffer.Add(1, 0, true, V(1.35f, 0f)); // 스케일 1 recruiter, 거리 1.35.
             SpatialGrid grid = NewGrid(buffer);
@@ -213,7 +213,7 @@ public sealed class RecruitResolverTests
 
         // (b) 대조: 스케일 1 중립은 pairR = 1.2 < 1.35 => 영입되지 않는다(base 경계 유지).
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
             buffer.Add(1, 0, true, V(1.35f, 0f));
             SpatialGrid grid = NewGrid(buffer);
@@ -227,7 +227,7 @@ public sealed class RecruitResolverTests
 
         // (c) 큰 recruiter: 스케일 1 중립도 스케일 1.5 member에게는 pairR = 1.5 > 1.35 => 영입된다(recruiter 쪽 스케일도 도달 거리를 늘린다).
         {
-            AgentBuffer buffer = new AgentBuffer(Cap);
+            using AgentBuffer buffer = new AgentBuffer(Cap);
             buffer.Add(0, AgentBuffer.NeutralTeam, false, V(0f, 0f));
             buffer.Add(1, 0, false, V(1.35f, 0f), 1.5f); // 스케일 1.5 recruiter(영입된 큰 member는 최대 스케일까지 가능).
             SpatialGrid grid = NewGrid(buffer);

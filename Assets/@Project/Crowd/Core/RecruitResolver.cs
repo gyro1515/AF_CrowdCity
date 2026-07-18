@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 /// <summary>
@@ -46,10 +47,10 @@ public sealed class RecruitResolver
         results.Clear();
 
         int count = buffer.Count;
-        int[] team = buffer.Team;
-        int[] id = buffer.Id;
-        Vector2[] pos = buffer.Pos;
-        float[] scale = buffer.Scale;
+        NativeArray<int> team = buffer.Team;
+        NativeArray<int> id = buffer.Id;
+        NativeArray<Vector2> pos = buffer.Pos;
+        NativeArray<float> scale = buffer.Scale;
         // 스케일 인지: worst-case pair(둘 다 최대 스케일)까지 후보가 잡히도록 질의 반경을 넓힌다.
         // maxScale이 0(bare)이면 1로 가드해 질의를 축소하지 않는다. 실제 영입 판정은 아래 pair별 반경으로 건다.
         float queryRadius = recruitRadius * Mathf.Max(1f, maxScale);

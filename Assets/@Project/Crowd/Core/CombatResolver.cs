@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 /// <summary>
@@ -216,11 +217,11 @@ public sealed class CombatResolver
 
         int teamCount = _teamCount;
         int agentCount = buffer.Count;
-        int[] teams = buffer.Team;
-        bool[] isLeader = buffer.IsLeader;
-        int[] ids = buffer.Id;
-        Vector2[] positions = buffer.Pos;
-        float[] scales = buffer.Scale;
+        NativeArray<int> teams = buffer.Team;
+        NativeArray<bool> isLeader = buffer.IsLeader;
+        NativeArray<int> ids = buffer.Id;
+        NativeArray<Vector2> positions = buffer.Pos;
+        NativeArray<float> scales = buffer.Scale;
         float radius = tuning.CombatRadius;
         // 리더가 혼자인지(주변 아군 호위 유무) 판정하는 반경. CombatRadius와 별개로 튜닝되며 4단계에서만 아군 tally에 쓰인다.
         float leaderAloneRadius = tuning.LeaderAloneRadius;
@@ -550,7 +551,7 @@ public sealed class CombatResolver
 
     // _victimBuffer[0..count)를 (배정 거리 제곱 오름차순, 동률은 agent Id 오름차순)으로 삽입 정렬한다.
     // Id가 고유해 전순서가 되므로 결과가 agent 삽입 순서와 무관하게 결정된다. 할당 없음.
-    private void SortVictimsByDistanceThenId(int count, int[] ids)
+    private void SortVictimsByDistanceThenId(int count, NativeArray<int> ids)
     {
         // 무침습 계측: 비교 여부를 루프 밖에서 한 번만 읽고 로컬로 집계 후 1회만 flush한다(Enabled=false면 no-op).
         bool countCmp = CrowdSimCounters.Enabled;

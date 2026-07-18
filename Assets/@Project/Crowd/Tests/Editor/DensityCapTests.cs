@@ -21,7 +21,7 @@ public sealed class DensityCapTests
         System.Random rng = new System.Random(20240718);
         int count = 150;
 
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int i = 0; i < count; i++)
         {
             float x = (float)(rng.NextDouble() * 50.0 - 25.0);
@@ -57,7 +57,7 @@ public sealed class DensityCapTests
         System.Random rng = new System.Random(20240719);
         int count = 150;
 
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int i = 0; i < count; i++)
         {
             float x = (float)(rng.NextDouble() * 50.0 - 25.0);
@@ -91,7 +91,7 @@ public sealed class DensityCapTests
     public void DenseSingleCell_ReturnsFirstBOfLifoChain()
     {
         const int count = 8;
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int i = 0; i < count; i++)
         {
             // 모두 cell (0,0)에 속하고(cellSize=10) center에서 반경 내가 되도록 좁게 배치한다.
@@ -131,7 +131,7 @@ public sealed class DensityCapTests
         System.Random rng = new System.Random(20240720);
         int count = 40;
 
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int i = 0; i < count; i++)
         {
             // [-1,1]^2에 배치 → 아래 center/radius 반경 내가 보장된다(모든 매칭 후보가 add되어 matched==added).
@@ -170,7 +170,7 @@ public sealed class DensityCapTests
         System.Random rng = new System.Random(20240721);
         int count = 30;
 
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int i = 0; i < count; i++)
         {
             float x = (float)(rng.NextDouble() * 2.0 - 1.0);
@@ -203,7 +203,7 @@ public sealed class DensityCapTests
         System.Random rng = new System.Random(20240722);
         int count = 60;
 
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int i = 0; i < count; i++)
         {
             float x = (float)(rng.NextDouble() * 10.0 - 5.0);
@@ -232,7 +232,7 @@ public sealed class DensityCapTests
     [Test]
     public void CellBoundary_NoTruncation_MatchesQueryCircle()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         // cellSize=1 기준 x=0, y=0 경계 양쪽에 배치한다.
         Vector2[] pts =
         {

@@ -20,7 +20,7 @@ public sealed class GridAndSteeringTests
         System.Random rng = new System.Random(20240714);
         int count = 150;
 
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int i = 0; i < count; i++)
         {
             float x = (float)(rng.NextDouble() * 50.0 - 25.0);
@@ -32,7 +32,7 @@ public sealed class GridAndSteeringTests
         grid.Rebuild(buffer);
 
         List<int> queryResult = new List<int>();
-        Vector2[] positions = buffer.Pos;
+        var positions = buffer.Pos;
 
         for (int q = 0; q < 24; q++)
         {
@@ -68,7 +68,7 @@ public sealed class GridAndSteeringTests
     [Test]
     public void QueryCircle_ClearsResultsFirst()
     {
-        AgentBuffer buffer = new AgentBuffer(Cap);
+        using AgentBuffer buffer = new AgentBuffer(Cap);
         buffer.Add(0, 0, false, new Vector2(100f, 100f)); // 질의 반경 밖.
 
         SpatialGrid grid = new SpatialGrid(1.5f, Cap);

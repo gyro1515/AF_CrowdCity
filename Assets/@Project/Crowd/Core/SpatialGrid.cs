@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 /// <summary>
@@ -89,7 +90,7 @@ public sealed class SpatialGrid
         }
 
         _count = buffer.Count;
-        Vector2[] positions = buffer.Pos;
+        NativeArray<Vector2> positions = buffer.Pos;
         for (int i = 0; i < _count; i++)
         {
             Vector2 pos = positions[i];
