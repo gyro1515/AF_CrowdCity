@@ -38,6 +38,35 @@ public sealed class CrowdSimState : IDisposable
     /// </summary>
     public NativeArray<float> WanderTimer;
 
+    // ---- M2-a3 병렬 조향(SteeringForceJob) 전용 per-tick scratch. tick마다 채워 쓰고 재사용하며, 값은 job 이후에만 유효하다. ----
+
+    /// <summary>
+    /// 병렬 FORCE job이 팔로워별로 산출한 명령 속도(가속 제한 적분 직후 값)다. 인덱스는 팔로워 리스트 위치(k)이며, 직렬 이동 단계가 같은 순서로 읽는다.
+    /// </summary>
+    public NativeArray<Vector2> CommandedVelocity;
+
+    /// <summary>
+    /// 이번 tick의 팔로워 agent index를 team 오름차순·팀 내 f 오름차순으로 평탄화한 작업 리스트다(직렬 프리패스에서 채운다).
+    /// </summary>
+    public NativeArray<int> FollowerList;
+
+    /// <summary>
+    /// team별 arrive 중심점(리더 뒤 단일 중심)이다. 직렬 프리패스에서 이번 tick 리더 위치로 계산해 job에 전달한다.
+    /// </summary>
+    public NativeArray<Vector2> CenterPerTeam;
+
+    /// <summary>
+    /// team별 유효 arrive 반경(무리 크기에 √비례 확장 포함)이다. 직렬 프리패스에서 계산해 job에 전달한다.
+    /// </summary>
+    public NativeArray<float> ArriveRadiusPerTeam;
+
+    // grid의 관리형 내부 배열을 tick마다 복사해 두는 native snapshot. job이 QueryCircle/QueryCircleCapped 열거를 in-place로 재현한다.
+    public NativeArray<int> GridBucketHead;
+    public NativeArray<int> GridNext;
+    public NativeArray<int> GridCellX;
+    public NativeArray<int> GridCellY;
+    public NativeArray<Vector2> GridPos;
+
     /// <summary>
     /// agent capacity와 team 수에 맞춰 모든 Persistent NativeArray를 미리 할당한다.
     /// 도중 할당이 실패하면 이미 만든 배열을 해제하고 예외를 다시 던진다(부분 할당 누수 방지).
@@ -51,6 +80,17 @@ public sealed class CrowdSimState : IDisposable
             LeaderYawDeg = new NativeArray<float>(teamCount, Allocator.Persistent);
             WanderHeadingDeg = new NativeArray<float>(agentCapacity, Allocator.Persistent);
             WanderTimer = new NativeArray<float>(agentCapacity, Allocator.Persistent);
+
+            // M2-a3 병렬 조향 scratch. GridBucketHead는 grid와 동일한 table 크기 공식을 단일 원천에서 가져온다.
+            CommandedVelocity = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
+            FollowerList = new NativeArray<int>(agentCapacity, Allocator.Persistent);
+            CenterPerTeam = new NativeArray<Vector2>(teamCount, Allocator.Persistent);
+            ArriveRadiusPerTeam = new NativeArray<float>(teamCount, Allocator.Persistent);
+            GridBucketHead = new NativeArray<int>(SpatialGrid.ComputeTableSize(agentCapacity), Allocator.Persistent);
+            GridNext = new NativeArray<int>(agentCapacity, Allocator.Persistent);
+            GridCellX = new NativeArray<int>(agentCapacity, Allocator.Persistent);
+            GridCellY = new NativeArray<int>(agentCapacity, Allocator.Persistent);
+            GridPos = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
         }
         catch
         {
@@ -89,6 +129,51 @@ public sealed class CrowdSimState : IDisposable
         if (WanderTimer.IsCreated)
         {
             WanderTimer.Dispose();
+        }
+
+        if (CommandedVelocity.IsCreated)
+        {
+            CommandedVelocity.Dispose();
+        }
+
+        if (FollowerList.IsCreated)
+        {
+            FollowerList.Dispose();
+        }
+
+        if (CenterPerTeam.IsCreated)
+        {
+            CenterPerTeam.Dispose();
+        }
+
+        if (ArriveRadiusPerTeam.IsCreated)
+        {
+            ArriveRadiusPerTeam.Dispose();
+        }
+
+        if (GridBucketHead.IsCreated)
+        {
+            GridBucketHead.Dispose();
+        }
+
+        if (GridNext.IsCreated)
+        {
+            GridNext.Dispose();
+        }
+
+        if (GridCellX.IsCreated)
+        {
+            GridCellX.Dispose();
+        }
+
+        if (GridCellY.IsCreated)
+        {
+            GridCellY.Dispose();
+        }
+
+        if (GridPos.IsCreated)
+        {
+            GridPos.Dispose();
         }
     }
 }

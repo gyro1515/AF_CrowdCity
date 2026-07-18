@@ -44,12 +44,7 @@ public sealed class SpatialGrid
 
         _invCellSize = 1f / cellSize;
 
-        int tableSize = 16;
-        while (tableSize < capacity * 2)
-        {
-            tableSize <<= 1;
-        }
-
+        int tableSize = ComputeTableSize(capacity);
         _tableMask = tableSize - 1;
         _bucketHead = new int[tableSize];
         _nextInBucket = new int[capacity];
@@ -61,6 +56,58 @@ public sealed class SpatialGrid
         for (int i = 0; i < _bucketHead.Length; i++)
         {
             _bucketHead[i] = -1;
+        }
+    }
+
+    /// <summary>
+    /// 현재 채워진 agent 수(마지막 <see cref="Rebuild"/> 기준)다.
+    /// </summary>
+    public int Count => _count;
+
+    /// <summary>
+    /// bucket index 계산에 쓰는 hash table mask(tableSize-1)다.
+    /// </summary>
+    public int TableMask => _tableMask;
+
+    /// <summary>
+    /// cell 좌표 계산에 쓰는 1/cellSize다.
+    /// </summary>
+    public float InvCellSize => _invCellSize;
+
+    /// <summary>
+    /// 지정한 capacity에 대한 내부 hash table 크기(capacity*2 이상이 되는 2의 거듭제곱, 최소 16)를 계산한다.
+    /// 생성자와 native snapshot buffer 크기 계산이 같은 값을 쓰도록 단일 원천으로 노출한다.
+    /// </summary>
+    public static int ComputeTableSize(int capacity)
+    {
+        int tableSize = 16;
+        while (tableSize < capacity * 2)
+        {
+            tableSize <<= 1;
+        }
+
+        return tableSize;
+    }
+
+    /// <summary>
+    /// 현재 grid 내부 상태(bucket head/체인/cell 좌표/위치 snapshot)를 호출자 소유 NativeArray로 복사한다(M2-a3 병렬 조향의 read-only 뷰).
+    /// Mono <c>IJobParallelFor</c>의 각 <c>Execute</c>가 <see cref="QueryCircle"/>/<see cref="QueryCircleCapped"/> 열거를 in-place로
+    /// 정확히 재현하도록, bucketHead는 tableSize 전체를, 나머지는 유효 agent 수(<see cref="Count"/>)만 복사한다. 값/순서를 바꾸지 않는 순수 복사다.
+    /// </summary>
+    public void CopyNativeSnapshot(
+        NativeArray<int> bucketHead,
+        NativeArray<int> nextInBucket,
+        NativeArray<int> cellX,
+        NativeArray<int> cellY,
+        NativeArray<Vector2> pos)
+    {
+        NativeArray<int>.Copy(_bucketHead, bucketHead, _bucketHead.Length);
+        if (_count > 0)
+        {
+            NativeArray<int>.Copy(_nextInBucket, nextInBucket, _count);
+            NativeArray<int>.Copy(_cellX, cellX, _count);
+            NativeArray<int>.Copy(_cellY, cellY, _count);
+            NativeArray<Vector2>.Copy(_pos, pos, _count);
         }
     }
 
@@ -253,7 +300,11 @@ public sealed class SpatialGrid
         CrowdSimCounters.CountQuery(candidateVisits, results.Count); // 무침습 계측(Enabled=false면 no-op).
     }
 
-    private static int HashCell(int cellX, int cellY)
+    /// <summary>
+    /// cell 좌표를 hash로 접는다. bucket index는 호출부에서 <see cref="TableMask"/>와 AND한다.
+    /// 병렬 조향 job이 grid 열거 순서를 동일하게 재현하도록 단일 원천으로 노출한다(값 불변).
+    /// </summary>
+    public static int HashCell(int cellX, int cellY)
     {
         unchecked
         {

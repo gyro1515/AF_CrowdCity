@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Unity.Collections;
+using Unity.Jobs;
 using UnityEngine;
 
 /// <summary>
@@ -25,6 +26,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private const float WanderRayHeight = 0.9f;             // 중립 배회 방향 검사 raycast 높이.
     private const float WanderRayDistance = 1.5f;           // 중립 배회 방향 검사 raycast 거리.
     private const int WanderRepickTries = 8;                // 배회 방향 재선택 시 최대 후보 수.
+    private const int SteeringForceBatch = 64;              // M2-a3 팔로워 FORCE IJobParallelFor의 innerloop batch 크기(byte-identity와 무관).
 
     // Phase C 단계 2: SDF solver의 벽 standoff 기준 거리. Human.prefab CC 스펙 radius(0.35) + skinWidth(0.08).
     // per-agent scale(=CC lossyScale=buffer.Scale)로 곱해 CC.Move의 스케일 비례 접촉 거리를 재현한다.
@@ -92,7 +94,6 @@ public sealed class CrowdRoot : MonoBehaviour
     private CombatState _combatState;
     private CombatOutcome _combatOutcome;
     private List<RecruitAssignment> _recruits;
-    private List<int> _neighborScratch;
     // 같은 tick 제거 그래프 해소용 scratch(CommitOutcomes 전용). teamCount(<=4)로 확보해 per-tick 재할당을 막는다.
     private int[] _killerOf;               // [loserTeam]=killerTeam(-1=이번 tick 미제거).
     private bool[] _isEliminatedThisTick;  // [team]=이번 tick 제거 여부.
@@ -270,7 +271,6 @@ public sealed class CrowdRoot : MonoBehaviour
         _combatState = new CombatState(_teamCount);
         _combatOutcome = new CombatOutcome(_agentCapacity);
         _recruits = new List<RecruitAssignment>(Mathf.Max(1, config.NeutralCount));
-        _neighborScratch = new List<int>(_agentCapacity); // 분리용 이웃 조회 buffer. capacity(4+NeutralCount)로 확보해 per-tick 재할당을 막는다.
         _killerOf = new int[_teamCount]; // 제거 그래프 해소용. teamCount(<=4)로 확보해 per-tick 재할당을 막는다.
         _isEliminatedThisTick = new bool[_teamCount];
         _terminalVisited = new bool[_teamCount];
@@ -1068,6 +1068,12 @@ public sealed class CrowdRoot : MonoBehaviour
         float maxAccel = _config.FollowerMaxAccel;
         float trailingOffset = _config.FollowerTrailingOffset;
 
+        // ── M2-a3: 팔로워 FORCE(리더 뒤 중심으로의 arrive + 같은 팀 분리 + 가속 제한 적분)를 Mono IJobParallelFor로 병렬화한다.
+        //    (1) 직렬 프리패스: team별 arrive 중심/유효 반경을 이번 tick 리더 위치로 계산하고, 팔로워 작업 리스트를 team·f 오름차순으로 평탄화하며,
+        //        grid를 native로 스냅샷한다. (2) 병렬 job: 팔로워별 명령 속도를 산출한다. (3) 직렬 이동: 명령 속도로 CC/SDF 이동 후 read-back·속도 재조정.
+        //    byte-identical 근거: 이동 전이라 팔로워 자기 위치는 transform==buffer.Pos(월드 아이덴티티), 이웃/거리 합은 불변 snapshot을 grid 방출 순서 그대로 누적,
+        //    각 Execute는 자기 슬롯에만 쓰므로 parallel-for 인덱스 순서와 무관. math/Mathf 치환·Burst 없음.
+        int followerCount = 0;
         for (int t = 0; t < _teamCount; t++)
         {
             CrowdModel model = _crowds[t];
@@ -1078,9 +1084,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
             Vector3 leaderPos = _transformByAgent[model.LeaderAgentIndex].position;
             Vector2 leaderXZ = new Vector2(leaderPos.x, leaderPos.z);
-            // 팔로워 desired = 리더 뒤 단일 중심으로의 arrive(그다음 분리, 클램프). 리더 진행 방향 뒤 하나의
-            // 중심점으로 점진적으로 모여 compact blob을 이룬다. yaw→방향 매핑((sin,cos))이 MoveLeaders 규약과
-            // 일치하도록 팀당 한 번만 sin/cos를 구해 재사용한다.
+            // yaw→방향 매핑((sin,cos))이 MoveLeaders 규약과 일치하도록 팀당 한 번만 sin/cos를 구해 재사용한다.
             float leaderRad = _leaderYawDeg[t] * Mathf.Deg2Rad;
             float sinYaw = Mathf.Sin(leaderRad);
             float cosYaw = Mathf.Cos(leaderRad);
@@ -1088,9 +1092,61 @@ public sealed class CrowdRoot : MonoBehaviour
             Vector2 center = leaderXZ - leaderForward * trailingOffset; // 리더 진행 방향 뒤의 단일 중심점.
             List<int> followerIndices = model.FollowerAgentIndices;
             // 무리 크기에 따라 arrive 반경을 √인원에 비례해 키운다(footprint ∝ √N, areal packing 근사). 팀당 1회만 계산한다.
-            // base arriveRadius를 floor로 유지해(가산항 >= 0) count=0/1에서 기존 동작과 사실상 동일하고 오버슈트 불변식이 그대로 성립한다.
             float effectiveArriveRadius = arriveRadius + _config.FollowerArriveRadiusPerSqrtMember * Mathf.Sqrt(followerIndices.Count);
+            _simState.CenterPerTeam[t] = center;
+            _simState.ArriveRadiusPerTeam[t] = effectiveArriveRadius;
 
+            for (int f = 0; f < followerIndices.Count; f++)
+            {
+                _simState.FollowerList[followerCount] = followerIndices[f];
+                followerCount++;
+            }
+        }
+
+        // 이번 tick 팔로워 루프가 보는 grid(== 직전 tick 끝에서 rebuild된 상태)를 native로 스냅샷한다. job이 QueryCircle/QueryCircleCapped 열거를 재현한다.
+        _grid.CopyNativeSnapshot(
+            _simState.GridBucketHead, _simState.GridNext, _simState.GridCellX, _simState.GridCellY, _simState.GridPos);
+
+        var forceJob = new SteeringForceJob
+        {
+            FollowerList = _simState.FollowerList,
+            CenterPerTeam = _simState.CenterPerTeam,
+            ArriveRadiusPerTeam = _simState.ArriveRadiusPerTeam,
+            Team = _buffer.Team,
+            Scale = _buffer.Scale,
+            Pos = _buffer.Pos,
+            FollowerVelocityIn = _followerVelocity,
+            BucketHead = _simState.GridBucketHead,
+            NextInBucket = _simState.GridNext,
+            CellX = _simState.GridCellX,
+            CellY = _simState.GridCellY,
+            GridPos = _simState.GridPos,
+            TableMask = _grid.TableMask,
+            GridCount = _grid.Count,
+            InvCellSize = _grid.InvCellSize,
+            SepRadius = sepRadius,
+            SepPush = sepPush,
+            MaxSpeed = maxSpeed,
+            CohesionGain = cohesionGain,
+            MaxAccel = maxAccel,
+            QueryRadius = sepRadius * Mathf.Max(1f, _config.NeutralMaxScale),
+            SepBudget = _config.Sim.SeparationVisitBudget,
+            Dt = dt,
+            CommandedVelocity = _simState.CommandedVelocity,
+        };
+        forceJob.Schedule(followerCount, SteeringForceBatch).Complete(); // 직렬 등가(교차 agent 쓰기 없음). WallField는 관리형이라 이동은 직렬 유지.
+
+        // 직렬 이동: 프리패스와 동일 순서(team·f 오름차순)로 팔로워를 돌며 job 산출 명령 속도로 이동/되읽기/속도 재조정을 그대로 수행한다.
+        int followerSlot = 0;
+        for (int t = 0; t < _teamCount; t++)
+        {
+            CrowdModel model = _crowds[t];
+            if (model.Eliminated)
+            {
+                continue;
+            }
+
+            List<int> followerIndices = model.FollowerAgentIndices;
             for (int f = 0; f < followerIndices.Count; f++)
             {
                 int index = followerIndices[f];
@@ -1099,85 +1155,8 @@ public sealed class CrowdRoot : MonoBehaviour
                 _visualPrev[index] = current; // prev = 이동 전 논리 위치.
                 Vector2 pos = new Vector2(current.x, current.z);
 
-                // (a) 리더 뒤 단일 중심으로의 arrive: 중심에서 멀수록 최대 속력, 가까울수록 0으로 선형 감쇠해
-                //     빠른/느린 유닛의 속도 차로 점진적으로 합류한다(중앙 스냅 방지). 감속 반경 안에서 오버슈트를 막는다.
-                Vector2 toCenter = center - pos;
-                float d = toCenter.magnitude;
-                Vector2 desired = Vector2.zero;
-                if (d > 0.0001f)
-                {
-                    float arriveSpeed = maxSpeed * Mathf.Min(1f, d / effectiveArriveRadius);
-                    desired = (toCenter / d) * (arriveSpeed * cohesionGain);
-                }
-
-                // 단일 이웃 조회: 같은 팀 이웃만 밀어내 간격을 유지한다. 스케일 인지 간격 때문에 두 유닛이 모두 최대
-                // 스케일일 때의 pairSepRadius(sepRadius*NeutralMaxScale)까지 이웃이 잡히도록 조회 반경을 넓힌다.
-                // 직전 tick의 grid/buffer snapshot을 이웃 기준으로 쓴다.
-                CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.Separation); // 무침습 계측(Enabled=false면 no-op).
-                int sepBudget = _config.Sim.SeparationVisitBudget;
-                if (sepBudget > 0)
-                {
-                    _grid.QueryCircleCapped(pos, sepRadius * Mathf.Max(1f, _config.NeutralMaxScale), sepBudget, _neighborScratch);
-                }
-                else
-                {
-                    _grid.QueryCircle(pos, sepRadius * Mathf.Max(1f, _config.NeutralMaxScale), _neighborScratch);
-                }
-                Vector2 separation = Vector2.zero;
-                for (int c = 0; c < _neighborScratch.Count; c++)
-                {
-                    int neighbor = _neighborScratch[c];
-                    if (neighbor == index || _buffer.Team[neighbor] != t)
-                    {
-                        continue;
-                    }
-
-                    // 스케일 인지 간격: 두 유닛 스케일 평균으로 pair별 분리 반경을 정한다(둘 다 1.0이면 sepRadius와 동일).
-                    float pairSepRadius = sepRadius * 0.5f * (_buffer.Scale[index] + _buffer.Scale[neighbor]);
-                    // 분리: pairSepRadius 미만 이웃만 명시적으로 밀어낸다(간격 유지).
-                    Vector2 away = pos - _buffer.Pos[neighbor];
-                    float dn = away.magnitude;
-                    if (dn < pairSepRadius)
-                    {
-                        if (dn > 0.0001f)
-                        {
-                            // 가까울수록 강하게 밀어낸다(반경 경계에서 0).
-                            separation += away * ((1f - dn / pairSepRadius) / dn);
-                        }
-                        else
-                        {
-                            // 완전히 겹친 경우 index 대소로 결정적인 방향을 준다.
-                            separation += new Vector2(index > neighbor ? 1f : -1f, 0f);
-                        }
-                    }
-                }
-
-                // 고밀도에서 분리 합력이 arrive 방향을 덮어써 지우지 않도록,
-                // desired에 더하기 전에 분리 기여를 followerMaxSpeed로 상한한다(방향 보존).
-                Vector2 sepForce = separation * sepPush;
-                float sepMag = sepForce.magnitude;
-                if (sepMag > maxSpeed)
-                {
-                    sepForce *= maxSpeed / sepMag;
-                }
-                desired += sepForce;
-
-                float desiredSpeed = desired.magnitude;
-                if (desiredSpeed > maxSpeed)
-                {
-                    desired *= maxSpeed / desiredSpeed;
-                }
-
-                // 가속 제한 적분: 현재 속도를 목표 속도 쪽으로 maxAccel*dt 이내에서만 이동시켜 출렁거림을 없앤다.
-                Vector2 velocity = _followerVelocity[index];
-                Vector2 dv = desired - velocity;
-                float dvMag = dv.magnitude;
-                float maxDelta = maxAccel * dt;
-                if (dvMag > maxDelta)
-                {
-                    dv *= maxDelta / dvMag;
-                }
-                velocity += dv;
+                Vector2 velocity = _simState.CommandedVelocity[followerSlot]; // job이 산출한 이동 이전 명령 속도(직렬 적분 결과와 byte-identical).
+                followerSlot++;
 
                 // CC.Move로 이동해 건물 collider와 충돌시킨다(수평 delta만; Y는 아래에서 다시 고정).
                 Vector2 move = velocity * dt;
