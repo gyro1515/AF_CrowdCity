@@ -55,6 +55,7 @@ MonoBehaviour:
   camDistancePerSqrtCount: 0.8
   camMaxDistance: 40
   camFollowSmoothTime: 0.25
+  useGpuCrowdRenderer: 0
   teamColors:
   - {r: 0.18, g: 0.525, b: 1, a: 1}
   - {r: 1, g: 0.255, b: 0.212, a: 1}

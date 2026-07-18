@@ -68,12 +68,6 @@ public sealed class CrowdRoot : MonoBehaviour
     // 비교/통과 후에만 ON으로 전환한다. serialize해 인스펙터/프리팹에서도 바꿀 수 있고 테스트/하네스는 프로퍼티로 토글한다.
     [SerializeField] private bool _useSdfSolver;
 
-    // GPU-anim Stage 1 Chunk B: VAT 인스턴스 크라우드 렌더러 스위치(기본 OFF, 동작 보존). OFF면 기존
-    // SkinnedMeshRenderer+Animator 경로가 바이트 동일하게 유지된다. ON이면 스폰 후 CrowdRenderer가 성공적으로
-    // 초기화됐을 때에 한해 각 유닛 clone의 SMR+Animator를 런타임에 끄고 인스턴스 렌더 경로로 그린다(저작 프리팹 불변).
-    // 시뮬/커널/RNG/이벤트/결정성에는 영향이 없다.
-    [SerializeField] private bool _useGpuCrowdRenderer;
-
     // GPU 경로에서 CrowdRoot가 소유/구동하는 프리팹 저작 자식 렌더러다. 미배선(null)이면 GPU 경로는 비활성(SMR 유지).
     [SerializeField] private CrowdRenderer _crowdRenderer;
 
@@ -722,7 +716,7 @@ public sealed class CrowdRoot : MonoBehaviour
     // 실패하면 SMR 경로를 그대로 유지한다(SMR을 절대 끄지 않는다). 스위치 OFF/미배선이면 아무 것도 하지 않는다.
     private void TryActivateGpuRenderer()
     {
-        if (!_useGpuCrowdRenderer || _crowdRenderer == null || _shutdown)
+        if (!_config.UseGpuCrowdRenderer || _crowdRenderer == null || _shutdown)
         {
             return;
         }

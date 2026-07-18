@@ -1684,7 +1684,7 @@ public static class GameSceneSetup
     /// </summary>
     /// <summary>
     /// GPU-anim Stage 1 Chunk B 전용: VAT 머티리얼(HumanVat.mat)을 load-or-create하고, CrowdRoot 프리팹에 CrowdRenderer
-    /// 자식을 저작해 mesh/material/2 texture/rows 직렬화 필드와 CrowdRoot._crowdRenderer를 배선한다. _useGpuCrowdRenderer
+    /// 자식을 저작해 mesh/material/2 texture/rows 직렬화 필드와 CrowdRoot._crowdRenderer를 배선한다. GameConfigSO.useGpuCrowdRenderer
     /// 스위치는 건드리지 않는다(기본 OFF 유지 = 동작 보존). idempotent. Chunk A VAT 자산과 Chunk B 셰이더가 선행 조건이다.
     /// </summary>
     [MenuItem("AF/CrowdCity/Bake Crowd Renderer (VAT material + CrowdRenderer child)")]
@@ -1703,7 +1703,7 @@ public static class GameSceneSetup
         VerifyCrowdRendererRefs();
 
         Debug.Log(
-            "[BakeCrowdRenderer] PASS — HumanVat.mat + CrowdRoot/CrowdRenderer 자식 저작 완료(_useGpuCrowdRenderer는 기본 OFF 유지). " +
+            "[BakeCrowdRenderer] PASS — HumanVat.mat + CrowdRoot/CrowdRenderer 자식 저작 완료(GameConfigSO.useGpuCrowdRenderer는 기본 OFF 유지). " +
             BuildSummary(changed, unchanged));
     }
 

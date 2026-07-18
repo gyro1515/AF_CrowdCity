@@ -48,7 +48,6 @@ MonoBehaviour:
   _humanPrefab: {fileID: 4557897642118330164, guid: 303a7c17cbf54bd4aa58b274fa7e7b66, type: 3}
   _wallSdfAsset: {fileID: 11400000, guid: b0329e7883d2d474b9cf535ecdfab991, type: 2}
   _useSdfSolver: 1
-  _useGpuCrowdRenderer: 0
   _crowdRenderer: {fileID: 3773951939642975330}
 --- !u!1 &1273801561061629191
 GameObject:

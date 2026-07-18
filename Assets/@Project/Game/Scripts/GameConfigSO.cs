@@ -191,6 +191,12 @@ public sealed class GameConfigSO : ScriptableObject
     /// <summary>카메라 추적 SmoothDamp 시간(초)이다.</summary>
     public float CamFollowSmoothTime => camFollowSmoothTime;
 
+    [Header("Rendering")]
+    [Tooltip("VAT 인스턴스 크라우드 렌더러 스위치(기본 OFF, 동작 보존). OFF면 기존 SkinnedMeshRenderer+Animator 경로가 바이트 동일하게 유지된다. ON이면 스폰 후 CrowdRenderer 초기화 성공 시에만 각 유닛의 SMR+Animator를 런타임에 끄고 인스턴스 렌더 경로로 그린다(저작 프리팹 불변). 시뮬/커널/RNG/이벤트/결정성에는 영향이 없다.")]
+    [SerializeField] private bool useGpuCrowdRenderer = false;
+    /// <summary>VAT 인스턴스 크라우드 렌더러 스위치다(기본 OFF, 동작 보존). ON이면 CrowdRenderer 초기화 성공 시에만 SMR+Animator 대신 인스턴스 렌더 경로로 그린다. 시뮬/결정성에는 영향이 없다.</summary>
+    public bool UseGpuCrowdRenderer => useGpuCrowdRenderer;
+
     [Header("Visuals — [0]=player, [1..3]=rivals; TeamMaterials[4]=neutral (wired by editor setup)")]
     [Tooltip("팀 색상 배열. [0]=플레이어, [1..3]=라이벌. 길이 4를 유지함.")]
     [SerializeField] private Color[] teamColors =   // EXPLICIT literals — never new Color[4] (transparent black!)
