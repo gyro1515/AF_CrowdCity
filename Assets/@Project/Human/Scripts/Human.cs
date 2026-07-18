@@ -62,20 +62,18 @@ public sealed class Human : MonoBehaviour
 
     /// <summary>
     /// GPU 크라우드 렌더러(CrowdRenderer)가 성공적으로 초기화된 뒤 CrowdRoot가 런타임에 호출한다.
-    /// 이 clone의 SkinnedMeshRenderer와 Animator를 끈다(저작 프리팹은 건드리지 않는다 — 런타임 clone 한정).
-    /// 스킨/애니메이터 비용(~4.6us/유닛)을 제거하고 SMR/GPU 이중 렌더를 막는다. transform 회전/위치는 그대로
-    /// CrowdRoot가 계속 구동하므로 카메라/HUD가 읽는 리더 transform은 유지된다.
+    /// 이 clone의 죽은 rig(SkinnedMeshRenderer + Animator + 전체 본 계층을 담은 root의 유일한 자식)를 파괴한다
+    /// (저작 프리팹은 건드리지 않는다 — 런타임 clone 한정). 스킨/애니메이터 비용(~4.6us/유닛)과 본 transform 부하를 없애고
+    /// SMR/GPU 이중 렌더를 막는다. root transform(카메라/HUD가 읽는 리더 포함)과 CharacterController는 root에 있어 그대로
+    /// 남으므로 CrowdRoot가 계속 위치/회전을 구동한다. 파괴 후 캐시된 _renderer/_animator는 Unity fake-null이 되지만
+    /// Human이 모든 rig 접근을 null-guard하므로 안전하다. GPU 확정은 세션 영구(토글백 없음)라 되돌릴 수 없는 파괴가 안전하다.
     /// </summary>
-    public void DisableCpuRenderer()
+    public void DestroyVisualRig()
     {
-        if (_renderer != null)
-        {
-            _renderer.enabled = false;
-        }
-
+        // _animator.gameObject == root의 유일한 자식(rig 조상). 이 단일 자식을 파괴하면 SMR+Animator+전체 본이 함께 사라진다.
         if (_animator != null)
         {
-            _animator.enabled = false;
+            Destroy(_animator.gameObject);
         }
     }
 

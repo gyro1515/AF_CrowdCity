@@ -360,6 +360,11 @@ public sealed class CrowdRoot : MonoBehaviour
             return;
         }
 
+        // GPU-anim Stage 1 Chunk B: 스위치 ON이면 스폰 루프 이전에 GPU 렌더러를 초기화한다(Init 인자 capacity/teamCount/
+        // worldBounds는 스폰 전 이미 확정). 성공(_gpuRenderActive)하면 아래 스폰 루프가 각 유닛을 Instantiate+Init 직후
+        // rig를 파괴해 10k rig가 동시에 상주하지 않게 한다(peak 억제). 실패/스위치 OFF/미배선이면 SMR 경로를 그대로 유지한다.
+        TryActivateGpuRenderer();
+
         // ---- 1) 모든 배치 좌표를 Instantiate 이전에 계산한다 ----
         Vector3[] leaderSpots = new Vector3[_teamCount];
         leaderSpots[0] = ResolveLeaderSpot(RegionPoint(0.5f, 0.5f));
@@ -455,6 +460,13 @@ public sealed class CrowdRoot : MonoBehaviour
             {
                 _playerLeaderTransform = leader.transform;
             }
+
+            // GPU 경로 활성 시 이 clone의 죽은 rig를 즉시 파괴하고(스킨/애니메이터/본 transform 비용 제거) phase를 id 해시로 시드한다.
+            if (_gpuRenderActive)
+            {
+                _phase01[index] = Hash01(_buffer.Id[index]);
+                leader.DestroyVisualRig();
+            }
         }
 
         // ---- 3) 중립 Instantiate ----
@@ -498,6 +510,13 @@ public sealed class CrowdRoot : MonoBehaviour
             _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
             _wanderHeadingDeg[index] = neutralHeadings[n];
             _wanderTimer[index] = neutralTimers[n];
+
+            // GPU 경로 활성 시 이 clone의 죽은 rig를 즉시 파괴하고(스킨/애니메이터/본 transform 비용 제거) phase를 id 해시로 시드한다.
+            if (_gpuRenderActive)
+            {
+                _phase01[index] = Hash01(_buffer.Id[index]);
+                neutral.DestroyVisualRig();
+            }
         }
 
         // 첫 tick의 AI/조향이 유효한 이웃 정보를 읽도록 grid를 한 번 채워 둔다.
@@ -507,9 +526,6 @@ public sealed class CrowdRoot : MonoBehaviour
 
         // ---- 4) 첫 coalesced 인원 수 publish (모두 -1 → 1로 바뀌므로 전 팀 발행) ----
         PublishTickEvents();
-
-        // ---- 5) GPU-anim Stage 1 Chunk B: 스위치 ON이면 GPU 렌더러를 초기화하고(성공 시에만) SMR을 런타임에 끈다. ----
-        InitGpuRendererIfEnabled();
     }
 
     /// <summary>
@@ -684,10 +700,11 @@ public sealed class CrowdRoot : MonoBehaviour
 
     // ---- GPU-anim Stage 1 Chunk B: 인스턴스 렌더 경로(스위치 ON일 때만 활성) ----
 
-    // 스위치 ON이면 GPU 렌더러를 초기화한다. 성공(그래픽 device/capability 충족 + 저작 자원 배선)했을 때에만
-    // per-agent phase를 id 해시로 시드하고 스크래치를 할당하고 각 유닛 clone의 SMR+Animator를 런타임에 끈다(저작 프리팹 불변).
+    // 스위치 ON이면 스폰 루프 이전에 GPU 렌더러를 초기화한다(Init 인자 capacity/teamCount/worldBounds는 스폰 전 이미 확정).
+    // 성공(그래픽 device/capability 충족 + 저작 자원 배선)했을 때에만 _gpuRenderActive=true로 두고 per-frame 스크래치를 할당한다.
+    // per-agent phase 시드와 각 clone의 rig 파괴는 이후 스폰 루프가 유닛별로 수행한다(10k rig 동시 상주 방지, peak 억제).
     // 실패하면 SMR 경로를 그대로 유지한다(SMR을 절대 끄지 않는다). 스위치 OFF/미배선이면 아무 것도 하지 않는다.
-    private void InitGpuRendererIfEnabled()
+    private void TryActivateGpuRenderer()
     {
         if (!_useGpuCrowdRenderer || _crowdRenderer == null || _shutdown)
         {
@@ -707,25 +724,8 @@ public sealed class CrowdRoot : MonoBehaviour
             return; // 초기화 실패(무device/미지원/미배선): SMR 경로 유지.
         }
 
-        int count = _buffer.Count;
-        for (int i = 0; i < count; i++)
-        {
-            // per-instance phase 시드: agent id의 고정 정수 해시로 [0,1) 위상을 준다(UnityEngine.Random 대체, 결정적).
-            _phase01[i] = Hash01(_buffer.Id[i]);
-        }
-
         _instanceScratch = new CrowdRenderer.InstanceData[_agentCapacity];
         _leaderScratch = new int[_teamCount];
-
-        // 렌더러가 성공적으로 초기화된 뒤에만 각 clone의 SMR+Animator를 끈다(이중 렌더/스킨 비용 제거).
-        for (int i = 0; i < count; i++)
-        {
-            Human human = _humanByAgent[i];
-            if (human != null)
-            {
-                human.DisableCpuRenderer();
-            }
-        }
     }
 
     // 렌더 프레임마다 per-agent phase를 적분하고(dt*speed01/주기) 렌더 위치/yaw/scale/색을 인스턴스 스크래치에 채운 뒤
