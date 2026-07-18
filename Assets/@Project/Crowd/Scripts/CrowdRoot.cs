@@ -29,6 +29,9 @@ public sealed class CrowdRoot : MonoBehaviour
     // per-agent scale(=CC lossyScale=buffer.Scale)로 곱해 CC.Move의 스케일 비례 접촉 거리를 재현한다.
     private const float WallCollisionClearance = 0.43f;
 
+    // GPU-anim Stage 1 Chunk B: VAT 걷기 클립 주기(초). Chunk A 베이크(LoopClose 21행 @30Hz)와 일치하며 phase 적분에 쓴다.
+    private const float WalkPeriodSeconds = 0.7f;
+
     // 모든 Human(리더/팔로워/중립)이 올라가는 전용 물리 레이어 이름. 유닛끼리 CC 충돌을 끄는 데 쓴다.
     private const string UnitLayerName = "Unit";
 
@@ -61,6 +64,15 @@ public sealed class CrowdRoot : MonoBehaviour
     // CC.Move(false, 기본·안전 롤백) ↔ 결정적 SDF solver(true) 이동 경로 선택 스위치. 기본 OFF로 두고, 이질감 게이트
     // 비교/통과 후에만 ON으로 전환한다. serialize해 인스펙터/프리팹에서도 바꿀 수 있고 테스트/하네스는 프로퍼티로 토글한다.
     [SerializeField] private bool _useSdfSolver;
+
+    // GPU-anim Stage 1 Chunk B: VAT 인스턴스 크라우드 렌더러 스위치(기본 OFF, 동작 보존). OFF면 기존
+    // SkinnedMeshRenderer+Animator 경로가 바이트 동일하게 유지된다. ON이면 스폰 후 CrowdRenderer가 성공적으로
+    // 초기화됐을 때에 한해 각 유닛 clone의 SMR+Animator를 런타임에 끄고 인스턴스 렌더 경로로 그린다(저작 프리팹 불변).
+    // 시뮬/커널/RNG/이벤트/결정성에는 영향이 없다.
+    [SerializeField] private bool _useGpuCrowdRenderer;
+
+    // GPU 경로에서 CrowdRoot가 소유/구동하는 프리팹 저작 자식 렌더러다. 미배선(null)이면 GPU 경로는 비활성(SMR 유지).
+    [SerializeField] private CrowdRenderer _crowdRenderer;
 
     // 걷기 가능 영역: Ground renderer bounds를 2m 줄인 XZ 사각형.
     private float _regionMinX;
@@ -96,6 +108,15 @@ public sealed class CrowdRoot : MonoBehaviour
     private float[] _wanderHeadingDeg;   // 중립 agent의 배회 heading(도).
     private float[] _wanderTimer;        // 중립 agent의 방향 재선택 잔여 시간(초).
     private int[] _lastPublishedCounts;  // team별 마지막 발행 인원 수(coalesce 기준).
+
+    // ---- GPU-anim Stage 1 Chunk B presentation 상태(시각 전용, 커널/미러/이벤트 미참조) ----
+    private float[] _visualSpeed01;    // agent별 애니메이션 재생 속도(SetHeadingAndSpeed의 speed01 미러). phase 적분에만 쓴다.
+    private float[] _phase01;          // agent별 걷기 사이클 위상 [0,1). id 해시로 시드 후 매 렌더 프레임 dt*speed로 적분한다.
+    private uint[] _teamPackedColor;   // [0..3]=팀 색, [4]=중립 색. sRGB 바이트 팩(셰이더가 linear로 변환). Initialize에서 1회 계산.
+    private CrowdRenderer.InstanceData[] _instanceScratch; // GPU 업로드용 per-frame 스크래치(GPU 활성 시에만 할당).
+    private int[] _leaderScratch;      // 리더 agent index 스크래치(그림자 draw용, teamCount 이하).
+    private bool _gpuRenderActive;     // CrowdRenderer.Init 성공 + 스위치 ON일 때만 true. false면 SMR 경로.
+    private Bounds _crowdWorldBounds;  // 인스턴스 draw의 world bounds(region + 유닛 높이). SpawnInitial에서 계산.
 
     private IEventPublisher<CrowdCountChangedEvent> _countPublisher;
     private IEventPublisher<CrowdEliminatedEvent> _eliminatedPublisher;
@@ -263,11 +284,22 @@ public sealed class CrowdRoot : MonoBehaviour
         _leaderYawDeg = new float[_teamCount];
         _wanderHeadingDeg = new float[_agentCapacity];
         _wanderTimer = new float[_agentCapacity];
+        _visualSpeed01 = new float[_agentCapacity]; // 시각 전용(기본 0=정지 포즈, 첫 Playing 틱에서 갱신).
+        _phase01 = new float[_agentCapacity];
         _lastPublishedCounts = new int[_teamCount];
         for (int t = 0; t < _teamCount; t++)
         {
             _lastPublishedCounts[t] = -1; // 첫 coalesced publish가 반드시 나가도록 한다.
         }
+
+        // GPU-anim Stage 1 Chunk B: 팀 색을 sRGB 바이트로 1회 팩한다([0..3]=팀, [4]=중립). 셰이더가 linear로 변환한다.
+        _teamPackedColor = new uint[5];
+        for (int t = 0; t < 4; t++)
+        {
+            _teamPackedColor[t] = PackSrgbColor(config.TeamColors[t]);
+        }
+
+        _teamPackedColor[4] = PackSrgbColor(config.NeutralColor);
 
         _rng = new System.Random(config.Seed);
         _countPublisher = EventManager.GetPublisher<CrowdCountChangedEvent>();
@@ -475,6 +507,9 @@ public sealed class CrowdRoot : MonoBehaviour
 
         // ---- 4) 첫 coalesced 인원 수 publish (모두 -1 → 1로 바뀌므로 전 팀 발행) ----
         PublishTickEvents();
+
+        // ---- 5) GPU-anim Stage 1 Chunk B: 스위치 ON이면 GPU 렌더러를 초기화하고(성공 시에만) SMR을 런타임에 끈다. ----
+        InitGpuRendererIfEnabled();
     }
 
     /// <summary>
@@ -559,16 +594,26 @@ public sealed class CrowdRoot : MonoBehaviour
             return;
         }
 
+        int count = _buffer.Count;
+
         // Playing이 아니면 tick이 prev/cur를 더 이상 갱신하지 않아 alpha가 마지막 tick의 prev→cur 구간을 계속 sawtooth해 무리가 진동한다. 논리 위치(_visualCur)로 스냅해 정적으로 고정한다(시각 전용).
         if (_matchState != MatchState.Playing)
         {
-            for (int i = 0; i < _buffer.Count; i++) _transformByAgent[i].position = _visualCur[i];
-            return;
+            for (int i = 0; i < count; i++) _transformByAgent[i].position = _visualCur[i];
+        }
+        else
+        {
+            for (int i = 0; i < count; i++)
+            {
+                _transformByAgent[i].position = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
+            }
         }
 
-        for (int i = 0; i < _buffer.Count; i++)
+        // GPU-anim Stage 1 Chunk B: transform(카메라/HUD가 읽는 리더 포함)은 위에서 그대로 갱신했고, 같은 렌더 위치에서
+        // GPU 인스턴스 버퍼를 병렬로 채워 draw한다. 스위치 OFF/미초기화면 _gpuRenderActive=false라 no-op다.
+        if (_gpuRenderActive)
         {
-            _transformByAgent[i].position = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
+            RenderGpuCrowd(count);
         }
     }
 
@@ -593,6 +638,14 @@ public sealed class CrowdRoot : MonoBehaviour
         }
 
         _shutdown = true;
+
+        // GPU-anim Stage 1 Chunk B: GraphicsBuffer를 해제한다(소유자 lifecycle; humanByAgent 미할당 경로의 이른 return 이전).
+        // Init되지 않았거나 스위치 OFF여도 안전하다(idempotent, 버퍼 null). 렌더러 OnDestroy가 최종 안전망이다.
+        _gpuRenderActive = false;
+        if (_crowdRenderer != null)
+        {
+            _crowdRenderer.Dispose();
+        }
 
         // 벽 SDF의 Persistent NativeArray를 해제한다(소유자 lifecycle에서 해제; humanByAgent 미할당 경로에서도 누수 방지).
         if (_wallField != null)
@@ -627,6 +680,118 @@ public sealed class CrowdRoot : MonoBehaviour
     {
         // 안전망: 정상 경로에서는 GameplayRoot.Shutdown이 이미 해제했다.
         Shutdown();
+    }
+
+    // ---- GPU-anim Stage 1 Chunk B: 인스턴스 렌더 경로(스위치 ON일 때만 활성) ----
+
+    // 스위치 ON이면 GPU 렌더러를 초기화한다. 성공(그래픽 device/capability 충족 + 저작 자원 배선)했을 때에만
+    // per-agent phase를 id 해시로 시드하고 스크래치를 할당하고 각 유닛 clone의 SMR+Animator를 런타임에 끈다(저작 프리팹 불변).
+    // 실패하면 SMR 경로를 그대로 유지한다(SMR을 절대 끄지 않는다). 스위치 OFF/미배선이면 아무 것도 하지 않는다.
+    private void InitGpuRendererIfEnabled()
+    {
+        if (!_useGpuCrowdRenderer || _crowdRenderer == null || _shutdown)
+        {
+            return;
+        }
+
+        // 인스턴스 draw의 world bounds: walkable region XZ + 유닛 키 여유(union VAT 높이 ~1.9m를 넉넉히 덮는다).
+        Vector3 boundsCenter = new Vector3(
+            (_regionMinX + _regionMaxX) * 0.5f, _groundY + 1.5f, (_regionMinZ + _regionMaxZ) * 0.5f);
+        Vector3 boundsSize = new Vector3(
+            (_regionMaxX - _regionMinX) + 4f, 6f, (_regionMaxZ - _regionMinZ) + 4f);
+        _crowdWorldBounds = new Bounds(boundsCenter, boundsSize);
+
+        _gpuRenderActive = _crowdRenderer.Init(_agentCapacity, _teamCount, _crowdWorldBounds);
+        if (!_gpuRenderActive)
+        {
+            return; // 초기화 실패(무device/미지원/미배선): SMR 경로 유지.
+        }
+
+        int count = _buffer.Count;
+        for (int i = 0; i < count; i++)
+        {
+            // per-instance phase 시드: agent id의 고정 정수 해시로 [0,1) 위상을 준다(UnityEngine.Random 대체, 결정적).
+            _phase01[i] = Hash01(_buffer.Id[i]);
+        }
+
+        _instanceScratch = new CrowdRenderer.InstanceData[_agentCapacity];
+        _leaderScratch = new int[_teamCount];
+
+        // 렌더러가 성공적으로 초기화된 뒤에만 각 clone의 SMR+Animator를 끈다(이중 렌더/스킨 비용 제거).
+        for (int i = 0; i < count; i++)
+        {
+            Human human = _humanByAgent[i];
+            if (human != null)
+            {
+                human.DisableCpuRenderer();
+            }
+        }
+    }
+
+    // 렌더 프레임마다 per-agent phase를 적분하고(dt*speed01/주기) 렌더 위치/yaw/scale/색을 인스턴스 스크래치에 채운 뒤
+    // 렌더러에 업로드+draw를 위임한다. 리더 index를 모아 그림자 전용 draw로 넘긴다. transform은 위(RenderInterpolate)에서 이미 갱신됐다.
+    private void RenderGpuCrowd(int count)
+    {
+        float dt = Time.deltaTime;
+        float invPeriod = 1f / WalkPeriodSeconds;
+        int leaderCount = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            // phase 적분: Animator가 재생 속도 speed01로 매 프레임 전진하던 것과 동일하게 프레임 실시간으로 누적한다.
+            float p = _phase01[i] + dt * _visualSpeed01[i] * invPeriod;
+            p -= Mathf.Floor(p); // frac → [0,1)
+            _phase01[i] = p;
+
+            Transform tr = _transformByAgent[i];
+            Vector3 pos = tr.position;                       // 위에서 쓴 렌더 위치(Lerp 또는 snap)를 그대로 읽는다(CPU 경로와 동일).
+            float yawRad = tr.eulerAngles.y * Mathf.Deg2Rad; // yaw는 보간하지 않는다(SMR 경로도 회전 미보간).
+
+            CrowdRenderer.InstanceData d;
+            d.Pos = pos;
+            d.Yaw = yawRad;
+            d.Scale = _buffer.Scale[i];
+            d.Phase01 = p;
+            d.PackedColor = _teamPackedColor[TeamColorIndex(_buffer.Team[i])];
+            _instanceScratch[i] = d;
+
+            if (_buffer.IsLeader[i] && leaderCount < _leaderScratch.Length)
+            {
+                _leaderScratch[leaderCount++] = i;
+            }
+        }
+
+        _crowdRenderer.Render(_instanceScratch, count, _leaderScratch, leaderCount);
+    }
+
+    // team → _teamPackedColor 인덱스. 중립(-1)은 4번, 팀 0..3은 그대로.
+    private static int TeamColorIndex(int team)
+    {
+        return team < 0 ? 4 : team;
+    }
+
+    // sRGB 0..1 Color를 R|G<<8|B<<16 바이트로 팩한다(셰이더가 linear로 변환). alpha는 쓰지 않는다.
+    private static uint PackSrgbColor(Color c)
+    {
+        uint r = (uint)Mathf.Clamp(Mathf.RoundToInt(c.r * 255f), 0, 255);
+        uint g = (uint)Mathf.Clamp(Mathf.RoundToInt(c.g * 255f), 0, 255);
+        uint b = (uint)Mathf.Clamp(Mathf.RoundToInt(c.b * 255f), 0, 255);
+        return r | (g << 8) | (b << 16);
+    }
+
+    // agent id의 결정적 정수 해시 → [0,1) phase 시드(splitmix32 스타일; UnityEngine.Random.value 대체).
+    private static float Hash01(int id)
+    {
+        unchecked
+        {
+            uint x = (uint)id * 0x9E3779B1u + 0x85EBCA77u;
+            x ^= x >> 16;
+            x *= 0x7FEB352Du;
+            x ^= x >> 15;
+            x *= 0x846CA68Bu;
+            x ^= x >> 16;
+            return (x >> 8) * (1f / 16777216f); // 상위 24비트를 [0,1)로 매핑한다.
+        }
     }
 
     // ---- 스폰/배치 내부 구현 ----
@@ -869,7 +1034,9 @@ public sealed class CrowdRoot : MonoBehaviour
 
             // cur = 이동+clamp 후 논리 위치. 모든 live 리더에서 캡처(미이동 리더는 prev와 동일).
             _visualCur[index] = _transformByAgent[index].position;
-            _humanByAgent[index].SetHeadingAndSpeed(yaw, moving ? 1f : 0f);
+            float leaderSpeed01 = moving ? 1f : 0f;
+            _visualSpeed01[index] = leaderSpeed01; // 시각 전용(GPU phase 적분용).
+            _humanByAgent[index].SetHeadingAndSpeed(yaw, leaderSpeed01);
         }
     }
 
@@ -1044,6 +1211,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
                 float speed = velocity.magnitude;
                 Human human = _humanByAgent[index];
+                _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
                 if (speed > 0.001f)
                 {
                     human.SetHeadingAndSpeed(
@@ -1091,6 +1259,7 @@ public sealed class CrowdRoot : MonoBehaviour
             }
 
             _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
+            _visualSpeed01[i] = _config.NeutralAnimationSpeed; // 시각 전용(GPU phase 적분용).
             _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
         }
 

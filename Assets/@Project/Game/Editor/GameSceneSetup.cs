@@ -148,6 +148,17 @@ public static class GameSceneSetup
     private const string CrowdCountTextStylePath = HudFolder + "/CrowdCountTextStyle.asset";
     // 정적 도시 벽 SDF의 원본 asset. CrowdRoot 프리팹의 _wallSdfAsset 직렬화 필드가 이 정본을 가리킨다(Resources 사본 없음).
     private const string WallSdfAssetPath = "Assets/@Project/City/Generated/WallSdf.asset";
+    // GPU-anim Stage 1 Chunk B: VAT 자산(Chunk A 베이크 산출물 + Chunk B 셰이더/머티리얼). NON-Resources.
+    // CrowdRoot 프리팹의 자식 CrowdRenderer가 이 셋(mesh/material/2 texture)을 직렬화 필드로 소유한다.
+    private const string VatFolder = "Assets/@Project/Human/VAT";
+    private const string VatShaderPath = VatFolder + "/HumanVat.shader";
+    private const string VatShaderName = "AF/CrowdCity/HumanVat";
+    private const string VatMaterialPath = VatFolder + "/HumanVat.mat";
+    private const string VatPositionTexPath = VatFolder + "/HumanWalkVatPosition.asset";
+    private const string VatNormalTexPath = VatFolder + "/HumanWalkVatNormal.asset";
+    private const string VatMeshPath = VatFolder + "/HumanWalkVatMesh.asset";
+    private const string CrowdRendererChildName = "CrowdRenderer";
+    private const int VatRows = 21; // Chunk A 베이크: LoopClose 21행.
     private const string WalkName = "HumanWalk";
     private const string UrpLitShaderName = "Universal Render Pipeline/Lit";
     private const string BaseColorProperty = "_BaseColor";
@@ -1671,6 +1682,239 @@ public static class GameSceneSetup
     /// Phase 2 전용: feature root 프리팹 5종(GameplayRoot/InputRoot/CameraRoot/CrowdRoot/HudRoot)을 각 피처 Resources 하위로
     /// load-or-create 수렴한다. City/씬/Config 수렴 없이 prefab asset만 갱신하므로 batchmode에서 독립 실행할 수 있다. idempotent.
     /// </summary>
+    /// <summary>
+    /// GPU-anim Stage 1 Chunk B 전용: VAT 머티리얼(HumanVat.mat)을 load-or-create하고, CrowdRoot 프리팹에 CrowdRenderer
+    /// 자식을 저작해 mesh/material/2 texture/rows 직렬화 필드와 CrowdRoot._crowdRenderer를 배선한다. _useGpuCrowdRenderer
+    /// 스위치는 건드리지 않는다(기본 OFF 유지 = 동작 보존). idempotent. Chunk A VAT 자산과 Chunk B 셰이더가 선행 조건이다.
+    /// </summary>
+    [MenuItem("AF/CrowdCity/Bake Crowd Renderer (VAT material + CrowdRenderer child)")]
+    public static void BakeCrowdRenderer()
+    {
+        List<string> changed = new List<string>(4);
+        List<string> unchanged = new List<string>(4);
+
+        ConvergeVatMaterial(changed, unchanged);
+        ConvergeCrowdRendererChild(changed, unchanged);
+
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+
+        // 저장된 프리팹에서 CrowdRenderer 자식 refs + CrowdRoot._crowdRenderer가 실제로 해석되는지 fail-fast 검증한다.
+        VerifyCrowdRendererRefs();
+
+        Debug.Log(
+            "[BakeCrowdRenderer] PASS — HumanVat.mat + CrowdRoot/CrowdRenderer 자식 저작 완료(_useGpuCrowdRenderer는 기본 OFF 유지). " +
+            BuildSummary(changed, unchanged));
+    }
+
+    /// <summary>batch mode 진입점. 성공 시 exit 0, 예외 시 로그 후 exit 1로 종료한다.</summary>
+    public static void BakeCrowdRendererBatch()
+    {
+        try
+        {
+            BakeCrowdRenderer();
+            EditorApplication.Exit(0);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            EditorApplication.Exit(1);
+        }
+    }
+
+    // HumanVat.mat을 load-or-create하고 셰이더/텍스처/rows를 수렴한다. 런타임은 텍스처/rows를 MPB로도 다시 세우지만,
+    // 인스펙터 프리뷰와 SRP 정합을 위해 머티리얼에도 배선한다(단일 진실 원천은 CrowdRenderer의 직렬화 필드).
+    private static void ConvergeVatMaterial(List<string> changed, List<string> unchanged)
+    {
+        Shader shader = AssetDatabase.LoadAssetAtPath<Shader>(VatShaderPath);
+        if (shader == null)
+        {
+            shader = Shader.Find(VatShaderName); // 경로가 아닌 이름으로도 시도(임포트 지연 대비).
+        }
+
+        if (shader == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] VAT 셰이더가 없습니다: {VatShaderPath}('{VatShaderName}'). Chunk B 셰이더를 먼저 임포트하세요.");
+        }
+
+        Texture2D posTex = AssetDatabase.LoadAssetAtPath<Texture2D>(VatPositionTexPath);
+        Texture2D nrmTex = AssetDatabase.LoadAssetAtPath<Texture2D>(VatNormalTexPath);
+        if (posTex == null || nrmTex == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] VAT 텍스처가 없습니다(pos={posTex != null}, nrm={nrmTex != null}). 먼저 'AF/CrowdCity/Bake Human VAT'를 실행하세요.");
+        }
+
+        Material material = AssetDatabase.LoadAssetAtPath<Material>(VatMaterialPath);
+        bool created = false;
+        if (material == null)
+        {
+            material = new Material(shader) { name = "HumanVat" };
+            AssetDatabase.CreateAsset(material, VatMaterialPath);
+            created = true;
+        }
+
+        bool dirty = created;
+        if (material.shader != shader)
+        {
+            material.shader = shader;
+            dirty = true;
+        }
+
+        if (material.GetTexture("_PositionVat") != posTex)
+        {
+            material.SetTexture("_PositionVat", posTex);
+            dirty = true;
+        }
+
+        if (material.GetTexture("_NormalVat") != nrmTex)
+        {
+            material.SetTexture("_NormalVat", nrmTex);
+            dirty = true;
+        }
+
+        if (!Mathf.Approximately(material.GetFloat("_VatRows"), VatRows))
+        {
+            material.SetFloat("_VatRows", VatRows);
+            dirty = true;
+        }
+
+        if (dirty)
+        {
+            EditorUtility.SetDirty(material);
+            changed.Add(created ? "HumanVat.mat 생성" : "HumanVat.mat 갱신");
+        }
+        else
+        {
+            unchanged.Add("HumanVat.mat");
+        }
+    }
+
+    // CrowdRoot 프리팹에 CrowdRenderer 자식을 load-or-create하고, mesh/material/2 texture/rows와 CrowdRoot._crowdRenderer를 배선한다.
+    // LoadPrefabContents로 격리 편집해 diff를 이 자식/필드로 한정한다. 이미 목표 상태면 프리팹을 다시 저장하지 않는다(idempotent).
+    private static void ConvergeCrowdRendererChild(List<string> changed, List<string> unchanged)
+    {
+        Mesh mesh = AssetDatabase.LoadAssetAtPath<Mesh>(VatMeshPath);
+        Material material = AssetDatabase.LoadAssetAtPath<Material>(VatMaterialPath);
+        Texture2D posTex = AssetDatabase.LoadAssetAtPath<Texture2D>(VatPositionTexPath);
+        Texture2D nrmTex = AssetDatabase.LoadAssetAtPath<Texture2D>(VatNormalTexPath);
+        if (mesh == null || material == null || posTex == null || nrmTex == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] CrowdRenderer 배선 대상 VAT 자산 누락(mesh={mesh != null}, mat={material != null}, pos={posTex != null}, nrm={nrmTex != null}).");
+        }
+
+        GameObject contents = PrefabUtility.LoadPrefabContents(CrowdRootPrefabPath);
+        try
+        {
+            CrowdRoot crowdRoot = contents.GetComponent<CrowdRoot>();
+            if (crowdRoot == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] 프리팹 '{CrowdRootPrefabPath}' root에 CrowdRoot 컴포넌트가 없습니다.");
+            }
+
+            bool dirty = false;
+
+            Transform childTransform = contents.transform.Find(CrowdRendererChildName);
+            GameObject childGo;
+            if (childTransform == null)
+            {
+                childGo = new GameObject(CrowdRendererChildName);
+                childGo.transform.SetParent(contents.transform, false);
+                dirty = true;
+            }
+            else
+            {
+                childGo = childTransform.gameObject;
+            }
+
+            CrowdRenderer renderer = childGo.GetComponent<CrowdRenderer>();
+            if (renderer == null)
+            {
+                renderer = childGo.AddComponent<CrowdRenderer>(); // Editor 저작(런타임 AddComponent 아님).
+                dirty = true;
+            }
+
+            SerializedObject rendererSo = new SerializedObject(renderer);
+            dirty |= SetObjectReference(rendererSo, "_vatMesh", mesh);
+            dirty |= SetObjectReference(rendererSo, "_vatMaterial", material);
+            dirty |= SetObjectReference(rendererSo, "_positionVat", posTex);
+            dirty |= SetObjectReference(rendererSo, "_normalVat", nrmTex);
+            SerializedProperty rowsProp = rendererSo.FindProperty("_vatRows");
+            if (rowsProp != null && rowsProp.intValue != VatRows)
+            {
+                rowsProp.intValue = VatRows;
+                dirty = true;
+            }
+
+            rendererSo.ApplyModifiedPropertiesWithoutUndo();
+
+            SerializedObject crowdRootSo = new SerializedObject(crowdRoot);
+            dirty |= SetObjectReference(crowdRootSo, "_crowdRenderer", renderer);
+            crowdRootSo.ApplyModifiedPropertiesWithoutUndo();
+
+            if (dirty)
+            {
+                PrefabUtility.SaveAsPrefabAsset(contents, CrowdRootPrefabPath, out bool saveSuccess);
+                if (!saveSuccess)
+                {
+                    throw new InvalidOperationException(
+                        $"[GameSceneSetup] CrowdRoot 프리팹 저장 실패: {CrowdRootPrefabPath}");
+                }
+
+                changed.Add("CrowdRoot/CrowdRenderer 자식 배선");
+            }
+            else
+            {
+                unchanged.Add("CrowdRoot/CrowdRenderer 자식 배선");
+            }
+        }
+        finally
+        {
+            PrefabUtility.UnloadPrefabContents(contents);
+        }
+    }
+
+    // 저장된 CrowdRoot 프리팹에서 CrowdRenderer 자식 refs + CrowdRoot._crowdRenderer가 기대 asset으로 해석되는지 검증한다.
+    private static void VerifyCrowdRendererRefs()
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CrowdRootPrefabPath);
+        CrowdRenderer renderer = prefab != null ? prefab.GetComponentInChildren<CrowdRenderer>(true) : null;
+        if (renderer == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] CrowdRenderer 검증 실패: '{CrowdRootPrefabPath}'에 CrowdRenderer 자식이 없습니다.");
+        }
+
+        SerializedObject so = new SerializedObject(renderer);
+        VerifyChildRef(so, "_vatMesh", VatMeshPath);
+        VerifyChildRef(so, "_vatMaterial", VatMaterialPath);
+        VerifyChildRef(so, "_positionVat", VatPositionTexPath);
+        VerifyChildRef(so, "_normalVat", VatNormalTexPath);
+
+        CrowdRoot crowdRoot = prefab.GetComponent<CrowdRoot>();
+        SerializedProperty cr = crowdRoot != null ? new SerializedObject(crowdRoot).FindProperty("_crowdRenderer") : null;
+        if (cr == null || cr.objectReferenceValue != renderer)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] CrowdRenderer 검증 실패: CrowdRoot._crowdRenderer가 CrowdRenderer 자식을 가리키지 않습니다.");
+        }
+    }
+
+    private static void VerifyChildRef(SerializedObject serialized, string fieldName, string expectedAssetPath)
+    {
+        SerializedProperty property = serialized.FindProperty(fieldName);
+        UnityEngine.Object value = property != null ? property.objectReferenceValue : null;
+        string actualPath = value != null ? AssetDatabase.GetAssetPath(value) : null;
+        if (actualPath != expectedAssetPath)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] CrowdRenderer '{fieldName}'이(가) '{expectedAssetPath}'로 해석되지 않습니다(actual='{actualPath ?? "null"}').");
+        }
+    }
+
     [MenuItem("AF/CrowdCity/Bake Feature Root Prefabs (Resources)")]
     public static void BakeFeatureRootPrefabs()
     {

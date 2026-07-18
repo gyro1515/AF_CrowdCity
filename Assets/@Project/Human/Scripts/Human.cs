@@ -60,6 +60,25 @@ public sealed class Human : MonoBehaviour
     }
 
     /// <summary>
+    /// GPU 크라우드 렌더러(CrowdRenderer)가 성공적으로 초기화된 뒤 CrowdRoot가 런타임에 호출한다.
+    /// 이 clone의 SkinnedMeshRenderer와 Animator를 끈다(저작 프리팹은 건드리지 않는다 — 런타임 clone 한정).
+    /// 스킨/애니메이터 비용(~4.6us/유닛)을 제거하고 SMR/GPU 이중 렌더를 막는다. transform 회전/위치는 그대로
+    /// CrowdRoot가 계속 구동하므로 카메라/HUD가 읽는 리더 transform은 유지된다.
+    /// </summary>
+    public void DisableCpuRenderer()
+    {
+        if (_renderer != null)
+        {
+            _renderer.enabled = false;
+        }
+
+        if (_animator != null)
+        {
+            _animator.enabled = false;
+        }
+    }
+
+    /// <summary>
     /// Y축 회전을 지정한 heading으로 즉시 맞추고 Animator 재생 속도를 speed01로 설정한다.
     /// speed01은 0..1.5로 clamp하며 Animator가 없으면 회전만 적용하고 조용히 넘어간다.
     /// </summary>

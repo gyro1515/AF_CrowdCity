@@ -41,6 +41,11 @@ public static class ResourcePathValidator
     private const string WallSdfAssetPath = "Assets/@Project/City/Generated/WallSdf.asset";
     private const string CrowdLabelPrefabPath = "Assets/@Project/Hud/Prefabs/CrowdLabel.prefab";
     private const string RivalMarkerPrefabPath = "Assets/@Project/Hud/Prefabs/RivalMarker.prefab";
+    // GPU-anim Stage 1 Chunk B: CrowdRoot 프리팹 자식 CrowdRenderer의 VAT 직렬화 자산(NON-Resources).
+    private const string VatMeshPath = "Assets/@Project/Human/VAT/HumanWalkVatMesh.asset";
+    private const string VatMaterialPath = "Assets/@Project/Human/VAT/HumanVat.mat";
+    private const string VatPositionTexPath = "Assets/@Project/Human/VAT/HumanWalkVatPosition.asset";
+    private const string VatNormalTexPath = "Assets/@Project/Human/VAT/HumanWalkVatNormal.asset";
     private const string FontAssetPath = "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset";
 
     // Prefabs 카테고리 로직 root. 런타임(ResourceLoader.LoadPrefab&lt;T&gt;)이 클래스 이름으로 "Prefabs/&lt;이름&gt;"을 로드한다.
@@ -87,6 +92,7 @@ public static class ResourcePathValidator
         CollectRemainingLegacyRootsAssets(failures);
         ValidateMovedSerializedRefs(failures);
         CheckCrowdRootSdfSolverEnabled(failures);
+        ValidateCrowdRendererRefs(failures);
         ValidateResourcesLoadPolicy(failures);
 
         if (failures.Count == 0)
@@ -293,6 +299,68 @@ public static class ResourcePathValidator
             failures.Add(
                 "CrowdRoot 프리팹 '_useSdfSolver'가 1(SDF-ON, commit 55c8d19 의도)이 아님 — " +
                 "프리팹 재생성이 SDF solver를 조용히 껐을 수 있습니다.");
+        }
+    }
+
+    // GPU-anim Stage 1 Chunk B: CrowdRoot 프리팹의 자식 CrowdRenderer가 저작돼 있으면 그 VAT refs와 CrowdRoot._crowdRenderer
+    // 배선을 검사한다(present-then-strict). 자식이 없으면(GPU 렌더 경로 미저작 = opt-in) 통과한다 — 기본 OFF 스위치라
+    // 미저작 상태도 유효하다. FindPrefabSerializedProperty<T>는 root 전용이라 자식 컴포넌트는 GetComponentInChildren로 해석한다.
+    private static void ValidateCrowdRendererRefs(List<string> failures)
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(CrowdRootPrefabPath);
+        if (prefab == null)
+        {
+            failures.Add($"프리팹을 로드하지 못함: {CrowdRootPrefabPath}");
+            return;
+        }
+
+        CrowdRenderer renderer = prefab.GetComponentInChildren<CrowdRenderer>(true);
+        if (renderer == null)
+        {
+            return; // GPU 렌더 경로 미저작(opt-in): 통과.
+        }
+
+        SerializedObject rendererSo = new SerializedObject(renderer);
+        CheckChildSerializedRef(rendererSo, "_vatMesh", VatMeshPath, failures);
+        CheckChildSerializedRef(rendererSo, "_vatMaterial", VatMaterialPath, failures);
+        CheckChildSerializedRef(rendererSo, "_positionVat", VatPositionTexPath, failures);
+        CheckChildSerializedRef(rendererSo, "_normalVat", VatNormalTexPath, failures);
+
+        CrowdRoot crowdRoot = prefab.GetComponent<CrowdRoot>();
+        SerializedProperty crowdRendererRef =
+            crowdRoot != null ? new SerializedObject(crowdRoot).FindProperty("_crowdRenderer") : null;
+        if (crowdRendererRef == null || crowdRendererRef.objectReferenceValue == null)
+        {
+            failures.Add("CrowdRoot 프리팹 '_crowdRenderer'가 미배선(CrowdRenderer 자식이 있는데 참조가 비어 있음)");
+        }
+        else if (crowdRendererRef.objectReferenceValue != renderer)
+        {
+            failures.Add("CrowdRoot 프리팹 '_crowdRenderer'가 CrowdRenderer 자식을 가리키지 않음");
+        }
+    }
+
+    // 자식 컴포넌트의 objectReference 직렬화 필드가 비어 있지 않고 기대 asset 경로를 가리키는지 검사한다.
+    private static void CheckChildSerializedRef(
+        SerializedObject serialized, string fieldName, string expectedAssetPath, List<string> failures)
+    {
+        SerializedProperty property = serialized.FindProperty(fieldName);
+        if (property == null)
+        {
+            failures.Add($"CrowdRenderer 직렬화 필드 '{fieldName}'을(를) 찾지 못함");
+            return;
+        }
+
+        UnityEngine.Object value = property.objectReferenceValue;
+        if (value == null)
+        {
+            failures.Add($"CrowdRenderer '{fieldName}'이(가) 미배선(null)");
+            return;
+        }
+
+        string actualPath = AssetDatabase.GetAssetPath(value);
+        if (actualPath != expectedAssetPath)
+        {
+            failures.Add($"CrowdRenderer '{fieldName}'이(가) {expectedAssetPath}이(가) 아님(actual={actualPath})");
         }
     }
 
