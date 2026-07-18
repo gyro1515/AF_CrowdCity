@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -47,8 +48,10 @@ public sealed class CrowdRenderer : MonoBehaviour
     private MaterialPropertyBlock _leaderProps;
     private Bounds _worldBounds;
     private int _capacity;
+    private int _leaderCapacity;
     private bool _active;
     private bool _disposed;
+    private bool _reinitOnEnable; // OnDisable에서 활성이었으면 true; OnEnable이 캐시된 파라미터로 버퍼를 재생성한다.
 
     /// <summary>렌더러가 초기화에 성공해 GPU 경로가 활성인지 여부다. false면 CrowdRoot가 SMR 경로를 유지한다.</summary>
     public bool IsActive => _active;
@@ -60,9 +63,19 @@ public sealed class CrowdRenderer : MonoBehaviour
     /// </summary>
     public bool Init(int capacity, int leaderCapacity, Bounds worldBounds)
     {
-        if (_active || _disposed)
+        int cap = Mathf.Max(1, capacity);
+        int leaderCap = Mathf.Max(1, leaderCapacity);
+
+        // 이미 활성: 같은 capacity면 idempotent no-op(true). 다른 capacity면 기존 버퍼를 정리하고 새 capacity로 재할당한다(silent clamp 금지).
+        if (_active)
         {
-            return _active;
+            if (cap == _capacity && leaderCap == _leaderCapacity)
+            {
+                _worldBounds = worldBounds;
+                return true;
+            }
+
+            ReleaseBuffers();
         }
 
         // 저작 자원 검사: 미배선(null)은 실패로 노출한다(silent Resources.Load 폴백 금지, CLAUDE 11.5).
@@ -96,26 +109,55 @@ public sealed class CrowdRenderer : MonoBehaviour
             return false;
         }
 
-        _capacity = Mathf.Max(1, capacity);
+        // 실제 draw 경로가 요구하는 capability: 인스턴싱 + vertex 스테이지의 StructuredBuffer(compute buffer) 읽기.
+        // 하나라도 미지원이면 draw가 아무 것도 그리지 않아 크라우드 전체가 사라지므로 실패로 노출한다.
+        if (!SystemInfo.supportsInstancing || SystemInfo.maxComputeBufferInputsVertex <= 0)
+        {
+            Debug.LogWarning(
+                "[CrowdRenderer] 이 graphics API는 인스턴싱 또는 vertex StructuredBuffer 읽기를 지원하지 않아 GPU 크라우드 경로를 비활성화합니다. SMR 경로를 유지합니다.");
+            return false;
+        }
+
+        // VAT 머티리얼 셰이더가 이 플랫폼에서 컴파일/지원되지 않으면 draw가 아무 것도 그리지 않으므로 실패로 노출한다.
+        Shader shader = _vatMaterial.shader;
+        if (shader == null || !shader.isSupported)
+        {
+            Debug.LogWarning(
+                "[CrowdRenderer] VAT 머티리얼 셰이더가 이 플랫폼에서 지원되지 않아 GPU 크라우드 경로를 비활성화합니다. SMR 경로를 유지합니다.");
+            return false;
+        }
+
+        // 할당/바인딩을 transaction으로 처리한다: 어느 단계에서 예외가 나도 부분 생성 버퍼를 정리하고 false를 반환한다(SMR 폴백, throw 금지).
+        try
+        {
+            _mainBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, cap, InstanceStride);
+            _leaderBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, leaderCap, InstanceStride);
+            _leaderScratch = new InstanceData[leaderCap];
+
+            _mainProps = new MaterialPropertyBlock();
+            _mainProps.SetTexture(PositionVatId, _positionVat);
+            _mainProps.SetTexture(NormalVatId, _normalVat);
+            _mainProps.SetFloat(VatRowsId, _vatRows);
+            _mainProps.SetBuffer(InstancesId, _mainBuffer);
+
+            _leaderProps = new MaterialPropertyBlock();
+            _leaderProps.SetTexture(PositionVatId, _positionVat);
+            _leaderProps.SetTexture(NormalVatId, _normalVat);
+            _leaderProps.SetFloat(VatRowsId, _vatRows);
+            _leaderProps.SetBuffer(InstancesId, _leaderBuffer);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[CrowdRenderer] GPU 버퍼/바인딩 할당 실패 → GPU 크라우드 경로를 비활성화하고 SMR 경로를 유지합니다: " + e);
+            ReleaseBuffers(); // 부분 생성 버퍼 정리(브릭 금지: _disposed는 건드리지 않아 재초기화 허용).
+            return false;
+        }
+
+        _capacity = cap;
+        _leaderCapacity = leaderCap;
         _worldBounds = worldBounds;
-
-        _mainBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, _capacity, InstanceStride);
-        int leaderCap = Mathf.Max(1, leaderCapacity);
-        _leaderBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, leaderCap, InstanceStride);
-        _leaderScratch = new InstanceData[leaderCap];
-
-        _mainProps = new MaterialPropertyBlock();
-        _mainProps.SetTexture(PositionVatId, _positionVat);
-        _mainProps.SetTexture(NormalVatId, _normalVat);
-        _mainProps.SetFloat(VatRowsId, _vatRows);
-        _mainProps.SetBuffer(InstancesId, _mainBuffer);
-
-        _leaderProps = new MaterialPropertyBlock();
-        _leaderProps.SetTexture(PositionVatId, _positionVat);
-        _leaderProps.SetTexture(NormalVatId, _normalVat);
-        _leaderProps.SetFloat(VatRowsId, _vatRows);
-        _leaderProps.SetBuffer(InstancesId, _leaderBuffer);
-
+        _disposed = false; // Dispose 후에도 깨끗한 재초기화를 허용한다(영구 브릭 금지).
+        _reinitOnEnable = false;
         _active = true;
         return true;
     }
@@ -127,7 +169,8 @@ public sealed class CrowdRenderer : MonoBehaviour
     /// </summary>
     public void Render(InstanceData[] instances, int count, int[] leaderIndices, int leaderCount)
     {
-        if (!_active || instances == null || count <= 0)
+        // 비활성/미초기화(컴포넌트 disable, 어셈블리 reload로 버퍼 유실 포함)면 draw를 발행하지 않는다.
+        if (!_active || !isActiveAndEnabled || instances == null || count <= 0)
         {
             return;
         }
@@ -172,12 +215,19 @@ public sealed class CrowdRenderer : MonoBehaviour
 
     /// <summary>
     /// GraphicsBuffer를 해제한다. CrowdRoot.Shutdown(이른 return 이전)과 OnDestroy 안전망에서 호출되며
-    /// 여러 번 호출해도 안전하다(idempotent).
+    /// 여러 번 호출해도 안전하다(idempotent). 소유자 teardown이므로 재활성화 재초기화를 막는다(_reinitOnEnable=false).
     /// </summary>
     public void Dispose()
     {
-        _active = false;
         _disposed = true;
+        _reinitOnEnable = false;
+        ReleaseBuffers();
+    }
+
+    /// <summary>GraphicsBuffer만 해제하고 draw를 멈춘다(_active=false). _disposed는 건드리지 않아 깨끗한 재초기화를 허용한다.</summary>
+    private void ReleaseBuffers()
+    {
+        _active = false;
         if (_mainBuffer != null)
         {
             _mainBuffer.Dispose();
@@ -188,6 +238,24 @@ public sealed class CrowdRenderer : MonoBehaviour
         {
             _leaderBuffer.Dispose();
             _leaderBuffer = null;
+        }
+    }
+
+    // 컴포넌트 비활성화/어셈블리 reload 시 GraphicsBuffer를 해제해 stale GPU state가 draw를 구동하지 못하게 한다.
+    // 활성 상태였다면 재활성화 때 재초기화하도록 표시한다.
+    private void OnDisable()
+    {
+        _reinitOnEnable = _active;
+        ReleaseBuffers();
+    }
+
+    // 활성 상태에서 비활성화되어 버퍼를 잃었다면 캐시된 파라미터로 재초기화한다(소유자 재주입 불필요).
+    // 소유자 teardown(Dispose) 이후(_disposed)에는 되살리지 않는다. 최초 활성화(주입 전)에는 아무 것도 하지 않는다.
+    private void OnEnable()
+    {
+        if (!_disposed && _reinitOnEnable && _mainBuffer == null && _capacity > 0)
+        {
+            Init(_capacity, _leaderCapacity, _worldBounds);
         }
     }
 

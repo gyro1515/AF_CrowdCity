@@ -9,7 +9,8 @@ public sealed class Human : MonoBehaviour
 {
     private static readonly int WalkStateHash = Animator.StringToHash("HumanWalk");
 
-    private const float MaxAnimatorSpeed = 1.5f;
+    // Animator.speed clamp 상한. GPU 경로(CrowdRoot의 phase 적분)도 같은 상한으로 clamp해 CPU/GPU 재생 속도를 일치시킨다.
+    public const float MaxAnimatorSpeed = 1.5f;
 
     private SkinnedMeshRenderer _renderer;
     private Animator _animator;

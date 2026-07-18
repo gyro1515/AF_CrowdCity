@@ -1259,7 +1259,9 @@ public sealed class CrowdRoot : MonoBehaviour
             }
 
             _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
-            _visualSpeed01[i] = _config.NeutralAnimationSpeed; // 시각 전용(GPU phase 적분용).
+            // GPU phase 적분에 쓰는 저장 속도를 CPU 경로(Human.SetHeadingAndSpeed의 Animator.speed clamp)와 동일하게 clamp해
+            // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
+            _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
             _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
         }
 

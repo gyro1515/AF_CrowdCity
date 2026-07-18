@@ -34,6 +34,9 @@ public static class HumanVatBaker
     // frame0 == frame(N-1) 판정 임계(m). 1mm 미만이면 loop-close로 보고 중복 마지막 행을 버린다.
     private const float SeamThreshold = 0.001f;
 
+    // frame0 == frame(N-1) 법선 판정 임계(단위 법선 거리 ≈5.7°). loop 지점의 법선 불연속(seam)을 위치와 별개로 감지한다.
+    private const float NormalSeamThreshold = 0.1f;
+
     // 셰이더가 가정하는 texel-center 열 주소. 소비자(Chunk B)와 반드시 일치해야 한다.
     // 열(정점) = (i + 0.5) / width  → 동반 메쉬 UV2.x 에 저장. 행 = (row + 0.5) / height.
 
@@ -44,8 +47,9 @@ public static class HumanVatBaker
         public int SampleCount;      // 클립에서 계산한 원 샘플 수(예: 22)
         public int Rows;             // 실제 저장 행 수(loop-close면 SampleCount-1)
         public bool LoopClose;       // true=21행 modulo, false=22행 clamp
-        public float Period;         // 초. loop-close: rows/frameRate, clamp: rows/frameRate
+        public float Period;         // 초. LoopClose: rows/frameRate(rows 간격이 seamless wrap)
         public float SeamMax;        // frame0 vs frame(N-1) 최대 정점 델타(m)
+        public float NormalSeamMax;  // frame0 vs frame(N-1) 최대 법선 델타(단위 벡터 거리)
         public float FrameRate;
         public float ClipLength;
         public string TexFormat;
@@ -198,11 +202,25 @@ public static class HumanVatBaker
             Debug.Log($"[HumanVatBaker] diag: frame0 maxVertexMag={f0MaxMag:F4}m (0이면 BakeMesh 실패) " +
                       $"| liveSMR.bounds size={worldRef.size} (world 참조, ~사람키)");
 
-            // ---- 2) seam 측정 → loop 스킴 선택 ----
+            // ---- 2) seam 측정(위치+법선) → loop 스킴 판정 ----
+            // 셰이더(HumanVat)는 항상 modulo wrap(LoopClose: t*rows, rowB=(rowA+1)%rows)로만 샘플한다.
+            // 따라서 위치뿐 아니라 법선도 loop 지점에서 연속이어야 한다(법선 seam도 감지).
             float seamMax = MaxVertexDelta(pos[0], pos[sampleCount - 1]);
-            bool loopClose = seamMax <= SeamThreshold;
-            int rows = loopClose ? sampleCount - 1 : sampleCount;
-            float period = rows / frameRate;
+            float normalSeamMax = MaxVertexDelta(nrm[0], nrm[sampleCount - 1]);
+            bool loopClose = seamMax <= SeamThreshold && normalSeamMax <= NormalSeamThreshold;
+
+            // non-looping 클립을 clamp 레이아웃으로 구우면 셰이더의 고정 modulo 주소와 어긋나 위상 cadence가 틀리고 wrap seam이 생긴다.
+            // 셰이더에 clamp 경로가 없으므로 loop-close가 아니면 조용히 mis-cadence하지 않도록 여기서 실패시킨다(clamp 경로 제거).
+            if (!loopClose)
+            {
+                throw new InvalidOperationException(
+                    $"'{ClipName}' 시작/끝 seam(위치 {seamMax:F6}m>{SeamThreshold}m 또는 법선 {normalSeamMax:F4}>{NormalSeamThreshold})이 " +
+                    "loop-close가 아닙니다. 셰이더(HumanVat)는 modulo wrap(LoopClose)만 지원하므로 clamp 베이크를 거부합니다. " +
+                    "루핑 클립을 사용하거나 셰이더에 clamp 샘플 경로를 추가하세요.");
+            }
+
+            int rows = sampleCount - 1;      // LoopClose: 중복된 마지막(=첫) 행을 버린다.
+            float period = rows / frameRate; // rows개의 간격이 seamless wrap → period = rows/frameRate.
 
             // ---- 3) union bounds(전 프레임 변환 후) ----
             Bounds union = ComputeUnionBounds(pos, sampleCount, vertexCount);
@@ -224,6 +242,7 @@ public static class HumanVatBaker
             report.LoopClose = loopClose;
             report.Period = period;
             report.SeamMax = seamMax;
+            report.NormalSeamMax = normalSeamMax;
             report.FrameRate = frameRate;
             report.ClipLength = clip.length;
             report.TexFormat = posTex.format.ToString();
@@ -232,8 +251,8 @@ public static class HumanVatBaker
             report.UnionBounds = union;
 
             Debug.Log($"[HumanVatBaker] 베이크 완료: verts={vertexCount} samples={sampleCount} rows={rows} " +
-                      $"scheme={report.SchemeName} seam={seamMax:F6}m period={period:F4}s fmt={report.TexFormat} " +
-                      $"bounds(size={union.size}) -> {OutputFolder}");
+                      $"scheme={report.SchemeName} seam={seamMax:F6}m normalSeam={normalSeamMax:F4} period={period:F4}s " +
+                      $"fmt={report.TexFormat} bounds(size={union.size}) -> {OutputFolder}");
 
             // ---- 6) 같은 클론으로 self-verify ----
             Verify(report, clip, animRoot, smr, humanRoot, tmp, vertexCount, frameRate);
@@ -404,24 +423,63 @@ public static class HumanVatBaker
         return mesh;
     }
 
+    // 재베이크 시 기존 에셋을 그 자리에서 덮어써 GUID를 보존한다(DeleteAsset+CreateAsset은 GUID를 바꿔
+    // HumanVat.mat 텍스처 참조와 CrowdRoot.prefab 메쉬 참조를 끊는다). 없으면 새로 만든다.
     private static void WriteTextureAsset(Texture2D tex, string path)
     {
-        if (AssetDatabase.LoadAssetAtPath<Texture2D>(path) != null)
+        Texture2D existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+        if (existing == null)
         {
-            AssetDatabase.DeleteAsset(path);
+            AssetDatabase.CreateAsset(tex, path);
+            AssetDatabase.SaveAssets();
+            return;
         }
 
-        AssetDatabase.CreateAsset(tex, path);
+        existing.Reinitialize(tex.width, tex.height, tex.format, hasMipMap: false);
+        existing.filterMode = tex.filterMode;
+        existing.wrapMode = tex.wrapMode;
+        existing.anisoLevel = tex.anisoLevel;
+        existing.SetPixels(tex.GetPixels());
+        existing.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+        EditorUtility.SetDirty(existing);
+        AssetDatabase.SaveAssets();
     }
 
     private static void WriteMeshAsset(Mesh mesh, string path)
     {
-        if (AssetDatabase.LoadAssetAtPath<Mesh>(path) != null)
+        Mesh existing = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+        if (existing == null)
         {
-            AssetDatabase.DeleteAsset(path);
+            AssetDatabase.CreateAsset(mesh, path);
+            AssetDatabase.SaveAssets();
+            return;
         }
 
-        AssetDatabase.CreateAsset(mesh, path);
+        existing.Clear();
+        existing.name = mesh.name;
+        existing.indexFormat = mesh.indexFormat;
+        existing.SetVertices(mesh.vertices);
+        existing.SetNormals(mesh.normals);
+
+        var uv0 = new System.Collections.Generic.List<Vector2>();
+        mesh.GetUVs(0, uv0);
+        if (uv0.Count > 0)
+        {
+            existing.SetUVs(0, uv0);
+        }
+
+        var uv2 = new System.Collections.Generic.List<Vector2>();
+        mesh.GetUVs(1, uv2);
+        existing.SetUVs(1, uv2);
+
+        existing.subMeshCount = mesh.subMeshCount;
+        for (int s = 0; s < mesh.subMeshCount; s++)
+        {
+            existing.SetTriangles(mesh.GetTriangles(s), s, calculateBounds: false);
+        }
+
+        existing.bounds = mesh.bounds;
+        EditorUtility.SetDirty(existing);
         AssetDatabase.SaveAssets();
     }
 

@@ -117,6 +117,8 @@ Shader "AF/CrowdCity/HumanVat"
             #pragma multi_compile _ EVALUATE_SH_MIXED EVALUATE_SH_VERTEX
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BLENDING
             #pragma multi_compile_fragment _ _REFLECTION_PROBE_BOX_PROJECTION
+            #pragma multi_compile_fragment _ _LIGHT_LAYERS
+            #pragma multi_compile_fragment _ _LIGHT_COOKIES
             #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
             #pragma multi_compile_fog
 
@@ -135,6 +137,7 @@ Shader "AF/CrowdCity/HumanVat"
                 float3 normalWS : TEXCOORD1;
                 float3 albedo : TEXCOORD2;
                 float fogCoord : TEXCOORD3;
+                float3 vertexLighting : TEXCOORD4; // per-vertex additional lighting(_ADDITIONAL_LIGHTS_VERTEX 품질에서만 채움)
             };
 
             Varyings ForwardVertex(Attributes IN)
@@ -147,6 +150,9 @@ Shader "AF/CrowdCity/HumanVat"
                 OUT.albedo = albedo;
                 OUT.positionCS = TransformWorldToHClip(posWS);
                 OUT.fogCoord = ComputeFogFactor(OUT.positionCS.z);
+                #ifdef _ADDITIONAL_LIGHTS_VERTEX
+                    OUT.vertexLighting = VertexLighting(posWS, nWS); // Per-Vertex 추가 광원을 정점에서 적산
+                #endif
                 return OUT;
             }
 
@@ -169,6 +175,9 @@ Shader "AF/CrowdCity/HumanVat"
                 inputData.bakedGI = SampleSH(inputData.normalWS); // global ambient SH (no per-renderer probes in Stage 1)
                 inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(IN.positionCS);
                 inputData.shadowMask = half4(1, 1, 1, 1);
+                #ifdef _ADDITIONAL_LIGHTS_VERTEX
+                    inputData.vertexLighting = IN.vertexLighting; // Per-Vertex 추가 광원 기여(off면 (InputData)0의 기본 0)
+                #endif
 
                 half4 color = UniversalFragmentPBR(inputData, surfaceData);
                 color.rgb = MixFog(color.rgb, IN.fogCoord);
