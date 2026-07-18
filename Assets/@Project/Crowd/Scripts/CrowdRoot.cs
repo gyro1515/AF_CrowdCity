@@ -931,7 +931,15 @@ public sealed class CrowdRoot : MonoBehaviour
                 // 스케일일 때의 pairSepRadius(sepRadius*NeutralMaxScale)까지 이웃이 잡히도록 조회 반경을 넓힌다.
                 // 직전 tick의 grid/buffer snapshot을 이웃 기준으로 쓴다.
                 CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.Separation); // 무침습 계측(Enabled=false면 no-op).
-                _grid.QueryCircle(pos, sepRadius * Mathf.Max(1f, _config.NeutralMaxScale), _neighborScratch);
+                int sepBudget = _config.Sim.SeparationVisitBudget;
+                if (sepBudget > 0)
+                {
+                    _grid.QueryCircleCapped(pos, sepRadius * Mathf.Max(1f, _config.NeutralMaxScale), sepBudget, _neighborScratch);
+                }
+                else
+                {
+                    _grid.QueryCircle(pos, sepRadius * Mathf.Max(1f, _config.NeutralMaxScale), _neighborScratch);
+                }
                 Vector2 separation = Vector2.zero;
                 for (int c = 0; c < _neighborScratch.Count; c++)
                 {

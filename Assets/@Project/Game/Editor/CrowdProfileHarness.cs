@@ -38,7 +38,7 @@ public static class CrowdProfileHarness
     public static void RunFromMenu()
     {
         string outPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "phaseC_baseline_profile.txt");
-        Run(outPath, "menu", DefaultScales, false);
+        Run(outPath, "menu", DefaultScales, false, -1);
     }
 
     /// <summary>배치 진입점. -profileOut / -profileLabel / -profileScales / -profileCounters 인자를 파싱해 실행한다.</summary>
@@ -48,6 +48,7 @@ public static class CrowdProfileHarness
         string label = "batch";
         int[] scales = DefaultScales;
         bool enableCounters = false; // -profileCounters: 진단 work counter run 활성(timing run과 분리). 기본 OFF.
+        int[] sepBudgets = null;     // -profileSepBudget: 분리 조회 후보 방문 예산 스윕(measurement-only). null이면 config 기본값 사용.
         string[] args = Environment.GetCommandLineArgs();
         for (int i = 0; i < args.Length; i++)
         {
@@ -55,6 +56,7 @@ public static class CrowdProfileHarness
             else if (args[i] == "-profileLabel" && i + 1 < args.Length) label = args[i + 1];
             else if (args[i] == "-profileScales" && i + 1 < args.Length) scales = ParseInts(args[i + 1]);
             else if (args[i] == "-profileCounters") enableCounters = true;
+            else if (args[i] == "-profileSepBudget" && i + 1 < args.Length) sepBudgets = ParseInts(args[i + 1]);
         }
 
         if (scales == null || scales.Length == 0)
@@ -70,7 +72,22 @@ public static class CrowdProfileHarness
         int exitCode = 0;
         try
         {
-            Run(outPath, label, scales, enableCounters);
+            if (sepBudgets == null || sepBudgets.Length == 0)
+            {
+                Run(outPath, label, scales, enableCounters, -1); // -1 = config 기본 SeparationVisitBudget 유지.
+            }
+            else
+            {
+                // 예산별로 분리된 out 파일에 기록한다(파일명에 _b<budget> suffix). 각 파일이 독립 요약/counter 표를 담는다.
+                string dir = Path.GetDirectoryName(outPath);
+                string stem = Path.GetFileNameWithoutExtension(outPath);
+                string ext = Path.GetExtension(outPath);
+                foreach (int b in sepBudgets)
+                {
+                    string bOut = Path.Combine(dir, stem + "_b" + b + ext);
+                    Run(bOut, label + "_b" + b, scales, enableCounters, b);
+                }
+            }
         }
         catch (Exception e)
         {
@@ -81,10 +98,11 @@ public static class CrowdProfileHarness
         EditorApplication.Exit(exitCode);
     }
 
-    private static void Run(string outPath, string label, int[] scales, bool enableCounters)
+    private static void Run(string outPath, string label, int[] scales, bool enableCounters, int sepBudget)
     {
         Debug.Log($"[CrowdProfileHarness] 시작 label={label} out={outPath} " +
-                  $"scales=[{string.Join(",", scales)}] counters={(enableCounters ? "ON(diagnostic)" : "OFF(timing)")}");
+                  $"scales=[{string.Join(",", scales)}] counters={(enableCounters ? "ON(diagnostic)" : "OFF(timing)")} " +
+                  $"sepBudget={(sepBudget >= 0 ? sepBudget.ToString() : "config-default")}");
 
         // 상한 해제(측정 루프는 수동이지만 방어적으로).
         QualitySettings.vSyncCount = 0;
@@ -116,6 +134,7 @@ public static class CrowdProfileHarness
 
         var sb = new StringBuilder();
         AppendHeader(sb, label, baseConfig);
+        sb.AppendLine($"# SeparationVisitBudget override: {(sepBudget >= 0 ? sepBudget.ToString() : "config-default(off)")}");
 
         var segNames = new List<string>();
         for (int s = 0; s < (int)CrowdSimProfiler.Seg.Count; s++)
@@ -155,6 +174,10 @@ public static class CrowdProfileHarness
                 cfg = UnityEngine.Object.Instantiate(baseConfig);
                 cfg.name = baseConfig.name + "_n" + scale;
                 neutralCountField.SetValue(cfg, scale);
+                if (sepBudget >= 0)
+                {
+                    SetSepBudget(cfg, sepBudget); // 측정 전용: 복제본의 SeparationVisitBudget만 덮어쓴다(원본 asset 불변).
+                }
 
                 crowd = UnityEngine.Object.Instantiate(crowdPrefab);
                 crowd.gameObject.name = "ProfileCrowdRoot_n" + scale;
@@ -372,6 +395,13 @@ public static class CrowdProfileHarness
             sb.AppendLine($"{scale},radius_qualifiers,{src},{F(CrowdSimCounters.RadiusQualifiers(src) / denom)},{CrowdSimCounters.RadiusQualifiers(src)}");
         }
 
+        // 분리 조회 밀도 cap 발화율: 예산 도달로 절단된 분리 조회 / 전체 분리 조회.
+        long sepCalls = CrowdSimCounters.QueryCalls(CrowdSimCounters.QuerySource.Separation);
+        long sepCapHits = CrowdSimCounters.SepCapHits;
+        double capHitFrac = sepCalls > 0 ? sepCapHits / (double)sepCalls : 0;
+        sb.AppendLine($"{scale},sep_cap_hits,-,{F(sepCapHits / denom)},{sepCapHits}");
+        sb.AppendLine($"{scale},sep_cap_hit_fraction,-,{F(capHitFrac)},-");
+
         sb.AppendLine($"{scale},combat_touching,-,{F(CrowdSimCounters.CombatTouching / denom)},{CrowdSimCounters.CombatTouching}");
         sb.AppendLine($"{scale},combat_unique_pairs,-,{F(CrowdSimCounters.CombatUniquePairs / denom)},{CrowdSimCounters.CombatUniquePairs}");
         sb.AppendLine($"{scale},victim_total,-,{F(CrowdSimCounters.VictimTotal / denom)},{CrowdSimCounters.VictimTotal}");
@@ -387,7 +417,24 @@ public static class CrowdProfileHarness
                   $"combat={F(CrowdSimCounters.CandidateVisits(CrowdSimCounters.QuerySource.Combat) / denom)} " +
                   $"leader={F(CrowdSimCounters.CandidateVisits(CrowdSimCounters.QuerySource.Leader) / denom)} " +
                   $"rivalAi={F(CrowdSimCounters.CandidateVisits(CrowdSimCounters.QuerySource.RivalAi) / denom)} | " +
+                  $"sepVisits/query={F(sepCalls > 0 ? CrowdSimCounters.CandidateVisits(CrowdSimCounters.QuerySource.Separation) / (double)sepCalls : 0)} " +
+                  $"capHit={F(capHitFrac)} | " +
                   $"victims/tick={F(vt / denom)} victimCmp/tick={F(CrowdSimCounters.VictimComparisons / denom)} cmp/victim={F(cmpPerVictim)}");
+    }
+
+    // 측정 전용: 복제 config의 SimTuning.SeparationVisitBudget만 덮어쓴다(struct라 box→set→unbox).
+    private static void SetSepBudget(GameConfigSO cfg, int budget)
+    {
+        FieldInfo simField = typeof(GameConfigSO).GetField("sim", BindingFlags.Instance | BindingFlags.NonPublic);
+        FieldInfo budgetField = typeof(SimTuning).GetField("SeparationVisitBudget");
+        if (simField == null || budgetField == null)
+        {
+            throw new InvalidOperationException("GameConfigSO.sim 또는 SimTuning.SeparationVisitBudget 필드를 리플렉션으로 찾지 못했습니다.");
+        }
+
+        object boxed = simField.GetValue(cfg);   // SimTuning struct를 박싱.
+        budgetField.SetValue(boxed, budget);      // 박싱된 복사본의 예산만 변경.
+        simField.SetValue(cfg, boxed);            // config로 되쓴다.
     }
 
     // "2000,5000" 형식의 CSV를 int[]로 파싱한다(-profileScales 전용).

@@ -171,6 +171,87 @@ public sealed class SpatialGrid
         CrowdSimCounters.CountQuery(candidateVisits, results.Count); // 무침습 계측(Enabled=false면 no-op).
     }
 
+    /// <summary>
+    /// <see cref="QueryCircle"/>와 동일하게 center에서 radius 이내(경계 포함)인 agent index를 results에 담되,
+    /// 논리 cell에 매칭된 후보를 budget개까지만 처리한 뒤 전체 열거를 멈춘다(밀집 cell에서 분리 조회 비용 상한).
+    /// budget번째 매칭 후보는 정상 처리되고 그다음 후보는 방문하지 않는다. budget이 0 이하이면 <see cref="QueryCircle"/>와 동일하게 동작한다.
+    /// 절단이 일어나지 않은 질의는 <see cref="QueryCircle"/>와 결과·순서가 완전히 같다.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="results"/>가 null이면 발생한다.</exception>
+    public void QueryCircleCapped(Vector2 center, float radius, int budget, List<int> results)
+    {
+        if (budget <= 0)
+        {
+            QueryCircle(center, radius, results); // cap 비활성: 정확 조회 경로로 위임(결과·순서 동일).
+            return;
+        }
+
+        if (results == null)
+        {
+            throw new ArgumentNullException(nameof(results));
+        }
+
+        results.Clear();
+
+        // 무침습 계측: 계측 여부를 루프 밖에서 한 번만 읽는다(Enabled=false면 아래 로컬 증가가 사실상 no-op).
+        bool count = CrowdSimCounters.Enabled;
+
+        if (_count == 0 || radius < 0f)
+        {
+            CrowdSimCounters.CountQuery(0, 0); // 빈 질의도 호출 수로 집계(Enabled=false면 no-op).
+            return;
+        }
+
+        int minCellX = Mathf.FloorToInt((center.x - radius) * _invCellSize);
+        int maxCellX = Mathf.FloorToInt((center.x + radius) * _invCellSize);
+        int minCellY = Mathf.FloorToInt((center.y - radius) * _invCellSize);
+        int maxCellY = Mathf.FloorToInt((center.y + radius) * _invCellSize);
+        float radiusSq = radius * radius;
+
+        int candidateVisits = 0; // cell 매칭 후보(거리 계산 대상) 수. count=false면 증가하지 않는다.
+        int matched = 0;         // 예산 대상 논리-cell 매칭 후보 수. 계측 flag와 무관하게 항상 증가한다.
+        for (int cellY = minCellY; cellY <= maxCellY; cellY++)
+        {
+            for (int cellX = minCellX; cellX <= maxCellX; cellX++)
+            {
+                int agentIndex = _bucketHead[HashCell(cellX, cellY) & _tableMask];
+                while (agentIndex != -1)
+                {
+                    // hash 충돌로 다른 cell의 agent가 같은 bucket에 섞일 수 있어 cell 좌표로 거른다.
+                    // agent는 자기 cell 좌표에서만 통과하므로 후보 cell끼리 충돌해도 중복 추가가 없다.
+                    if (_cellX[agentIndex] == cellX && _cellY[agentIndex] == cellY)
+                    {
+                        if (count)
+                        {
+                            candidateVisits++;
+                        }
+
+                        matched++;
+
+                        float dx = _pos[agentIndex].x - center.x;
+                        float dy = _pos[agentIndex].y - center.y;
+                        if (dx * dx + dy * dy <= radiusSq)
+                        {
+                            results.Add(agentIndex);
+                        }
+
+                        // budget번째 매칭 후보까지 처리한 뒤 전체 열거를 멈춘다(그다음 후보는 방문하지 않는다).
+                        if (matched >= budget)
+                        {
+                            CrowdSimCounters.CountSepCapHit();                           // 절단 발화 계측(Enabled=false면 no-op).
+                            CrowdSimCounters.CountQuery(candidateVisits, results.Count); // 무침습 계측(Enabled=false면 no-op).
+                            return;
+                        }
+                    }
+
+                    agentIndex = _nextInBucket[agentIndex];
+                }
+            }
+        }
+
+        CrowdSimCounters.CountQuery(candidateVisits, results.Count); // 무침습 계측(Enabled=false면 no-op).
+    }
+
     private static int HashCell(int cellX, int cellY)
     {
         unchecked

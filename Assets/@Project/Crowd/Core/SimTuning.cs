@@ -54,4 +54,10 @@ public struct SimTuning
     // 프로덕션은 항상 config.Sim으로 이 struct를 전달받으므로 실제 기본값(true)은 asset이 결정한다.
     [UnityEngine.Tooltip("리더 보호 토글. ON(true)=리더는 국소 수적으로 열세(CombatRadius 안 적 국소 수 > LeaderAloneRadius 안 아군 국소 수)일 때만 제거(map-separated straggler로 전역 count가 부풀어도 코너에 몰린 리더는 제거됨). OFF(false)=국소 동수(>=)에도 리더가 접촉 변환·제거됨.")]
     public bool LeaderProtection;
+
+    /// <summary>
+    /// 팔로워 분리 이웃 조회의 논리-cell 후보 방문 예산(cap)이다. 0이면 비활성(정확한 QueryCircle 경로, 기본값).
+    /// </summary>
+    [UnityEngine.Tooltip("팔로워 분리 이웃 조회의 후보 방문 예산(cap). 0=비활성(정확 조회, 기본값). >0이면 밀집 조회를 스캔 순서 첫 예산개 매칭 후보로 절단.")]
+    public int SeparationVisitBudget;
 }

@@ -249,6 +249,7 @@ public sealed class GameConfigSO : ScriptableObject
         sim.LeaderAloneRadius = Mathf.Max(0.01f, sim.LeaderAloneRadius);
         sim.ConvertPerSecond = Mathf.Max(0f, sim.ConvertPerSecond);
         sim.PairNormalizer = Mathf.Max(1, sim.PairNormalizer);
+        sim.SeparationVisitBudget = Mathf.Max(0, sim.SeparationVisitBudget);
 
         aiDecideInterval = Mathf.Max(0.02f, aiDecideInterval);
         fleeSizeRatio = Mathf.Max(0.01f, fleeSizeRatio);

@@ -46,6 +46,8 @@ public static class CrowdSimCounters
     private static long _sdfResolves;        // ApplyHorizontalMove SDF solver 경로 실행 수.
     private static long _ccMoveFallbacks;    // ApplyHorizontalMove CharacterController.Move 폴백 경로 실행 수.
 
+    private static long _sepCapHits;         // QueryCircleCapped가 예산 도달로 절단(early return)한 분리 조회 수(밀도 cap 계측).
+
     // ---- 읽기 접근자(harness 전용) ----
     public static long QueryCalls(QuerySource s) => _queryCalls[(int)s];
     public static long CandidateVisits(QuerySource s) => _candidateVisits[(int)s];
@@ -58,6 +60,7 @@ public static class CrowdSimCounters
     public static long VictimComparisons => _victimComparisons;
     public static long SdfResolves => _sdfResolves;
     public static long CcMoveFallbacks => _ccMoveFallbacks;
+    public static long SepCapHits => _sepCapHits;
 
     /// <summary>모든 누적치를 0으로 초기화한다. harness가 각 counter 측정 블록 시작 전에 호출한다.</summary>
     public static void Reset()
@@ -77,6 +80,7 @@ public static class CrowdSimCounters
         _victimComparisons = 0L;
         _sdfResolves = 0L;
         _ccMoveFallbacks = 0L;
+        _sepCapHits = 0L;
     }
 
     /// <summary>다음 QueryCircle 결과를 귀속할 소스 태그를 지정한다(각 QueryCircle 호출 직전).</summary>
@@ -170,6 +174,16 @@ public static class CrowdSimCounters
         if (Enabled)
         {
             _ccMoveFallbacks++;
+        }
+    }
+
+    /// <summary>QueryCircleCapped가 예산 도달로 절단(early return)한 분리 조회 1건을 누적한다(밀도 cap 발화율 계측).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void CountSepCapHit()
+    {
+        if (Enabled)
+        {
+            _sepCapHits++;
         }
     }
 }
