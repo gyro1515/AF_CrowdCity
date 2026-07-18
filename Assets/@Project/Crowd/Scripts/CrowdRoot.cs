@@ -134,6 +134,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
     private int _teamCount;
     private int _agentCapacity;
+    private int _lastScheduledFollowerCount; // 직전 SimTick에서 조향/이동 job에 스케줄된 팔로워 수(harness의 0-팔로워 degenerate run 방지 단언용).
     private int _unitLayer = -1;         // 모든 Human root의 물리 레이어. -1이면 레이어 미해결(무시 설정/레이어 지정을 건너뜀).
     private int _wallProbeMask;          // 벽 탐지 raycast용 레이어 마스크(기본 raycast 레이어에서 Unit 제외). Initialize에서 1회 계산.
     private Vector2 _playerHeadingDir;
@@ -192,6 +193,12 @@ public sealed class CrowdRoot : MonoBehaviour
     /// harness/테스트 전용 관찰 API이며 시뮬 상태를 변경하지 않는다.
     /// </summary>
     public int OracleAgentCount => _buffer != null ? _buffer.Count : 0;
+
+    /// <summary>
+    /// 직전 SimTick에서 조향/이동 job에 스케줄된 팔로워 수다(0=미틱/전멸). harness가 Burst job이 실제로
+    /// 팔로워를 처리했는지(0-팔로워 degenerate run 방지) 단언하는 읽기 전용 관찰 API다. 시뮬 상태를 바꾸지 않는다.
+    /// </summary>
+    public int LastScheduledFollowerCount => _lastScheduledFollowerCount;
 
     /// <summary>
     /// agent index i의 현재 SoA 스냅샷을 out으로 복사한다(위치는 이번 tick 미러링된 world XZ, team/IsLeader는 commit 후 값).
@@ -1085,11 +1092,11 @@ public sealed class CrowdRoot : MonoBehaviour
         float maxAccel = _config.FollowerMaxAccel;
         float trailingOffset = _config.FollowerTrailingOffset;
 
-        // ── M2-a3: 팔로워 FORCE(리더 뒤 중심으로의 arrive + 같은 팀 분리 + 가속 제한 적분)를 Mono IJobParallelFor로 병렬화한다.
+        // ── M2-a3: 팔로워 FORCE(리더 뒤 중심으로의 arrive + 같은 팀 분리 + 가속 제한 적분)를 Burst IJobParallelFor로 병렬화한다.
         //    (1) 직렬 프리패스: team별 arrive 중심/유효 반경을 이번 tick 리더 위치로 계산하고, 팔로워 작업 리스트를 team·f 오름차순으로 평탄화하며,
         //        grid를 native로 스냅샷한다. (2) 병렬 job: 팔로워별 명령 속도를 산출한다. (3) 직렬 이동: 명령 속도로 CC/SDF 이동 후 read-back·속도 재조정.
-        //    byte-identical 근거: 이동 전이라 팔로워 자기 위치는 transform==buffer.Pos(월드 아이덴티티), 이웃/거리 합은 불변 snapshot을 grid 방출 순서 그대로 누적,
-        //    각 Execute는 자기 슬롯에만 쓰므로 parallel-for 인덱스 순서와 무관. math/Mathf 치환·Burst 없음.
+        //    직렬 등가 근거: 이동 전이라 팔로워 자기 위치는 transform==buffer.Pos(월드 아이덴티티), 이웃/거리 합은 불변 snapshot을 grid 방출 순서 그대로 누적,
+        //    각 Execute는 자기 슬롯에만 쓰므로 parallel-for 인덱스 순서와 무관. math/Mathf 치환 없음. job은 Burst(FloatMode.Strict)라 관리형 직렬 경로와 near-Mono지만 bit-identical하지는 않다.
         //
         // 이동(MOVE): SDF 경로 활성(_useSdfSolver ON + WallField 로드)이면 순수 SDF 수학이라 FollowerSdfMoveJob으로 병렬화한다(read-only 조회, 자기 슬롯만 쓰기).
         //    CC fallback은 CharacterController.Move가 main-thread 물리라 병렬화하지 않고 기존 직렬 이동을 그대로 유지한다.
@@ -1195,11 +1202,12 @@ public sealed class CrowdRoot : MonoBehaviour
             CommandedVelocity = _simState.CommandedVelocity,
         };
         JobHandle forceHandle = forceJob.Schedule(followerCount, SteeringForceBatch);
+        _lastScheduledFollowerCount = followerCount; // 이번 tick 스케줄된 팔로워 수(force/move job 공통). harness의 0-팔로워 degenerate 단언용.
 
         if (sdfActive)
         {
             // ── SDF 이동 병렬화: 팔로워별 SDF 해소 → walkable clamp → 실제 변위 기반 속도 재조정 → blocked-damping을 FollowerSdfMoveJob으로 산출한다.
-            //    각 팔로워는 자기 슬롯에만 쓰고 WallField를 read-only 조회하므로 직렬 등가(byte-identical). 이동의 제시(transform/애니메이션)는 아래 직렬 패스가 수행한다.
+            //    각 팔로워는 자기 슬롯에만 쓰고 WallField를 read-only 조회하므로 직렬 등가다(job은 Burst Strict라 near-Mono지만 bit-identical하지는 않다). 이동의 제시(transform/애니메이션)는 아래 직렬 패스가 수행한다.
             WallFieldView wallView = _wallField.AsView();
             var moveJob = new FollowerSdfMoveJob
             {
@@ -1295,7 +1303,7 @@ public sealed class CrowdRoot : MonoBehaviour
                     _visualPrev[index] = current; // prev = 이동 전 논리 위치.
                     Vector2 pos = new Vector2(current.x, current.z);
 
-                    Vector2 velocity = _simState.CommandedVelocity[followerSlot]; // job이 산출한 이동 이전 명령 속도(직렬 적분 결과와 byte-identical).
+                    Vector2 velocity = _simState.CommandedVelocity[followerSlot]; // job이 산출한 이동 이전 명령 속도(직렬 적분 결과와 near-Mono; Burst Strict라 bit-identical 아님).
                     followerSlot++;
 
                     // CC.Move로 이동해 건물 collider와 충돌시킨다(수평 delta만; Y는 아래에서 다시 고정).

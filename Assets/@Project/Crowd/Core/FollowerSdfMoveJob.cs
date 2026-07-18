@@ -1,12 +1,13 @@
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
 
 /// <summary>
-/// M2-a3: SDF 이동 경로(<c>_useSdfSolver</c> ON + WallField 로드됨)에서 팔로워별 이동 해소를 계산하는 Mono(비-Burst) <see cref="IJobParallelFor"/>다.
+/// M2-a3: SDF 이동 경로(<c>_useSdfSolver</c> ON + WallField 로드됨)에서 팔로워별 이동 해소를 계산하는 Burst <see cref="IJobParallelFor"/>다(<c>[BurstCompile]</c>, FloatMode.Strict).
 /// <c>SteerFollowersAndNeutrals</c> 직렬 이동 루프의 SDF 분기(<see cref="WallSolver.Resolve"/> → walkable clamp → 실제 변위 기반 속도 재조정 → blocked-damping)와
-/// <b>byte-identical</b>하게 산출한다: 동일한 <see cref="Vector2"/>/<see cref="Mathf"/> 연산을 동일 순서로, 동일한 clearance·clamp·rescale·damping 공식으로 수행한다.
-/// <c>[BurstCompile]</c> 없음, <c>math</c>/<c>Mathf</c> 치환 없음, RNG 없음.
+/// <b>동일한 산술</b>을 수행한다: 동일한 <see cref="Vector2"/>/<see cref="Mathf"/> 연산을 동일 순서로, 동일한 clearance·clamp·rescale·damping 공식으로 산출한다.
+/// <see cref="WallSolver.Resolve"/>(blittable 뷰 오버로드)는 이 job을 통해 Burst로 함께 컴파일된다. Burst(Strict)라 관리형 직렬 경로와 near-Mono지만 bit-identical하지는 않다. <c>math</c>/<c>Mathf</c> 치환 없음, RNG 없음.
 ///
 /// 각 <c>Execute(k)</c>는 read-only 입력(현재 위치 <see cref="PositionCurrent"/>, 명령 속도 <see cref="CommandedVelocity"/>, read-only <see cref="WallFieldView"/>, scale)만 읽고
 /// 자기 슬롯 <see cref="PositionNext"/>[k]/<see cref="VelocityOut"/>[k]에만 쓴다(교차 agent 쓰기 없음 → parallel-for 인덱스 순서와 무관하게 결정적).
@@ -16,6 +17,7 @@ using UnityEngine;
 /// walkable clamp가 finalPos를 항상 <c>(Clamp(solved.x), groundY, Clamp(solved.z))</c>로 만든다는 점을 이용해(원본의 조건부 transform 쓰기 두 분기가 같은 위치 값을 낳음)
 /// transform round-trip 없이 직접 clamp한다(월드 아이덴티티 전제 = M2-a2와 동일 근거). y는 항상 groundY라 XZ만 산출한다.
 /// </summary>
+[BurstCompile(FloatMode = FloatMode.Strict, FloatPrecision = FloatPrecision.Standard)]
 public struct FollowerSdfMoveJob : IJobParallelFor
 {
     // 슬롯 k → agent index(직렬 프리패스가 team·f 오름차순으로 평탄화). scale/출력 매핑에 쓴다.
@@ -24,7 +26,7 @@ public struct FollowerSdfMoveJob : IJobParallelFor
     // 슬롯 k → 이동 전 현재 world XZ(직렬 프리패스가 followerTransform.position에서 캡처 = 원본 직렬 루프의 current와 동일 원천).
     [ReadOnly] public NativeArray<Vector2> PositionCurrent;
 
-    // 슬롯 k → SteeringForceJob이 산출한 이동 이전 명령 속도(직렬 적분 결과와 byte-identical).
+    // 슬롯 k → SteeringForceJob(Burst)이 산출한 이동 이전 명령 속도(관리형 직렬 적분과 near-Mono지만 Burst Strict라 bit-identical하지는 않다).
     [ReadOnly] public NativeArray<Vector2> CommandedVelocity;
 
     // agent index → per-agent scale(clearance = WallClearance * Scale[index], 원본과 동일).

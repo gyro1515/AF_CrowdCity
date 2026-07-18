@@ -43,7 +43,7 @@ public static class WallSolver
     /// <returns>해소 후 world XZ 위치. 실제 변위는 (반환값 - p0)이며, 명령 변위가 아니다.</returns>
     public static Vector2 Resolve(WallField field, Vector2 p0, Vector2 delta, float clearance)
     {
-        // 관리형 경로는 blittable 뷰 오버로드로 위임한다(산술 단일 원천 → 병렬 job과 byte-identical).
+        // 관리형 경로는 blittable 뷰 오버로드로 위임한다(산술 단일 원천). 병렬 job은 이제 Burst(FloatMode.Strict)라 이 관리형 경로와 near-Mono지만 bit-identical하지는 않다.
         return Resolve(field.AsView(), p0, delta, clearance);
     }
 

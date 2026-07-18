@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using Unity.Burst;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -35,6 +36,9 @@ public static class CrowdOracleHarness
     {
         int exitCode = 0;
         bool counters = false; // -oracleCounters: work counter를 켠 채 오라클을 돌려 계측의 결정성 불변(byte-neutral)을 증명. 기본 OFF.
+        // Burst 옵션은 전역 에디터 상태다. 원본을 캡처해 finally에서 원복한다(하네스 밖 상태 오염 방지).
+        bool origBurstEnabled = BurstCompiler.Options.EnableBurstCompilation;
+        bool origBurstSync = BurstCompiler.Options.EnableBurstCompileSynchronously;
         try
         {
             string outDir = null;
@@ -70,6 +74,16 @@ public static class CrowdOracleHarness
             CrowdSimCounters.Reset();
             Debug.Log($"[CrowdOracleHarness] work counters {(counters ? "ON(byte-neutrality 증명)" : "OFF")}");
 
+            // Burst 강제 동기 컴파일(첫 job 호출 stall 제거) + 활성 단언. 첫 Schedule(Run의 프레임 루프) 이전에 설정한다.
+            BurstCompiler.Options.EnableBurstCompileSynchronously = true;
+            if (!BurstCompiler.Options.EnableBurstCompilation)
+            {
+                throw new InvalidOperationException(
+                    "[CrowdOracleHarness] Burst 컴파일이 비활성입니다(EnableBurstCompilation=false). Burst job 결정성 오라클을 인정할 수 없습니다.");
+            }
+
+            Debug.Log($"BURST-ACTIVE: EnableBurstCompilation={BurstCompiler.Options.EnableBurstCompilation} Synchronous={BurstCompiler.Options.EnableBurstCompileSynchronously}");
+
             Run(outDir, ticks, scales, seeds, verify, sepBudget, flatRate, densityField);
         }
         catch (Exception e)
@@ -80,6 +94,8 @@ public static class CrowdOracleHarness
         finally
         {
             CrowdSimCounters.Enabled = false; // 계측 플래그 원복(하네스 밖 상태 오염 방지).
+            BurstCompiler.Options.EnableBurstCompilation = origBurstEnabled; // 전역 Burst 옵션 원복.
+            BurstCompiler.Options.EnableBurstCompileSynchronously = origBurstSync;
         }
 
         EditorApplication.Exit(exitCode);
@@ -223,6 +239,8 @@ public static class CrowdOracleHarness
             long ccBefore = CrowdSimCounters.CcMoveFallbacks;
             long sdfBefore = CrowdSimCounters.SdfResolves;
 
+            int maxScheduledFollowers = 0; // 전체 run에서 job에 스케줄된 팔로워 수의 최대치(0-팔로워 degenerate 감지).
+
             using (var bw = new BinaryWriter(File.Open(binPath, FileMode.Create, FileAccess.Write)))
             {
                 // ---- 헤더 ----
@@ -253,6 +271,7 @@ public static class CrowdOracleHarness
                     tickEvents.Clear();
 
                     crowd.SimTick(Dt);
+                    if (crowd.LastScheduledFollowerCount > maxScheduledFollowers) maxScheduledFollowers = crowd.LastScheduledFollowerCount;
 
                     int moved = 0;
                     double sumDisp = 0;
@@ -309,6 +328,14 @@ public static class CrowdOracleHarness
                         events.WriteLine($"{scale},{seed},{frame},{e},{(ev[0] == 0 ? "CountChanged" : "Eliminated")},{ev[1]},{ev[2]}");
                     }
                 }
+            }
+
+            // Burst job이 실제로 팔로워를 처리했는지 단언한다. 전체 run에서 팔로워가 0이면 job 무작업이라 오라클/결정성 검증이 무의미(degenerate).
+            if (maxScheduledFollowers <= 0)
+            {
+                Debug.LogError("BURST-GUARD-FAIL: 0 followers");
+                throw new InvalidOperationException(
+                    $"[CrowdOracleHarness] n={scale} seed={seed}: 전체 run에서 스케줄된 팔로워가 0입니다(Burst job 무작업). degenerate run은 인정할 수 없습니다.");
             }
 
             // counter-enabled 경로에서만 검증한다(OFF면 게이트되어 델타가 0이라 무의미). IsSdfActive 단언과 일치하는 이중 방어.

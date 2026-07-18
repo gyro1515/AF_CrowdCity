@@ -107,7 +107,7 @@ public sealed class WallField : IDisposable
     /// <summary>
     /// 거리장 payload와 파라미터를 job/Burst에서 접근 가능한 blittable <see cref="WallFieldView"/>로 노출한다.
     /// 소유한 <see cref="NativeArray{T}"/> 핸들을 그대로 담는 뷰이며(복사 없음), <see cref="Load"/>는 init-only라 세션 동안 안정적이다.
-    /// 관리형 조회(<see cref="Phi"/>/<see cref="Gradient"/>/<see cref="WallSolver"/>)와 병렬 job이 동일한 산술을 공유해 byte-identical하다.
+    /// 관리형 조회(<see cref="Phi"/>/<see cref="Gradient"/>/<see cref="WallSolver"/>)와 병렬 job이 동일한 산술을 공유한다. 단, job은 이제 Burst(FloatMode.Strict)로 컴파일되므로 관리형 경로와 near-Mono지만 bit-identical하지는 않다.
     /// </summary>
     public WallFieldView AsView()
     {
@@ -167,7 +167,7 @@ public readonly struct WallFieldView
         BilinearBias = bilinearBias;
     }
 
-    /// <summary>world XZ (x,z)의 signed distance를 bilinear 보간해 반환한다(<see cref="WallField.Phi"/>와 byte-identical).</summary>
+    /// <summary>world XZ (x,z)의 signed distance를 bilinear 보간해 반환한다(<see cref="WallField.Phi"/>와 동일 공식; job 경로에서 Burst(Strict)로 실행되어 near-Mono지만 bit-identical하지는 않다).</summary>
     public float Phi(float x, float z)
     {
         // 셀 중심 인덱스 공간으로 변환(셀 중심이 (col+0.5)*cell + origin이라 -0.5).
@@ -194,7 +194,7 @@ public readonly struct WallFieldView
         return math.lerp(dx0, dx1, tz);
     }
 
-    /// <summary>world XZ (x,z)의 정규화 gradient를 central difference로 반환한다(<see cref="WallField.Gradient"/>와 byte-identical).</summary>
+    /// <summary>world XZ (x,z)의 정규화 gradient를 central difference로 반환한다(<see cref="WallField.Gradient"/>와 동일 공식; job 경로에서 Burst(Strict)로 실행되어 near-Mono지만 bit-identical하지는 않다).</summary>
     public float2 Gradient(float x, float z)
     {
         float h = CellSize;

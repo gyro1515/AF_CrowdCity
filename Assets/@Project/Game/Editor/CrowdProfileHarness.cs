@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using Unity.Burst;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -155,6 +156,10 @@ public static class CrowdProfileHarness
         // AddComponent<CrowdRoot>()는 직렬화 필드가 비어 Initialize가 하드 페일하고 SDF도 우회하므로 baseline 불인정.
         CrowdRoot crowdPrefab = ResourceLoader.LoadPrefab<CrowdRoot>();
 
+        // Burst 옵션은 전역 에디터 상태다. 원본을 캡처해 각 스케일 finally에서 원복한다(하네스 밖 상태 오염 방지).
+        bool origBurstEnabled = BurstCompiler.Options.EnableBurstCompilation;
+        bool origBurstSync = BurstCompiler.Options.EnableBurstCompileSynchronously;
+
         foreach (int scale in scales)
         {
             // Unity 임시 오브젝트는 try 안에서 생성하고 finally에서 non-null일 때만 파괴한다(인스턴스화/리플렉션/초기화 실패 시 누수 방지).
@@ -171,6 +176,16 @@ public static class CrowdProfileHarness
 
             try
             {
+                // Burst 강제 동기 컴파일(첫 job 호출 stall이 timing을 오염시키지 않도록) + 활성 단언. 첫 Schedule(아래 SDF 검증 루프) 이전에 설정한다.
+                BurstCompiler.Options.EnableBurstCompileSynchronously = true;
+                if (!BurstCompiler.Options.EnableBurstCompilation)
+                {
+                    throw new InvalidOperationException(
+                        "[CrowdProfileHarness] Burst 컴파일이 비활성입니다(EnableBurstCompilation=false). Burst job 측정을 인정할 수 없습니다.");
+                }
+
+                Debug.Log($"BURST-ACTIVE: EnableBurstCompilation={BurstCompiler.Options.EnableBurstCompilation} Synchronous={BurstCompiler.Options.EnableBurstCompileSynchronously}");
+
                 cfg = UnityEngine.Object.Instantiate(baseConfig);
                 cfg.name = baseConfig.name + "_n" + scale;
                 neutralCountField.SetValue(cfg, scale);
@@ -230,14 +245,24 @@ public static class CrowdProfileHarness
                 CrowdSimProfiler.Enabled = true;
                 var perTick = new double[TimingTicks];
                 double toMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                int maxScheduledFollowers = 0; // timing pass 동안 job에 스케줄된 팔로워 수의 최대치(0-팔로워 degenerate 감지).
                 for (int i = 0; i < TimingTicks; i++)
                 {
                     long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                     crowd.SimTick(Dt);
                     long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
                     perTick[i] = (t1 - t0) * toMs;
+                    if (crowd.LastScheduledFollowerCount > maxScheduledFollowers) maxScheduledFollowers = crowd.LastScheduledFollowerCount; // 계측 span(t0..t1) 밖에서 샘플.
                 }
                 CrowdSimProfiler.Enabled = false;
+
+                // Burst job이 실제로 팔로워를 처리했는지 단언한다. 전체 timing pass에서 팔로워가 0이면 job 무작업이라 timing이 무의미(degenerate).
+                if (maxScheduledFollowers <= 0)
+                {
+                    Debug.LogError("BURST-GUARD-FAIL: 0 followers");
+                    throw new InvalidOperationException(
+                        $"[CrowdProfileHarness] n={scale}: timing pass 전체에서 스케줄된 팔로워가 0입니다(Burst job 무작업). degenerate run은 baseline 불인정.");
+                }
 
                 long[] accum = CrowdSimProfiler.Accum;
                 segMeanMs = new double[accum.Length];
@@ -295,6 +320,8 @@ public static class CrowdProfileHarness
             {
                 CrowdSimProfiler.Enabled = false;
                 CrowdSimCounters.Enabled = false;
+                BurstCompiler.Options.EnableBurstCompilation = origBurstEnabled;          // 전역 Burst 옵션 원복(정리보다 먼저 실행해 정리 예외 시에도 원복 보장).
+                BurstCompiler.Options.EnableBurstCompileSynchronously = origBurstSync;
                 if (crowd != null) UnityEngine.Object.DestroyImmediate(crowd.gameObject); // CrowdRoot + 자식 Human clone 전부 즉시 파괴(edit 모드).
                 if (cfg != null) UnityEngine.Object.DestroyImmediate(cfg);                // config 복제본 정리.
             }

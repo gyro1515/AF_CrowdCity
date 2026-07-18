@@ -1,17 +1,19 @@
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
 
 /// <summary>
-/// M2-a3: 팔로워별 조향 FORCE(리더 뒤 중심으로의 arrive + 같은 팀 분리 + 가속 제한 적분)를 계산하는 Mono(비-Burst) <see cref="IJobParallelFor"/>다.
+/// M2-a3: 팔로워별 조향 FORCE(리더 뒤 중심으로의 arrive + 같은 팀 분리 + 가속 제한 적분)를 계산하는 Burst <see cref="IJobParallelFor"/>다(<c>[BurstCompile]</c>, FloatMode.Strict).
 /// <c>SteerFollowersAndNeutrals</c> 직렬 루프의 FORCE 부분(중심 arrive, 분리 이웃 스캔+합, sepForce/desired 클램프, 가속 제한 적분)과
-/// <b>byte-identical</b>하게 산출한다: 동일한 <see cref="Vector2"/>/<see cref="Mathf"/> 연산을 동일 순서로, grid 방출 순서(Y-major/X-major/LIFO 체인)와
-/// 동일한 float 누적 순서로 수행한다. <c>[BurstCompile]</c> 없음, <c>math</c>/<c>Mathf</c> 치환 없음, RNG 없음.
+/// <b>동일한 산술</b>을 수행한다: 동일한 <see cref="Vector2"/>/<see cref="Mathf"/> 연산을 동일 순서로, grid 방출 순서(Y-major/X-major/LIFO 체인)와
+/// 동일한 float 누적 순서로 산출한다. Burst(Strict)라 관리형 직렬 경로와 near-Mono지만 bit-identical하지는 않다. <c>math</c>/<c>Mathf</c> 치환 없음, RNG 없음.
 ///
 /// 각 <c>Execute(k)</c>는 공유 상태를 read-only로만 읽고(직전 tick 미러 위치 <see cref="Pos"/>, 확정된 직전 grid snapshot, team/scale/속도),
 /// 자기 팔로워 슬롯 <see cref="CommandedVelocity"/>[k]에만 쓴다(교차 agent 쓰기 없음 → parallel-for 인덱스 순서와 무관하게 결정적).
 /// 이동/read-back/속도 재조정/SDF·CC는 job 밖 직렬 단계에서 그대로 수행한다(이 job은 이동 이전의 명령 속도까지만 만든다).
 /// </summary>
+[BurstCompile(FloatMode = FloatMode.Strict, FloatPrecision = FloatPrecision.Standard)]
 public struct SteeringForceJob : IJobParallelFor
 {
     // 이번 tick 팔로워 agent index를 team 오름차순·팀 내 f 오름차순으로 평탄화한 리스트. Execute(k) → index = FollowerList[k].
