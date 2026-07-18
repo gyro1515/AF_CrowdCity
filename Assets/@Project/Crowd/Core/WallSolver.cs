@@ -43,6 +43,16 @@ public static class WallSolver
     /// <returns>해소 후 world XZ 위치. 실제 변위는 (반환값 - p0)이며, 명령 변위가 아니다.</returns>
     public static Vector2 Resolve(WallField field, Vector2 p0, Vector2 delta, float clearance)
     {
+        // 관리형 경로는 blittable 뷰 오버로드로 위임한다(산술 단일 원천 → 병렬 job과 byte-identical).
+        return Resolve(field.AsView(), p0, delta, clearance);
+    }
+
+    /// <summary>
+    /// <see cref="Resolve(WallField,Vector2,Vector2,float)"/>와 <b>동일한</b> 이동 해소를 blittable <see cref="WallFieldView"/>로 수행한다.
+    /// job/Burst에서 <see cref="WallField"/> 관리형 참조 없이 호출하기 위한 오버로드다. 산술·연산 순서·반복 횟수·fallback이 모두 동일하다.
+    /// </summary>
+    public static Vector2 Resolve(in WallFieldView field, Vector2 p0, Vector2 delta, float clearance)
+    {
         float2 d0 = new float2(delta.x, delta.y);
         float deltaLen = math.length(d0);
 
@@ -99,7 +109,7 @@ public static class WallSolver
     }
 
     // 표면 밖 effClearance까지 gradient 방향으로 밀어내는 고정 반복 depenetration. gradient=0이면 결정적으로 중단한다.
-    private static void Depenetrate(WallField field, ref float2 p, float effClearance, int iters)
+    private static void Depenetrate(in WallFieldView field, ref float2 p, float effClearance, int iters)
     {
         for (int k = 0; k < iters; k++)
         {

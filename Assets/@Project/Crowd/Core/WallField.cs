@@ -96,49 +96,23 @@ public sealed class WallField : IDisposable
     /// world XZ (x,z)에서의 signed distance(내부 음수/외부 양수, m)를 bilinear 보간해 반환한다.
     /// 그리드 밖은 가장자리 셀 값(벽에서 먼 +MaxDistance 부근)으로 clamp된다.
     /// </summary>
-    public float Phi(float x, float z)
-    {
-        // 셀 중심 인덱스 공간으로 변환(셀 중심이 (col+0.5)*cell + origin이라 -0.5).
-        float fx = (x - _originX) * _invCellSize - 0.5f;
-        float fz = (z - _originZ) * _invCellSize - 0.5f;
-
-        int c0 = (int)math.floor(fx);
-        int r0 = (int)math.floor(fz);
-        float tx = fx - c0;
-        float tz = fz - r0;
-
-        int c0c = math.clamp(c0, 0, _cols - 1);
-        int c1c = math.clamp(c0 + 1, 0, _cols - 1);
-        int r0c = math.clamp(r0, 0, _rows - 1);
-        int r1c = math.clamp(r0 + 1, 0, _rows - 1);
-
-        float d00 = _dist[r0c * _cols + c0c];
-        float d10 = _dist[r0c * _cols + c1c];
-        float d01 = _dist[r1c * _cols + c0c];
-        float d11 = _dist[r1c * _cols + c1c];
-
-        float dx0 = math.lerp(d00, d10, tx);
-        float dx1 = math.lerp(d01, d11, tx);
-        return math.lerp(dx0, dx1, tz);
-    }
+    public float Phi(float x, float z) => AsView().Phi(x, z);
 
     /// <summary>
     /// world XZ (x,z)에서의 거리장 gradient(거리가 증가하는 방향 = 벽에서 멀어지는 방향)를 정규화해 반환한다.
     /// central difference로 계산하며, medial-axis/평탄 개활지에서 크기가 사실상 0이면 float2.zero를 반환한다.
     /// </summary>
-    public float2 Gradient(float x, float z)
-    {
-        float h = _cellSize;
-        float gx = Phi(x + h, z) - Phi(x - h, z);
-        float gz = Phi(x, z + h) - Phi(x, z - h);
-        float2 g = new float2(gx, gz);
-        float lenSq = math.lengthsq(g);
-        if (lenSq < 1e-12f)
-        {
-            return float2.zero;
-        }
+    public float2 Gradient(float x, float z) => AsView().Gradient(x, z);
 
-        return g * math.rsqrt(lenSq);
+    /// <summary>
+    /// 거리장 payload와 파라미터를 job/Burst에서 접근 가능한 blittable <see cref="WallFieldView"/>로 노출한다.
+    /// 소유한 <see cref="NativeArray{T}"/> 핸들을 그대로 담는 뷰이며(복사 없음), <see cref="Load"/>는 init-only라 세션 동안 안정적이다.
+    /// 관리형 조회(<see cref="Phi"/>/<see cref="Gradient"/>/<see cref="WallSolver"/>)와 병렬 job이 동일한 산술을 공유해 byte-identical하다.
+    /// </summary>
+    public WallFieldView AsView()
+    {
+        return new WallFieldView(
+            _dist, _originX, _originZ, _cellSize, _invCellSize, _cols, _rows, _maxDistance, _bilinearBias);
     }
 
     /// <summary>소유한 Persistent NativeArray를 해제한다. 소유자 lifecycle에서 반드시 호출한다.</summary>
@@ -150,5 +124,89 @@ public sealed class WallField : IDisposable
         }
 
         _loaded = false;
+    }
+}
+
+/// <summary>
+/// <see cref="WallField"/>의 거리장 payload와 파라미터에 대한 blittable read-only 뷰다(job/Burst 접근용, M2-a3).
+/// 관리형 인스턴스 참조 없이 <see cref="NativeArray{T}"/> 핸들 + 값 파라미터만 담으므로 <see cref="IJobParallelFor"/> 필드로 안전하게 전달된다.
+/// <see cref="Phi"/>/<see cref="Gradient"/>는 <see cref="WallField"/>의 산술을 <b>그대로</b> 재현한다(단일 원천: 관리형 조회가 이 뷰로 위임).
+/// 뷰는 배열을 소유·해제하지 않는다(소유자는 <see cref="WallField"/>). <see cref="WallField.Load"/>가 init-only라 세션 동안 안정적이다.
+/// </summary>
+public readonly struct WallFieldView
+{
+    public readonly NativeArray<float> Dist;
+    public readonly float OriginX;
+    public readonly float OriginZ;
+    public readonly float CellSize;
+    public readonly float InvCellSize;
+    public readonly int Cols;
+    public readonly int Rows;
+    public readonly float MaxDistance;
+    public readonly float BilinearBias;
+
+    public WallFieldView(
+        NativeArray<float> dist,
+        float originX,
+        float originZ,
+        float cellSize,
+        float invCellSize,
+        int cols,
+        int rows,
+        float maxDistance,
+        float bilinearBias)
+    {
+        Dist = dist;
+        OriginX = originX;
+        OriginZ = originZ;
+        CellSize = cellSize;
+        InvCellSize = invCellSize;
+        Cols = cols;
+        Rows = rows;
+        MaxDistance = maxDistance;
+        BilinearBias = bilinearBias;
+    }
+
+    /// <summary>world XZ (x,z)의 signed distance를 bilinear 보간해 반환한다(<see cref="WallField.Phi"/>와 byte-identical).</summary>
+    public float Phi(float x, float z)
+    {
+        // 셀 중심 인덱스 공간으로 변환(셀 중심이 (col+0.5)*cell + origin이라 -0.5).
+        float fx = (x - OriginX) * InvCellSize - 0.5f;
+        float fz = (z - OriginZ) * InvCellSize - 0.5f;
+
+        int c0 = (int)math.floor(fx);
+        int r0 = (int)math.floor(fz);
+        float tx = fx - c0;
+        float tz = fz - r0;
+
+        int c0c = math.clamp(c0, 0, Cols - 1);
+        int c1c = math.clamp(c0 + 1, 0, Cols - 1);
+        int r0c = math.clamp(r0, 0, Rows - 1);
+        int r1c = math.clamp(r0 + 1, 0, Rows - 1);
+
+        float d00 = Dist[r0c * Cols + c0c];
+        float d10 = Dist[r0c * Cols + c1c];
+        float d01 = Dist[r1c * Cols + c0c];
+        float d11 = Dist[r1c * Cols + c1c];
+
+        float dx0 = math.lerp(d00, d10, tx);
+        float dx1 = math.lerp(d01, d11, tx);
+        return math.lerp(dx0, dx1, tz);
+    }
+
+    /// <summary>world XZ (x,z)의 정규화 gradient를 central difference로 반환한다(<see cref="WallField.Gradient"/>와 byte-identical).</summary>
+    public float2 Gradient(float x, float z)
+    {
+        float h = CellSize;
+        float gx = Phi(x + h, z) - Phi(x - h, z);
+        float gz = Phi(x, z + h) - Phi(x, z - h);
+        float2 g = new float2(gx, gz);
+        float lenSq = math.lengthsq(g);
+        if (lenSq < 1e-12f)
+        {
+            return float2.zero;
+        }
+
+        return g * math.rsqrt(lenSq);
     }
 }

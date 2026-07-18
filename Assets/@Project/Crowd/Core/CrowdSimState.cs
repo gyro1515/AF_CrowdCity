@@ -60,6 +60,23 @@ public sealed class CrowdSimState : IDisposable
     /// </summary>
     public NativeArray<float> ArriveRadiusPerTeam;
 
+    // ---- M2-a3 SDF 이동 병렬화(FollowerSdfMoveJob) 전용 per-tick scratch. 팔로워 슬롯 k로 인덱싱하며, 직렬 제시 패스가 같은 순서로 읽는다. ----
+
+    /// <summary>
+    /// 이동 전 팔로워 현재 world XZ다(슬롯 k). 직렬 프리패스가 followerTransform.position에서 캡처해 이동 job에 전달한다(원본 직렬 루프의 current와 동일 원천).
+    /// </summary>
+    public NativeArray<Vector2> MovePositionCurrent;
+
+    /// <summary>
+    /// SDF 해소+walkable clamp 후 팔로워 world XZ다(슬롯 k). 직렬 제시 패스가 transform.position에 반영한다.
+    /// </summary>
+    public NativeArray<Vector2> MovePositionNext;
+
+    /// <summary>
+    /// 실제 변위 기반 재조정+blocked-damping 후 팔로워 속도다(슬롯 k). 직렬 제시 패스가 _followerVelocity/애니메이션에 반영한다.
+    /// </summary>
+    public NativeArray<Vector2> MoveVelocityOut;
+
     // grid의 관리형 내부 배열을 tick마다 복사해 두는 native snapshot. job이 QueryCircle/QueryCircleCapped 열거를 in-place로 재현한다.
     public NativeArray<int> GridBucketHead;
     public NativeArray<int> GridNext;
@@ -83,6 +100,9 @@ public sealed class CrowdSimState : IDisposable
 
             // M2-a3 병렬 조향 scratch. GridBucketHead는 grid와 동일한 table 크기 공식을 단일 원천에서 가져온다.
             CommandedVelocity = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
+            MovePositionCurrent = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
+            MovePositionNext = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
+            MoveVelocityOut = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
             FollowerList = new NativeArray<int>(agentCapacity, Allocator.Persistent);
             CenterPerTeam = new NativeArray<Vector2>(teamCount, Allocator.Persistent);
             ArriveRadiusPerTeam = new NativeArray<float>(teamCount, Allocator.Persistent);
@@ -134,6 +154,21 @@ public sealed class CrowdSimState : IDisposable
         if (CommandedVelocity.IsCreated)
         {
             CommandedVelocity.Dispose();
+        }
+
+        if (MovePositionCurrent.IsCreated)
+        {
+            MovePositionCurrent.Dispose();
+        }
+
+        if (MovePositionNext.IsCreated)
+        {
+            MovePositionNext.Dispose();
+        }
+
+        if (MoveVelocityOut.IsCreated)
+        {
+            MoveVelocityOut.Dispose();
         }
 
         if (FollowerList.IsCreated)

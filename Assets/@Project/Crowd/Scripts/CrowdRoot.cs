@@ -1073,6 +1073,10 @@ public sealed class CrowdRoot : MonoBehaviour
         //        grid를 native로 스냅샷한다. (2) 병렬 job: 팔로워별 명령 속도를 산출한다. (3) 직렬 이동: 명령 속도로 CC/SDF 이동 후 read-back·속도 재조정.
         //    byte-identical 근거: 이동 전이라 팔로워 자기 위치는 transform==buffer.Pos(월드 아이덴티티), 이웃/거리 합은 불변 snapshot을 grid 방출 순서 그대로 누적,
         //    각 Execute는 자기 슬롯에만 쓰므로 parallel-for 인덱스 순서와 무관. math/Mathf 치환·Burst 없음.
+        //
+        // 이동(MOVE): SDF 경로 활성(_useSdfSolver ON + WallField 로드)이면 순수 SDF 수학이라 FollowerSdfMoveJob으로 병렬화한다(read-only 조회, 자기 슬롯만 쓰기).
+        //    CC fallback은 CharacterController.Move가 main-thread 물리라 병렬화하지 않고 기존 직렬 이동을 그대로 유지한다.
+        bool sdfActive = IsSdfActive;
         int followerCount = 0;
         for (int t = 0; t < _teamCount; t++)
         {
@@ -1098,7 +1102,15 @@ public sealed class CrowdRoot : MonoBehaviour
 
             for (int f = 0; f < followerIndices.Count; f++)
             {
-                _simState.FollowerList[followerCount] = followerIndices[f];
+                int followerIndex = followerIndices[f];
+                _simState.FollowerList[followerCount] = followerIndex;
+                if (sdfActive)
+                {
+                    // 이동 job이 쓸 현재 위치를 원본 직렬 루프와 동일 원천(followerTransform.position)에서 캡처한다(힘 job은 transform을 건드리지 않아 이동까지 불변).
+                    Vector3 followerPos = _transformByAgent[followerIndex].position;
+                    _simState.MovePositionCurrent[followerCount] = new Vector2(followerPos.x, followerPos.z);
+                }
+
                 followerCount++;
             }
         }
@@ -1134,87 +1146,168 @@ public sealed class CrowdRoot : MonoBehaviour
             Dt = dt,
             CommandedVelocity = _simState.CommandedVelocity,
         };
-        forceJob.Schedule(followerCount, SteeringForceBatch).Complete(); // 직렬 등가(교차 agent 쓰기 없음). WallField는 관리형이라 이동은 직렬 유지.
+        JobHandle forceHandle = forceJob.Schedule(followerCount, SteeringForceBatch);
 
-        // 직렬 이동: 프리패스와 동일 순서(team·f 오름차순)로 팔로워를 돌며 job 산출 명령 속도로 이동/되읽기/속도 재조정을 그대로 수행한다.
-        int followerSlot = 0;
-        for (int t = 0; t < _teamCount; t++)
+        if (sdfActive)
         {
-            CrowdModel model = _crowds[t];
-            if (model.Eliminated)
+            // ── SDF 이동 병렬화: 팔로워별 SDF 해소 → walkable clamp → 실제 변위 기반 속도 재조정 → blocked-damping을 FollowerSdfMoveJob으로 산출한다.
+            //    각 팔로워는 자기 슬롯에만 쓰고 WallField를 read-only 조회하므로 직렬 등가(byte-identical). 이동의 제시(transform/애니메이션)는 아래 직렬 패스가 수행한다.
+            WallFieldView wallView = _wallField.AsView();
+            var moveJob = new FollowerSdfMoveJob
             {
-                continue;
+                FollowerList = _simState.FollowerList,
+                PositionCurrent = _simState.MovePositionCurrent,
+                CommandedVelocity = _simState.CommandedVelocity,
+                Scale = _buffer.Scale,
+                WallDist = wallView.Dist,
+                WallOriginX = wallView.OriginX,
+                WallOriginZ = wallView.OriginZ,
+                WallCellSize = wallView.CellSize,
+                WallInvCellSize = wallView.InvCellSize,
+                WallCols = wallView.Cols,
+                WallRows = wallView.Rows,
+                WallMaxDistance = wallView.MaxDistance,
+                WallBilinearBias = wallView.BilinearBias,
+                Dt = dt,
+                WallClearance = WallCollisionClearance,
+                RegionMinX = _regionMinX,
+                RegionMaxX = _regionMaxX,
+                RegionMinZ = _regionMinZ,
+                RegionMaxZ = _regionMaxZ,
+                BlockedDamping = _config.FollowerBlockedDamping,
+                PositionNext = _simState.MovePositionNext,
+                VelocityOut = _simState.MoveVelocityOut,
+            };
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove); // SDF ON: 이 구간은 WallSolver.Resolve(SDF 이동 해소)의 병렬 벽시계다.
+            moveJob.Schedule(followerCount, SteeringForceBatch, forceHandle).Complete();
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
+
+            // 직렬 제시 패스(프리패스와 동일 순서 team·f 오름차순): job 산출 위치/속도를 transform·시각 배열·애니메이션에 반영한다(managed, main-thread).
+            int followerSlot = 0;
+            for (int t = 0; t < _teamCount; t++)
+            {
+                CrowdModel model = _crowds[t];
+                if (model.Eliminated)
+                {
+                    continue;
+                }
+
+                List<int> followerIndices = model.FollowerAgentIndices;
+                for (int f = 0; f < followerIndices.Count; f++)
+                {
+                    int index = followerIndices[f];
+                    Transform followerTransform = _transformByAgent[index];
+                    _visualPrev[index] = followerTransform.position; // prev = 이동 전 논리 위치.
+
+                    Vector2 finalXZ = _simState.MovePositionNext[followerSlot];
+                    Vector2 velocity = _simState.MoveVelocityOut[followerSlot];
+                    followerSlot++;
+
+                    // job이 해소·clamp한 위치를 그대로 적용한다(원본의 조건부 clamp-write 두 분기가 낳는 finalPos 값과 동일: 항상 (x, groundY, z)).
+                    Vector3 finalPos = new Vector3(finalXZ.x, _groundY, finalXZ.y);
+                    followerTransform.position = finalPos;
+                    _visualCur[index] = finalPos; // cur = 이동+clamp 후 논리 위치.
+                    _followerVelocity[index] = velocity;
+
+                    float speed = velocity.magnitude;
+                    Human human = _humanByAgent[index];
+                    _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
+                    if (speed > 0.001f)
+                    {
+                        human.SetHeadingAndSpeed(
+                            Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
+                    }
+                    else
+                    {
+                        human.SetHeadingAndSpeed(followerTransform.eulerAngles.y, 1f);
+                    }
+                }
             }
+        }
+        else
+        {
+            forceHandle.Complete(); // 직렬 등가(교차 agent 쓰기 없음). CC.Move는 main-thread 물리라 이동은 직렬 유지.
 
-            List<int> followerIndices = model.FollowerAgentIndices;
-            for (int f = 0; f < followerIndices.Count; f++)
+            // 직렬 이동: 프리패스와 동일 순서(team·f 오름차순)로 팔로워를 돌며 job 산출 명령 속도로 CC.Move/되읽기/속도 재조정을 그대로 수행한다.
+            int followerSlot = 0;
+            for (int t = 0; t < _teamCount; t++)
             {
-                int index = followerIndices[f];
-                Transform followerTransform = _transformByAgent[index];
-                Vector3 current = followerTransform.position;
-                _visualPrev[index] = current; // prev = 이동 전 논리 위치.
-                Vector2 pos = new Vector2(current.x, current.z);
-
-                Vector2 velocity = _simState.CommandedVelocity[followerSlot]; // job이 산출한 이동 이전 명령 속도(직렬 적분 결과와 byte-identical).
-                followerSlot++;
-
-                // CC.Move로 이동해 건물 collider와 충돌시킨다(수평 delta만; Y는 아래에서 다시 고정).
-                Vector2 move = velocity * dt;
-                Vector2 commandedVel = velocity; // Move 직전의 명령 속도(아래 속도 재조정에서 방향 기준으로 사용).
-                CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove);
-                ApplyHorizontalMove(index, new Vector3(move.x, 0f, move.y));
-                CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
-
-                Vector3 moved = followerTransform.position;
-                float clampedX = Mathf.Clamp(moved.x, _regionMinX, _regionMaxX);
-                float clampedZ = Mathf.Clamp(moved.z, _regionMinZ, _regionMaxZ);
-                if (clampedX != moved.x || clampedZ != moved.z || moved.y != _groundY)
+                CrowdModel model = _crowds[t];
+                if (model.Eliminated)
                 {
-                    followerTransform.position = new Vector3(clampedX, _groundY, clampedZ);
+                    continue;
                 }
 
-                // 충돌/clamp로 실제 수평 이동이 명령 속도와 달라질 수 있으므로, 실제 수평 변위를 dt로 나눠
-                // 저장 속도를 재조정한다. 다음 tick 적분과 애니메이션(heading/speed)이 현실을 반영해 장애물 뒤 lurch를 막는다.
-                // 단, 벽에서 밀려나는 depenetration의 역방향 성분이 속도로 굳어 cohesion과 진동(bounce)하지 않도록,
-                // 실제 속도를 명령 방향 기준으로 분해해 접선 성분은 유지(벽 미끄러짐), 전진 성분은 [0, |명령|]로 상한한다(역방향 제거).
-                Vector3 finalPos = followerTransform.position;
-                _visualCur[index] = finalPos; // cur = 이동+clamp 후 논리 위치.
-                Vector2 actualVel = new Vector2(finalPos.x - pos.x, finalPos.z - pos.y) / dt;
-                if (commandedVel.sqrMagnitude > 1e-6f)
+                List<int> followerIndices = model.FollowerAgentIndices;
+                for (int f = 0; f < followerIndices.Count; f++)
                 {
-                    Vector2 dir = commandedVel.normalized;
-                    float along = Vector2.Dot(actualVel, dir);
-                    Vector2 tangential = actualVel - along * dir;
-                    float alongKept = Mathf.Clamp(along, 0f, commandedVel.magnitude);
-                    velocity = tangential + alongKept * dir;
-                }
-                else
-                {
-                    velocity = actualVel;
-                }
+                    int index = followerIndices[f];
+                    Transform followerTransform = _transformByAgent[index];
+                    Vector3 current = followerTransform.position;
+                    _visualPrev[index] = current; // prev = 이동 전 논리 위치.
+                    Vector2 pos = new Vector2(current.x, current.z);
 
-                // blocked-damping(옵션 d, raycast 없음): 명령 속도 대비 실제 이동 비율(progress)로 막힘 정도를 추정해
-                // 명확히 막힌 팔로워의 속도만 감쇠한다. 벽을 우회하지는 않고 램밍/떨림을 진정시키는 증상 완화다.
-                // progress>=BlockedThreshold(자유 이동/벽 미끄러짐)면 dampFactor==1이라 위 bounce-fix 속도가 그대로 유지된다.
-                float commandedMag = commandedVel.magnitude;
-                float progress = commandedMag > 1e-4f ? actualVel.magnitude / commandedMag : 1f; // 1 = 명령대로 이동(자유), ~0 = 막힘
-                const float BlockedThreshold = 0.5f; // 이 미만이면 막힘으로 간주(하드코딩). 벽을 따라 미끄러지는 슬라이더는 접선 속도가 있어 이 위를 유지한다.
-                float dampFactor = Mathf.Lerp(_config.FollowerBlockedDamping, 1f, Mathf.Clamp01(progress / BlockedThreshold)); // progress>=threshold -> 1(감쇠 없음), progress 0 -> FollowerBlockedDamping
-                velocity *= dampFactor;
+                    Vector2 velocity = _simState.CommandedVelocity[followerSlot]; // job이 산출한 이동 이전 명령 속도(직렬 적분 결과와 byte-identical).
+                    followerSlot++;
 
-                _followerVelocity[index] = velocity;
+                    // CC.Move로 이동해 건물 collider와 충돌시킨다(수평 delta만; Y는 아래에서 다시 고정).
+                    Vector2 move = velocity * dt;
+                    Vector2 commandedVel = velocity; // Move 직전의 명령 속도(아래 속도 재조정에서 방향 기준으로 사용).
+                    CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove);
+                    ApplyHorizontalMove(index, new Vector3(move.x, 0f, move.y));
+                    CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
 
-                float speed = velocity.magnitude;
-                Human human = _humanByAgent[index];
-                _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
-                if (speed > 0.001f)
-                {
-                    human.SetHeadingAndSpeed(
-                        Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
-                }
-                else
-                {
-                    human.SetHeadingAndSpeed(followerTransform.eulerAngles.y, 1f);
+                    Vector3 moved = followerTransform.position;
+                    float clampedX = Mathf.Clamp(moved.x, _regionMinX, _regionMaxX);
+                    float clampedZ = Mathf.Clamp(moved.z, _regionMinZ, _regionMaxZ);
+                    if (clampedX != moved.x || clampedZ != moved.z || moved.y != _groundY)
+                    {
+                        followerTransform.position = new Vector3(clampedX, _groundY, clampedZ);
+                    }
+
+                    // 충돌/clamp로 실제 수평 이동이 명령 속도와 달라질 수 있으므로, 실제 수평 변위를 dt로 나눠
+                    // 저장 속도를 재조정한다. 다음 tick 적분과 애니메이션(heading/speed)이 현실을 반영해 장애물 뒤 lurch를 막는다.
+                    // 단, 벽에서 밀려나는 depenetration의 역방향 성분이 속도로 굳어 cohesion과 진동(bounce)하지 않도록,
+                    // 실제 속도를 명령 방향 기준으로 분해해 접선 성분은 유지(벽 미끄러짐), 전진 성분은 [0, |명령|]로 상한한다(역방향 제거).
+                    Vector3 finalPos = followerTransform.position;
+                    _visualCur[index] = finalPos; // cur = 이동+clamp 후 논리 위치.
+                    Vector2 actualVel = new Vector2(finalPos.x - pos.x, finalPos.z - pos.y) / dt;
+                    if (commandedVel.sqrMagnitude > 1e-6f)
+                    {
+                        Vector2 dir = commandedVel.normalized;
+                        float along = Vector2.Dot(actualVel, dir);
+                        Vector2 tangential = actualVel - along * dir;
+                        float alongKept = Mathf.Clamp(along, 0f, commandedVel.magnitude);
+                        velocity = tangential + alongKept * dir;
+                    }
+                    else
+                    {
+                        velocity = actualVel;
+                    }
+
+                    // blocked-damping(옵션 d, raycast 없음): 명령 속도 대비 실제 이동 비율(progress)로 막힘 정도를 추정해
+                    // 명확히 막힌 팔로워의 속도만 감쇠한다. 벽을 우회하지는 않고 램밍/떨림을 진정시키는 증상 완화다.
+                    // progress>=BlockedThreshold(자유 이동/벽 미끄러짐)면 dampFactor==1이라 위 bounce-fix 속도가 그대로 유지된다.
+                    float commandedMag = commandedVel.magnitude;
+                    float progress = commandedMag > 1e-4f ? actualVel.magnitude / commandedMag : 1f; // 1 = 명령대로 이동(자유), ~0 = 막힘
+                    const float BlockedThreshold = 0.5f; // 이 미만이면 막힘으로 간주(하드코딩). 벽을 따라 미끄러지는 슬라이더는 접선 속도가 있어 이 위를 유지한다.
+                    float dampFactor = Mathf.Lerp(_config.FollowerBlockedDamping, 1f, Mathf.Clamp01(progress / BlockedThreshold)); // progress>=threshold -> 1(감쇠 없음), progress 0 -> FollowerBlockedDamping
+                    velocity *= dampFactor;
+
+                    _followerVelocity[index] = velocity;
+
+                    float speed = velocity.magnitude;
+                    Human human = _humanByAgent[index];
+                    _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
+                    if (speed > 0.001f)
+                    {
+                        human.SetHeadingAndSpeed(
+                            Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
+                    }
+                    else
+                    {
+                        human.SetHeadingAndSpeed(followerTransform.eulerAngles.y, 1f);
+                    }
                 }
             }
         }
