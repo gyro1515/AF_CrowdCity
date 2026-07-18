@@ -43,6 +43,7 @@ public static class CrowdOracleHarness
             int[] seeds = null; // null이면 config seed 사용.
             bool verify = true;
             int sepBudget = -1; // -oracleSepBudget: 분리 조회 후보 방문 예산 override(-1=config 기본값 유지, cap-ON 결정성 검증용).
+            bool flatRate = false; // -oracleFlatRate: CombatFlatConvertRate 토글 ON(전투 전향율 flat) 결정성 검증용. 기본 OFF(config 기본값).
 
             string[] args = Environment.GetCommandLineArgs();
             for (int i = 0; i < args.Length; i++)
@@ -54,6 +55,7 @@ public static class CrowdOracleHarness
                 else if (args[i] == "-oracleNoVerify") verify = false;
                 else if (args[i] == "-oracleCounters") counters = true;
                 else if (args[i] == "-oracleSepBudget" && i + 1 < args.Length && int.TryParse(args[i + 1], out int sb)) sepBudget = sb;
+                else if (args[i] == "-oracleFlatRate") flatRate = true;
             }
 
             if (string.IsNullOrEmpty(outDir))
@@ -66,7 +68,7 @@ public static class CrowdOracleHarness
             CrowdSimCounters.Reset();
             Debug.Log($"[CrowdOracleHarness] work counters {(counters ? "ON(byte-neutrality 증명)" : "OFF")}");
 
-            Run(outDir, ticks, scales, seeds, verify, sepBudget);
+            Run(outDir, ticks, scales, seeds, verify, sepBudget, flatRate);
         }
         catch (Exception e)
         {
@@ -81,11 +83,11 @@ public static class CrowdOracleHarness
         EditorApplication.Exit(exitCode);
     }
 
-    private static void Run(string outDir, int ticks, int[] scales, int[] seeds, bool verify, int sepBudget)
+    private static void Run(string outDir, int ticks, int[] scales, int[] seeds, bool verify, int sepBudget, bool flatRate)
     {
         Debug.Log($"[CrowdOracleHarness] 시작 out={outDir} ticks={ticks} scales=[{string.Join(",", scales)}] " +
                   $"seeds=[{(seeds == null ? "config" : string.Join(",", seeds))}] " +
-                  $"sepBudget={(sepBudget >= 0 ? sepBudget.ToString() : "config-default")}");
+                  $"sepBudget={(sepBudget >= 0 ? sepBudget.ToString() : "config-default")} flatRate={flatRate}");
 
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = -1;
@@ -135,13 +137,13 @@ public static class CrowdOracleHarness
                 foreach (int seed in seeds)
                 {
                     string binPath = Path.Combine(outDir, $"phaseC_oracle_snapshot_n{scale}_s{seed}.bin");
-                    RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, summary, events, sepBudget);
+                    RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, summary, events, sepBudget, flatRate);
                     Debug.Log($"[CrowdOracleHarness] combo n={scale} seed={seed} -> {binPath}");
 
                     if (firstCombo && verify)
                     {
                         firstCombo = false;
-                        VerifyDeterminism(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, outDir, sepBudget);
+                        VerifyDeterminism(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, outDir, sepBudget, flatRate);
                     }
                 }
             }
@@ -152,7 +154,7 @@ public static class CrowdOracleHarness
 
     private static void RunCombo(
         GameConfigSO baseConfig, Transform cityRoot, FieldInfo neutralCountField, FieldInfo seedField,
-        int scale, int seed, int ticks, string binPath, StreamWriter summary, StreamWriter events, int sepBudget)
+        int scale, int seed, int ticks, string binPath, StreamWriter summary, StreamWriter events, int sepBudget, bool flatRate)
     {
         // Unity 임시 오브젝트는 try 안에서 생성하고 finally에서 non-null일 때만 파괴한다(로드/인스턴스화/리플렉션 실패 시 누수 방지).
         GameConfigSO cfg = null;
@@ -172,6 +174,11 @@ public static class CrowdOracleHarness
             if (sepBudget >= 0)
             {
                 SetSepBudget(cfg, sepBudget); // cap-ON 결정성 검증: 복제본 SeparationVisitBudget만 override(원본 asset 불변).
+            }
+
+            if (flatRate)
+            {
+                SetFlatRate(cfg, true); // flat 전향율 결정성 검증: 복제본 CombatFlatConvertRate만 ON(원본 asset 불변).
             }
 
             // live 프리팹을 인스턴스화한다(직렬화 deps + _useSdfSolver=1 이 그대로 넘어온다).
@@ -323,7 +330,7 @@ public static class CrowdOracleHarness
     // 첫 combo를 임시 파일로 재실행해 바이너리 동일성을 확인한다(결정성 게이트).
     private static void VerifyDeterminism(
         GameConfigSO baseConfig, Transform cityRoot, FieldInfo neutralCountField, FieldInfo seedField,
-        int scale, int seed, int ticks, string firstBinPath, string outDir, int sepBudget)
+        int scale, int seed, int ticks, string firstBinPath, string outDir, int sepBudget, bool flatRate)
     {
         string tmpPath = Path.Combine(outDir, $"_verify_n{scale}_s{seed}.bin");
         using (var nullSummary = new StreamWriter(Path.Combine(outDir, "_verify_summary.tmp"), false))
@@ -331,7 +338,7 @@ public static class CrowdOracleHarness
         {
             nullSummary.WriteLine("h");
             nullEvents.WriteLine("h");
-            RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, tmpPath, nullSummary, nullEvents, sepBudget);
+            RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, tmpPath, nullSummary, nullEvents, sepBudget, flatRate);
         }
 
         bool identical = FilesEqual(firstBinPath, tmpPath);
@@ -400,6 +407,21 @@ public static class CrowdOracleHarness
 
         object boxed = simField.GetValue(cfg);
         budgetField.SetValue(boxed, budget);
+        simField.SetValue(cfg, boxed);
+    }
+
+    // flat 전향율 결정성 검증 전용: 복제 config의 SimTuning.CombatFlatConvertRate만 덮어쓴다(struct라 box→set→unbox). SetSepBudget과 동일 패턴.
+    private static void SetFlatRate(GameConfigSO cfg, bool on)
+    {
+        FieldInfo simField = typeof(GameConfigSO).GetField("sim", BindingFlags.Instance | BindingFlags.NonPublic);
+        FieldInfo flatField = typeof(SimTuning).GetField("CombatFlatConvertRate");
+        if (simField == null || flatField == null)
+        {
+            throw new InvalidOperationException("GameConfigSO.sim 또는 SimTuning.CombatFlatConvertRate 필드를 리플렉션으로 찾지 못했습니다.");
+        }
+
+        object boxed = simField.GetValue(cfg);
+        flatField.SetValue(boxed, on);
         simField.SetValue(cfg, boxed);
     }
 

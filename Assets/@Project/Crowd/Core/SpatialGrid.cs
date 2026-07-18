@@ -17,6 +17,9 @@ public sealed class SpatialGrid
     private readonly float _invCellSize;
     private readonly int _tableMask;
     private readonly int[] _bucketHead;   // bucket별 첫 agent index. 비어 있으면 -1.
+    // bucket별 팀 존재 bitmask(1<<team). hash 충돌로 여러 cell이 한 bucket에 섞이면 그 팀들의 OR라 exact-cell 팀 집합의 superset이다.
+    // 전투 1단계가 QueryCircle 전에 이 mask로 "footprint에 적 팀이 없으면" 스캔을 건너뛰는 데 쓴다(conservative → byte-identical).
+    private readonly int[] _bucketTeamMask;
     private readonly int[] _nextInBucket; // agent index별 같은 bucket 안의 다음 agent index.
     private readonly int[] _cellX;        // agent index별 소속 cell 좌표. hash 충돌 구분에 쓴다.
     private readonly int[] _cellY;
@@ -47,6 +50,7 @@ public sealed class SpatialGrid
         int tableSize = ComputeTableSize(capacity);
         _tableMask = tableSize - 1;
         _bucketHead = new int[tableSize];
+        _bucketTeamMask = new int[tableSize]; // 기본값 0(팀 없음)이면 정확해 별도 초기화 불필요. Rebuild마다 0으로 되돌린다.
         _nextInBucket = new int[capacity];
         _cellX = new int[capacity];
         _cellY = new int[capacity];
@@ -134,10 +138,12 @@ public sealed class SpatialGrid
         for (int i = 0; i < _bucketHead.Length; i++)
         {
             _bucketHead[i] = -1;
+            _bucketTeamMask[i] = 0; // 이번 스냅샷의 팀 존재 bitmask를 처음부터 다시 누적한다.
         }
 
         _count = buffer.Count;
         NativeArray<Vector2> positions = buffer.Pos;
+        NativeArray<int> teams = buffer.Team; // per-bucket 팀 bitmask 누적용(전투 skip 필터 전용). 열거 순서/결과에는 영향 없다.
         for (int i = 0; i < _count; i++)
         {
             Vector2 pos = positions[i];
@@ -151,6 +157,13 @@ public sealed class SpatialGrid
             int bucket = HashCell(cellX, cellY) & _tableMask;
             _nextInBucket[i] = _bucketHead[bucket];
             _bucketHead[bucket] = i;
+
+            int team = teams[i];
+            if (team >= 0)
+            {
+                // neutral(-1)은 적 팀이 아니라 mask에서 제외한다. 전투는 team>=0의 존재만 본다.
+                _bucketTeamMask[bucket] |= TeamBit(team);
+            }
         }
 
         CrowdSimCounters.CountGridRebuild(_count); // 무침습 계측(Enabled=false면 no-op).
@@ -217,6 +230,38 @@ public sealed class SpatialGrid
         }
 
         CrowdSimCounters.CountQuery(candidateVisits, results.Count); // 무침습 계측(Enabled=false면 no-op).
+    }
+
+    /// <summary>
+    /// <see cref="QueryCircle"/>가 열거할 AABB cell 집합(동일한 floor-cell 공식)에 걸친 bucket 팀 bitmask의 OR를 반환한다.
+    /// bucket mask는 exact-cell 팀 집합의 superset이므로(§ hash 충돌 시 colliding cell 팀까지 포함), 이 OR는
+    /// QueryCircle이 그 반경에서 만날 수 있는 모든 팀의 superset이다. 결과에 적 팀 bit가 없으면 그 질의는 적을 만나지 않는다.
+    /// 전투 1단계가 값비싼 스캔 전에 "footprint에 적 팀이 없으면" 건너뛰는 conservative gate로 쓴다(결과 byte-identical).
+    /// results를 만들지 않고 mask만 계산하며 계측하지 않는다.
+    /// </summary>
+    public int QueryTeamMask(Vector2 center, float radius)
+    {
+        if (_count == 0 || radius < 0f)
+        {
+            return 0;
+        }
+
+        // QueryCircle과 동일한 AABB cell 범위. 같은 center/radius를 넘기면 열거 cell 집합이 정확히 일치한다.
+        int minCellX = Mathf.FloorToInt((center.x - radius) * _invCellSize);
+        int maxCellX = Mathf.FloorToInt((center.x + radius) * _invCellSize);
+        int minCellY = Mathf.FloorToInt((center.y - radius) * _invCellSize);
+        int maxCellY = Mathf.FloorToInt((center.y + radius) * _invCellSize);
+
+        int mask = 0;
+        for (int cellY = minCellY; cellY <= maxCellY; cellY++)
+        {
+            for (int cellX = minCellX; cellX <= maxCellX; cellX++)
+            {
+                mask |= _bucketTeamMask[HashCell(cellX, cellY) & _tableMask];
+            }
+        }
+
+        return mask;
     }
 
     /// <summary>
@@ -310,5 +355,16 @@ public sealed class SpatialGrid
         {
             return (cellX * HashPrimeX) ^ (cellY * HashPrimeY);
         }
+    }
+
+    /// <summary>
+    /// team id(>=0)를 <see cref="_bucketTeamMask"/>/전투 skip 필터가 공유하는 bit로 접는다.
+    /// 32팀 경계를 넘어도 안전하도록 team&gt;=31은 모두 최상위 bit(catch-all)에 모은다. 이러면 서로 다른 high-team이
+    /// 한 bit로 별칭되지만, 전투 skip은 team&gt;=31 agent를 아예 건너뛰지 않으므로(항상 full 스캔) false skip이 생기지 않는다.
+    /// 이 프로젝트의 teamCount는 1+RivalCount(&lt;=4)라 실제로는 team&lt;31 경로만 탄다.
+    /// </summary>
+    public static int TeamBit(int team)
+    {
+        return 1 << (team < 31 ? team : 31);
     }
 }

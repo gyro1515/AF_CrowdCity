@@ -231,6 +231,8 @@ public sealed class CombatResolver
         // 4단계 리더 판정은 적(CombatRadius)과 아군 호위(LeaderAloneRadius) 두 반경 중 큰 쪽까지 후보를 모아야 하므로 질의를 넓힌다.
         float leaderQueryRadius = Mathf.Max(radius, leaderAloneRadius) * Mathf.Max(1f, tuning.MaxScale);
         bool leaderProtection = tuning.LeaderProtection;
+        // flat 전향율 토글: ON이면 접촉 pair 수를 세지 않고, 접촉이 있는 팀 pair에 최대 전향율(clamp01=1.0)을 적용한다.
+        bool flatConvertRate = tuning.CombatFlatConvertRate;
         float[] accumulators = state.Accumulators;
 
         // ---- 1단계: 시작 count 스냅샷 + 팀 pair별 접촉 수 + agent별 적 팀 최근접 접촉 거리 ----
@@ -268,6 +270,19 @@ public sealed class CombatResolver
                 continue;
             }
 
+            // interior-of-blob skip(항상 켜짐, 순수 최적화): agent i의 질의 footprint(같은 center/queryRadius의 AABB cell 집합)에
+            // 자기 팀 외의 적 팀이 하나도 없으면, QueryCircle이 적을 만날 수 없어 이 agent는 접촉/최근접/pair 카운트에 전혀
+            // 기여하지 않는다. 그 경우 값비싼 전체 스캔을 건너뛴다. footprint mask는 QueryCircle이 열거할 cell의 superset이라
+            // 적을 놓치지 않는다 → byte-identical. teamI>=31(catch-all bit 별칭)은 보수적으로 스킵하지 않는다(실제로는 teamCount<=4).
+            if (teamI < 31)
+            {
+                int footprintTeamMask = grid.QueryTeamMask(positions[i], queryRadius);
+                if ((footprintTeamMask & ~(1 << teamI)) == 0)
+                {
+                    continue;
+                }
+            }
+
             CrowdSimCounters.SetSource(CrowdSimCounters.QuerySource.Combat); // 무침습 계측(Enabled=false면 no-op).
             grid.QueryCircle(positions[i], queryRadius, _queryResults);
             int foundCount = _queryResults.Count;
@@ -300,8 +315,15 @@ public sealed class CombatResolver
                     _nearestEnemyDistSq[nearestIndex] = distSq;
                 }
 
+                if (flatConvertRate)
+                {
+                    // flat 모드: 접촉 pair 수를 세지 않고 팀 pair의 접촉 존재만 boolean(1)로 표시한다.
+                    // count/유일성이 불필요하므로 i<j 열거 없이 idempotent하게 세팅만 하며, 2단계의 ==0 게이트만 만족시킨다.
+                    _pairTouchCounts[teamI * teamCount + teamJ] = 1;
+                    _pairTouchCounts[teamJ * teamCount + teamI] = 1;
+                }
                 // 접촉 pair는 unordered 쌍당 정확히 한 번만 센다(집합 크기라 열거 순서와 무관하다).
-                if (i < j)
+                else if (i < j)
                 {
                     CrowdSimCounters.CountCombatUniquePair(); // 무침습 계측: 무순서 접촉 member pair 1건.
                     _pairTouchCounts[teamI * teamCount + teamJ]++;
@@ -330,7 +352,10 @@ public sealed class CombatResolver
 
                 if (_startCounts[w] > _startCounts[l])
                 {
-                    float strength = Mathf.Clamp01(_pairTouchCounts[pairIndex] / (float)tuning.PairNormalizer);
+                    // flat 모드: 접촉 pair 수 가중 clamp01(touch/PairNormalizer)를 버리고 최대 전향율(strength=1.0)을 쓴다.
+                    float strength = flatConvertRate
+                        ? 1f
+                        : Mathf.Clamp01(_pairTouchCounts[pairIndex] / (float)tuning.PairNormalizer);
                     accumulators[pairIndex] += tuning.ConvertPerSecond * strength * dt;
                 }
                 // 시작 count가 같거나 작은 쪽 방향이면 누적하지 않고 그대로 유지한다.

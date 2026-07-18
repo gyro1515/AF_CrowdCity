@@ -35,6 +35,7 @@ public sealed class CombatResolverTests
         tuning.RateLimitConversion = false;
         tuning.LeaderProtection = true;
         tuning.SeparationVisitBudget = 0; // 분리 조회 예산 cap OFF(기본): 전투 테스트는 예산과 무관하다.
+        tuning.CombatFlatConvertRate = false; // flat 전향율 OFF(기본): 기존 접촉 pair 가중 규칙을 검증한다.
         return tuning;
     }
 

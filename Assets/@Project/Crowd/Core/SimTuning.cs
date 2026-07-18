@@ -60,4 +60,10 @@ public struct SimTuning
     /// </summary>
     [UnityEngine.Tooltip("팔로워 분리 이웃 조회의 후보 방문 예산(cap). 0=비활성(정확 조회, 기본값). >0이면 밀집 조회를 스캔 순서 첫 예산개 매칭 후보로 절단.")]
     public int SeparationVisitBudget;
+
+    /// <summary>
+    /// 전투 전향율을 접촉 pair 수 가중 대신 접촉만 있으면 최대(ConvertPerSecond)로 고정하는 토글이다. 기본값 false(기존 접촉 pair 가중 규칙).
+    /// </summary>
+    [UnityEngine.Tooltip("전투 전향율 flat 토글. OFF(false)=기존 규칙(rate = ConvertPerSecond * clamp01(접촉 pair 수 / PairNormalizer)). ON(true)=접촉이 하나라도 있으면 clamp01=1.0로 보고 최대 전향율(ConvertPerSecond)을 적용하며 접촉 pair 수 계수를 계산하지 않는다.")]
+    public bool CombatFlatConvertRate;
 }
