@@ -78,6 +78,18 @@ public sealed class CrowdRoot : MonoBehaviour
     private float _regionMaxZ;
     private float _groundY;
 
+    // 밀도장(grid-averaged O(N)) 분리용 팀별 cell 격자 파라미터. cell 크기=SeparationRadius, 원점=region min(XZ). Initialize에서 1회 계산.
+    // 밀도장 분리 ON일 때만 프리패스/job이 소비한다(OFF면 값만 세팅될 뿐 미사용).
+    private float _densityCellSize;
+    private float _densityInvCellSize;
+    private float _densityOriginX;
+    private float _densityOriginZ;
+    private int _densityCols;
+    private int _densityRows;
+    private int _densityCellsPerTeam;
+    // 밀도장 격자 축당 최대 cell 수. 무조건 할당되는 DensityField를 병적으로 작은 SeparationRadius(예: 0.01m)로부터 방어하는 상한(shipped 설정 75 cell ≪ 1024라 무효). worst-case teamCount*1024*1024*4B.
+    private const int MAX_DENSITY_DIM = 1024;
+
     // simulation kernel (Project.CrowdCity.Core)
     // M2-a1: 권한 있는 agent 상태(SoA buffer + 조향 상태)의 Persistent NativeArray 소유자. Initialize에서 1회 생성, Shutdown에서 1회 해제.
     private CrowdSimState _simState;
@@ -255,9 +267,20 @@ public sealed class CrowdRoot : MonoBehaviour
         _teamCount = 1 + config.RivalCount;
         _agentCapacity = _teamCount + config.NeutralCount;
 
+        // 밀도장(grid-averaged O(N)) 분리용 팀별 cell 격자를 region 경계로 확정한다(ComputeWalkableRegion 이후 = region min/max 유효).
+        // cell 크기=SeparationRadius, 원점=region min(XZ). cols/rows는 최대 도달 cell을 포함하도록 +1(패딩 cell 없음). teamCount로 키잉한다.
+        _densityCellSize = _config.SeparationRadius;
+        _densityInvCellSize = 1f / _densityCellSize;
+        _densityOriginX = _regionMinX;
+        _densityOriginZ = _regionMinZ;
+        // 축당 cell 수를 [1, MAX_DENSITY_DIM]로 클램프해 무조건 할당되는 DensityField 크기를 병적 SeparationRadius와 무관하게 바운드한다(shipped 설정에선 무효).
+        _densityCols = Mathf.Clamp(Mathf.FloorToInt((_regionMaxX - _densityOriginX) * _densityInvCellSize) + 1, 1, MAX_DENSITY_DIM);
+        _densityRows = Mathf.Clamp(Mathf.FloorToInt((_regionMaxZ - _densityOriginZ) * _densityInvCellSize) + 1, 1, MAX_DENSITY_DIM);
+        _densityCellsPerTeam = _densityCols * _densityRows;
+
         // M2-a1: 권한 있는 agent 상태를 Persistent NativeArray로 1회 할당한다(storage 이관, 결과 byte-identical).
         // _buffer와 아래 조향 필드는 _simState 소유 배열의 별칭이다(해제는 Shutdown에서 _simState만).
-        _simState = new CrowdSimState(_agentCapacity, _teamCount);
+        _simState = new CrowdSimState(_agentCapacity, _teamCount, _teamCount * _densityCellsPerTeam);
         _buffer = _simState.Agents;
         _grid = new SpatialGrid(GridCellSize, _agentCapacity);
         _recruitResolver = new RecruitResolver();
@@ -1071,6 +1094,19 @@ public sealed class CrowdRoot : MonoBehaviour
         // 이동(MOVE): SDF 경로 활성(_useSdfSolver ON + WallField 로드)이면 순수 SDF 수학이라 FollowerSdfMoveJob으로 병렬화한다(read-only 조회, 자기 슬롯만 쓰기).
         //    CC fallback은 CharacterController.Move가 main-thread 물리라 병렬화하지 않고 기존 직렬 이동을 그대로 유지한다.
         bool sdfActive = IsSdfActive;
+
+        // 밀도장(grid-averaged O(N)) 분리 토글. ON이면 팀별 밀도장을 tick마다 0으로 비운 뒤 아래 team·f 루프가 같은 팀 인원을 cell에 누적한다.
+        // OFF면 clear/누적을 전부 건너뛰어 기존 pairwise 경로에 추가 산술·순회를 넣지 않는다(byte-identical). job의 UseDensityField와 같은 플래그다.
+        bool useDensityField = _config.Sim.DensityFieldSeparation;
+        if (useDensityField)
+        {
+            NativeArray<int> densityField = _simState.DensityField;
+            for (int c = 0; c < densityField.Length; c++)
+            {
+                densityField[c] = 0;
+            }
+        }
+
         int followerCount = 0;
         for (int t = 0; t < _teamCount; t++)
         {
@@ -1093,11 +1129,20 @@ public sealed class CrowdRoot : MonoBehaviour
             float effectiveArriveRadius = arriveRadius + _config.FollowerArriveRadiusPerSqrtMember * Mathf.Sqrt(followerIndices.Count);
             _simState.CenterPerTeam[t] = center;
             _simState.ArriveRadiusPerTeam[t] = effectiveArriveRadius;
+            if (useDensityField)
+            {
+                BinDensityMember(t, model.LeaderAgentIndex); // 리더 먼저 누적(같은 팀 분리는 리더도 이웃으로 포함).
+            }
 
             for (int f = 0; f < followerIndices.Count; f++)
             {
                 int followerIndex = followerIndices[f];
                 _simState.FollowerList[followerCount] = followerIndex;
+                if (useDensityField)
+                {
+                    BinDensityMember(t, followerIndex); // 팔로워 누적(리더 다음).
+                }
+
                 if (sdfActive)
                 {
                     // 이동 job이 쓸 현재 위치를 원본 직렬 루프와 동일 원천(followerTransform.position)에서 캡처한다(힘 job은 transform을 건드리지 않아 이동까지 불변).
@@ -1138,6 +1183,15 @@ public sealed class CrowdRoot : MonoBehaviour
             QueryRadius = sepRadius * Mathf.Max(1f, _config.NeutralMaxScale),
             SepBudget = _config.Sim.SeparationVisitBudget,
             Dt = dt,
+            UseDensityField = useDensityField ? 1 : 0,
+            DensityField = _simState.DensityField,
+            DensityCols = _densityCols,
+            DensityRows = _densityRows,
+            DensityOriginX = _densityOriginX,
+            DensityOriginZ = _densityOriginZ,
+            DensityInvCellSize = _densityInvCellSize,
+            DensityCellsPerTeam = _densityCellsPerTeam,
+            DensityFieldGain = _config.Sim.DensityFieldGain,
             CommandedVelocity = _simState.CommandedVelocity,
         };
         JobHandle forceHandle = forceJob.Schedule(followerCount, SteeringForceBatch);
@@ -1348,6 +1402,17 @@ public sealed class CrowdRoot : MonoBehaviour
         }
 
         CrowdSimProfiler.End(CrowdSimProfiler.Seg.NeutralMove);
+    }
+
+    // 밀도장 분리(ON) 프리패스: 같은 팀 member(리더/팔로워)를 팀별 cell에 1 누적한다. job이 자기 cell을 구하는 것과 같은 원천
+    // (_buffer.Pos = 직전 tick 미러, .y == world Z)에서 cell을 구해 밀도장과 job 질의 좌표계를 일치시킨다.
+    private void BinDensityMember(int team, int memberIndex)
+    {
+        Vector2 p = _buffer.Pos[memberIndex];
+        int cx = Mathf.Clamp(Mathf.FloorToInt((p.x - _densityOriginX) * _densityInvCellSize), 0, _densityCols - 1);
+        int cy = Mathf.Clamp(Mathf.FloorToInt((p.y - _densityOriginZ) * _densityInvCellSize), 0, _densityRows - 1);
+        int cell = team * _densityCellsPerTeam + cy * _densityCols + cx;
+        _simState.DensityField[cell] = _simState.DensityField[cell] + 1;
     }
 
     // 중립의 새 배회 방향을 고른다. 1.5m raycast가 막히는 방향은 기각하고 최대 8회 재시도한다.

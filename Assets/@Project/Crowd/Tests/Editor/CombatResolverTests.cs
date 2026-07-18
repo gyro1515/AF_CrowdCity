@@ -36,6 +36,8 @@ public sealed class CombatResolverTests
         tuning.LeaderProtection = true;
         tuning.SeparationVisitBudget = 0; // 분리 조회 예산 cap OFF(기본): 전투 테스트는 예산과 무관하다.
         tuning.CombatFlatConvertRate = false; // flat 전향율 OFF(기본): 기존 접촉 pair 가중 규칙을 검증한다.
+        tuning.DensityFieldSeparation = false; // 밀도장 분리 OFF(기본): CombatResolver는 이 값을 읽지 않으나 struct definite-assignment를 위해 대입한다.
+        tuning.DensityFieldGain = 0.5f;        // 프로덕션 기본값과 동일(전투 판정에는 무영향).
         return tuning;
     }
 
