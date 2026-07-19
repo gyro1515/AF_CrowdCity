@@ -61,6 +61,29 @@ public sealed class GameConfigSO : ScriptableObject
     /// <summary>팔로워 분리 밀어내기 세기(gain)다. separationRadius와 함께 현재 팔로워 조향에서만 쓰이는 팔로워 전용 값이다.</summary>
     public float SeparationPush => separationPush;
 
+    /// <summary>팔로워 분리 계산 방식이다. Pairwise=기존 쌍별 이웃 분리(기본), LeaderRadial=밀도 게이트 centroid-radial 분리.</summary>
+    public enum SeparationMode { Pairwise, LeaderRadial }
+
+    [Tooltip("팔로워 분리 계산 방식. Pairwise=기존 쌍별 이웃 분리(기본, 동작 보존). LeaderRadial=자기 cell 밀도가 임계를 넘을 때만 팀 무리 중심에서 바깥으로 미는 O(N) 분리.")]
+    [SerializeField] private SeparationMode separationMode = SeparationMode.Pairwise;
+    /// <summary>팔로워 분리 계산 방식이다. 기본 Pairwise(동작 보존).</summary>
+    public SeparationMode CrowdSeparationMode => separationMode;
+
+    [Tooltip("LeaderRadial 전용: 같은 팀 유닛이 한 cell에 이 수를 넘게 있을 때만 분리를 발동하는 밀도 임계. 넘은 초과분에 비례해 세진다.")]
+    [SerializeField] private float overcrowdThreshold = 8f;
+    /// <summary>LeaderRadial 밀도 게이트 임계(같은 팀 cell 점유). 초과분에 비례해 반경 분리가 세진다.</summary>
+    public float OvercrowdThreshold => overcrowdThreshold;
+
+    [Tooltip("LeaderRadial 전용: 밀도 임계 초과분 1당 붙는 반경(중심→바깥) 분리 세기.")]
+    [SerializeField] private float radialSeparationGain = 0.25f;
+    /// <summary>LeaderRadial 반경(중심→바깥) 분리 세기(밀도 초과분 1당).</summary>
+    public float RadialSeparationGain => radialSeparationGain;
+
+    [Tooltip("LeaderRadial 전용: 분리 방향에 섞는 접선 성분 비율(0~1). 0=순수 반경, 커질수록 소용돌이처럼 돌며 흩어짐.")]
+    [SerializeField] private float separationTangentialFraction = 0f;
+    /// <summary>LeaderRadial 분리 방향에 섞는 접선 성분 비율(0~1)이다. 0이면 순수 반경.</summary>
+    public float SeparationTangentialFraction => separationTangentialFraction;
+
     [Tooltip("유닛이 고정되는 걷기 가능 지면 표면 높이(Y)다. Ground renderer bounds의 max.y는 메시 두께/융기 지오메트리 때문에 실제 걷기 표면을 넘어서고, Ground에 collider가 없어 raycast로 표면을 잡을 수 없으므로 이 값을 명시적으로 지정한다.")]
     [SerializeField] private float groundY = 0.5f;
     /// <summary>유닛이 고정되는 걷기 가능 지면 표면 높이(Y)다.</summary>
@@ -234,6 +257,9 @@ public sealed class GameConfigSO : ScriptableObject
         slotSpacing = Mathf.Max(0.05f, slotSpacing);
         separationRadius = Mathf.Max(0.01f, separationRadius);
         separationPush = Mathf.Max(0f, separationPush);
+        overcrowdThreshold = Mathf.Max(1f, overcrowdThreshold);
+        radialSeparationGain = Mathf.Max(0f, radialSeparationGain);
+        separationTangentialFraction = Mathf.Clamp(separationTangentialFraction, 0f, 1f);
 
         followerCohesionGain = Mathf.Max(0.05f, followerCohesionGain); // 0이면 응집이 사라져 blob이 조용히 흩어지므로 작은 양수 하한을 둔다.
         followerArriveRadius = Mathf.Max(0.01f, followerArriveRadius);

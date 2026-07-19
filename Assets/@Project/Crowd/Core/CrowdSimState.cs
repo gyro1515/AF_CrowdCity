@@ -60,6 +60,18 @@ public sealed class CrowdSimState : IDisposable
     /// </summary>
     public NativeArray<float> ArriveRadiusPerTeam;
 
+    // ---- LeaderRadial(밀도 게이트 centroid-radial) 분리 전용 per-tick scratch. mode==LeaderRadial일 때만 채워 쓴다(Pairwise는 미사용). ----
+
+    /// <summary>
+    /// bucket*teamCount + team 인덱싱의 per-bucket per-team 팀원 점유 카운트다(길이 = grid table 크기 × teamCount). 직렬 프리패스가 매 tick 0으로 초기화 후 채운다.
+    /// </summary>
+    public NativeArray<int> BucketTeamCount;
+
+    /// <summary>
+    /// team별 무리 중심(직전 tick 멤버 평균 위치)이다. 직렬 프리패스에서 계산해 job에 전달한다.
+    /// </summary>
+    public NativeArray<Vector2> CentroidPerTeam;
+
     // ---- M2-a3 SDF 이동 병렬화(FollowerSdfMoveJob) 전용 per-tick scratch. 팔로워 슬롯 k로 인덱싱하며, 직렬 제시 패스가 같은 순서로 읽는다. ----
 
     /// <summary>
@@ -106,6 +118,9 @@ public sealed class CrowdSimState : IDisposable
             FollowerList = new NativeArray<int>(agentCapacity, Allocator.Persistent);
             CenterPerTeam = new NativeArray<Vector2>(teamCount, Allocator.Persistent);
             ArriveRadiusPerTeam = new NativeArray<float>(teamCount, Allocator.Persistent);
+            // LeaderRadial 분리 scratch. BucketTeamCount는 grid와 동일한 table 크기 공식을 단일 원천에서 가져와 teamCount만큼 곱한 flat 배열이다.
+            BucketTeamCount = new NativeArray<int>(SpatialGrid.ComputeTableSize(agentCapacity) * teamCount, Allocator.Persistent);
+            CentroidPerTeam = new NativeArray<Vector2>(teamCount, Allocator.Persistent);
             GridBucketHead = new NativeArray<int>(SpatialGrid.ComputeTableSize(agentCapacity), Allocator.Persistent);
             GridNext = new NativeArray<int>(agentCapacity, Allocator.Persistent);
             GridCellX = new NativeArray<int>(agentCapacity, Allocator.Persistent);
@@ -184,6 +199,16 @@ public sealed class CrowdSimState : IDisposable
         if (ArriveRadiusPerTeam.IsCreated)
         {
             ArriveRadiusPerTeam.Dispose();
+        }
+
+        if (BucketTeamCount.IsCreated)
+        {
+            BucketTeamCount.Dispose();
+        }
+
+        if (CentroidPerTeam.IsCreated)
+        {
+            CentroidPerTeam.Dispose();
         }
 
         if (GridBucketHead.IsCreated)

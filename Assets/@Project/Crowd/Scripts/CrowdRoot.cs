@@ -1177,6 +1177,20 @@ public sealed class CrowdRoot : MonoBehaviour
         //    CC fallback은 CharacterController.Move가 main-thread 물리라 병렬화하지 않고 기존 직렬 이동을 그대로 유지한다.
         bool sdfActive = IsSdfActive;
 
+        // LeaderRadial 분리 모드일 때만 O(N) 프리컴퓨트(팀 무리 중심 + per-bucket per-team 점유)를 돌린다. Pairwise는 이 블록을 전부 건너뛴다(추가 O(N) 비용 0).
+        bool leaderRadial = _config.CrowdSeparationMode == GameConfigSO.SeparationMode.LeaderRadial;
+        int teamCount = _teamCount;
+        float gridInvCellSize = _grid.InvCellSize;
+        int gridTableMask = _grid.TableMask;
+        if (leaderRadial)
+        {
+            // 결정성 가드: per-bucket per-team 점유 카운트를 이번 tick 처음부터 다시 채우려 매 tick 0으로 초기화한다.
+            for (int i = 0; i < _simState.BucketTeamCount.Length; i++)
+            {
+                _simState.BucketTeamCount[i] = 0;
+            }
+        }
+
         int followerCount = 0;
         for (int t = 0; t < _teamCount; t++)
         {
@@ -1200,6 +1214,19 @@ public sealed class CrowdRoot : MonoBehaviour
             _simState.CenterPerTeam[t] = center;
             _simState.ArriveRadiusPerTeam[t] = effectiveArriveRadius;
 
+            // LeaderRadial: 팀 무리 중심(centroid)과 per-bucket per-team 점유를 직전 tick 위치(buffer.Pos)로 고정 team·f 순서로 누적한다(결정성 가드: 고정 순서). 리더 먼저, 이어서 f 오름차순 팔로워.
+            Vector2 centroidSum = Vector2.zero;
+            int centroidCount = 0;
+            if (leaderRadial)
+            {
+                Vector2 leaderPrev = _buffer.Pos[model.LeaderAgentIndex];
+                centroidSum = leaderPrev;
+                centroidCount = 1;
+                int lcx = Mathf.FloorToInt(leaderPrev.x * gridInvCellSize);
+                int lcy = Mathf.FloorToInt(leaderPrev.y * gridInvCellSize);
+                _simState.BucketTeamCount[(SpatialGrid.HashCell(lcx, lcy) & gridTableMask) * teamCount + t]++;
+            }
+
             for (int f = 0; f < followerIndices.Count; f++)
             {
                 int followerIndex = followerIndices[f];
@@ -1212,7 +1239,22 @@ public sealed class CrowdRoot : MonoBehaviour
                     _simState.MovePositionCurrent[followerCount] = new Vector2(followerPos.x, followerPos.z);
                 }
 
+                if (leaderRadial)
+                {
+                    Vector2 followerPrev = _buffer.Pos[followerIndex];
+                    centroidSum += followerPrev;
+                    centroidCount++;
+                    int fcx = Mathf.FloorToInt(followerPrev.x * gridInvCellSize);
+                    int fcy = Mathf.FloorToInt(followerPrev.y * gridInvCellSize);
+                    _simState.BucketTeamCount[(SpatialGrid.HashCell(fcx, fcy) & gridTableMask) * teamCount + t]++;
+                }
+
                 followerCount++;
+            }
+
+            if (leaderRadial)
+            {
+                _simState.CentroidPerTeam[t] = centroidSum / centroidCount;
             }
         }
 
@@ -1245,6 +1287,15 @@ public sealed class CrowdRoot : MonoBehaviour
             QueryRadius = sepRadius * Mathf.Max(1f, _config.NeutralMaxScale),
             SepBudget = _config.Sim.SeparationVisitBudget,
             Dt = dt,
+            // 분리 모드 + LeaderRadial 스냅샷. Pairwise(=0)에서는 job이 아래 4필드/2배열을 읽지 않으므로 값은 무시된다(job 안전 시스템 충족용으로 항상 유효 배열을 배선).
+            SeparationMode = (int)_config.CrowdSeparationMode,
+            OvercrowdThreshold = _config.OvercrowdThreshold,
+            RadialGain = _config.RadialSeparationGain,
+            TangentialFraction = _config.SeparationTangentialFraction,
+            BucketTeamCount = _simState.BucketTeamCount,
+            TeamCount = _teamCount,
+            CentroidPerTeam = _simState.CentroidPerTeam,
+            Id = _buffer.Id,
             CommandedVelocity = _simState.CommandedVelocity,
         };
         JobHandle forceHandle = forceJob.Schedule(followerCount, SteeringForceBatch);

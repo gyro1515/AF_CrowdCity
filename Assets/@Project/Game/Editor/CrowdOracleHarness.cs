@@ -48,6 +48,7 @@ public static class CrowdOracleHarness
             bool verify = true;
             int sepBudget = -1; // -oracleSepBudget: 분리 조회 후보 방문 예산 override(-1=config 기본값 유지, cap-ON 결정성 검증용).
             bool flatRate = false; // -oracleFlatRate: CombatFlatConvertRate 토글 ON(전투 전향율 flat) 결정성 검증용. 기본 OFF(config 기본값).
+            int separationMode = -1; // -oracleSeparationMode: 분리 모드 override(0/Pairwise, 1/LeaderRadial). -1=config 기본값 유지(=Pairwise, OFF byte-identity 경로).
 
             string[] args = Environment.GetCommandLineArgs();
             for (int i = 0; i < args.Length; i++)
@@ -60,6 +61,7 @@ public static class CrowdOracleHarness
                 else if (args[i] == "-oracleCounters") counters = true;
                 else if (args[i] == "-oracleSepBudget" && i + 1 < args.Length && int.TryParse(args[i + 1], out int sb)) sepBudget = sb;
                 else if (args[i] == "-oracleFlatRate") flatRate = true;
+                else if (args[i] == "-oracleSeparationMode" && i + 1 < args.Length) separationMode = ParseSeparationMode(args[i + 1]);
             }
 
             if (string.IsNullOrEmpty(outDir))
@@ -82,7 +84,7 @@ public static class CrowdOracleHarness
 
             Debug.Log($"BURST-ACTIVE: EnableBurstCompilation={BurstCompiler.Options.EnableBurstCompilation} Synchronous={BurstCompiler.Options.EnableBurstCompileSynchronously}");
 
-            Run(outDir, ticks, scales, seeds, verify, sepBudget, flatRate);
+            Run(outDir, ticks, scales, seeds, verify, sepBudget, flatRate, separationMode);
         }
         catch (Exception e)
         {
@@ -99,11 +101,12 @@ public static class CrowdOracleHarness
         EditorApplication.Exit(exitCode);
     }
 
-    private static void Run(string outDir, int ticks, int[] scales, int[] seeds, bool verify, int sepBudget, bool flatRate)
+    private static void Run(string outDir, int ticks, int[] scales, int[] seeds, bool verify, int sepBudget, bool flatRate, int separationMode)
     {
         Debug.Log($"[CrowdOracleHarness] 시작 out={outDir} ticks={ticks} scales=[{string.Join(",", scales)}] " +
                   $"seeds=[{(seeds == null ? "config" : string.Join(",", seeds))}] " +
-                  $"sepBudget={(sepBudget >= 0 ? sepBudget.ToString() : "config-default")} flatRate={flatRate}");
+                  $"sepBudget={(sepBudget >= 0 ? sepBudget.ToString() : "config-default")} flatRate={flatRate} " +
+                  $"separationMode={(separationMode >= 0 ? (separationMode == 1 ? "LeaderRadial" : "Pairwise") : "config-default")}");
 
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = -1;
@@ -153,13 +156,13 @@ public static class CrowdOracleHarness
                 foreach (int seed in seeds)
                 {
                     string binPath = Path.Combine(outDir, $"phaseC_oracle_snapshot_n{scale}_s{seed}.bin");
-                    RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, summary, events, sepBudget, flatRate);
+                    RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, summary, events, sepBudget, flatRate, separationMode);
                     Debug.Log($"[CrowdOracleHarness] combo n={scale} seed={seed} -> {binPath}");
 
                     if (firstCombo && verify)
                     {
                         firstCombo = false;
-                        VerifyDeterminism(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, outDir, sepBudget, flatRate);
+                        VerifyDeterminism(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, binPath, outDir, sepBudget, flatRate, separationMode);
                     }
                 }
             }
@@ -170,7 +173,7 @@ public static class CrowdOracleHarness
 
     private static void RunCombo(
         GameConfigSO baseConfig, Transform cityRoot, FieldInfo neutralCountField, FieldInfo seedField,
-        int scale, int seed, int ticks, string binPath, StreamWriter summary, StreamWriter events, int sepBudget, bool flatRate)
+        int scale, int seed, int ticks, string binPath, StreamWriter summary, StreamWriter events, int sepBudget, bool flatRate, int separationMode)
     {
         // Unity 임시 오브젝트는 try 안에서 생성하고 finally에서 non-null일 때만 파괴한다(로드/인스턴스화/리플렉션 실패 시 누수 방지).
         GameConfigSO cfg = null;
@@ -195,6 +198,11 @@ public static class CrowdOracleHarness
             if (flatRate)
             {
                 SetFlatRate(cfg, true); // flat 전향율 결정성 검증: 복제본 CombatFlatConvertRate만 ON(원본 asset 불변).
+            }
+
+            if (separationMode >= 0)
+            {
+                SetSeparationMode(cfg, separationMode); // LeaderRadial ON 경로 검증: 복제본 separationMode만 override(원본 asset 불변). -1이면 config 기본값(Pairwise) 유지.
             }
 
             // live 프리팹을 인스턴스화한다(직렬화 deps + _useSdfSolver=1 이 그대로 넘어온다).
@@ -357,7 +365,7 @@ public static class CrowdOracleHarness
     // 첫 combo를 임시 파일로 재실행해 바이너리 동일성을 확인한다(결정성 게이트).
     private static void VerifyDeterminism(
         GameConfigSO baseConfig, Transform cityRoot, FieldInfo neutralCountField, FieldInfo seedField,
-        int scale, int seed, int ticks, string firstBinPath, string outDir, int sepBudget, bool flatRate)
+        int scale, int seed, int ticks, string firstBinPath, string outDir, int sepBudget, bool flatRate, int separationMode)
     {
         string tmpPath = Path.Combine(outDir, $"_verify_n{scale}_s{seed}.bin");
         using (var nullSummary = new StreamWriter(Path.Combine(outDir, "_verify_summary.tmp"), false))
@@ -365,7 +373,7 @@ public static class CrowdOracleHarness
         {
             nullSummary.WriteLine("h");
             nullEvents.WriteLine("h");
-            RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, tmpPath, nullSummary, nullEvents, sepBudget, flatRate);
+            RunCombo(baseConfig, cityRoot, neutralCountField, seedField, scale, seed, ticks, tmpPath, nullSummary, nullEvents, sepBudget, flatRate, separationMode);
         }
 
         bool identical = FilesEqual(firstBinPath, tmpPath);
@@ -450,6 +458,27 @@ public static class CrowdOracleHarness
         object boxed = simField.GetValue(cfg);
         flatField.SetValue(boxed, on);
         simField.SetValue(cfg, boxed);
+    }
+
+    // LeaderRadial ON 경로 검증 전용: 복제 config의 separationMode 필드만 덮어쓴다. separationMode는 SO(참조형) 직접 필드라 box/unbox가 필요 없다(SetSepBudget/SetFlatRate와 달리 SimTuning 구조체 멤버가 아니다).
+    private static void SetSeparationMode(GameConfigSO cfg, int mode)
+    {
+        FieldInfo modeField = typeof(GameConfigSO).GetField("separationMode", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (modeField == null)
+        {
+            throw new InvalidOperationException("GameConfigSO.separationMode 필드를 리플렉션으로 찾지 못했습니다.");
+        }
+
+        modeField.SetValue(cfg, Enum.ToObject(modeField.FieldType, mode)); // 0=Pairwise, 1=LeaderRadial.
+    }
+
+    // -oracleSeparationMode 값 파싱: "0"/"1"/"Pairwise"/"LeaderRadial"(대소문자 무관)을 0/1로. 인식 실패 시 -1(config 기본값 유지).
+    private static int ParseSeparationMode(string s)
+    {
+        if (int.TryParse(s, out int v)) return v == 1 ? 1 : 0;
+        if (string.Equals(s, "LeaderRadial", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (string.Equals(s, "Pairwise", StringComparison.OrdinalIgnoreCase)) return 0;
+        return -1;
     }
 
     private static string F(double v)
