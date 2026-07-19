@@ -25,9 +25,11 @@ This `CLAUDE.md` applies to the repository root and everything below it. The sou
 
 For every non-trivial code task, both the **work plan** (before implementation) and the **post-work verification** (after implementation) must be cross-reviewed by two independent agents, each acting as a **Unity senior game programmer** — one Codex, one Claude. Each independently critiques the other's plan/result; iterate in rounds until they reach **explicit consensus**. Do not conclude a phase (plan or verification) while the two still disagree: record the open disagreement and run another round until it is resolved. The main agent orchestrates the exchange and judges convergence; a single agent's approval never substitutes for the cross-review. Trivial edits are exempt (use judgment).
 
+When a decision would otherwise require the user but the user is unavailable (e.g. autonomous or unattended runs), do not block: resolve it via the same Codex↔Claude cross-review, choose the best-supported option, proceed, and record the decision and its rationale for the user's later review.
+
 Agent settings:
 
-- **Codex** — model `gpt-5.6-sol`, effort `ultra`, speed `fast` (invoke: `codex exec -m gpt-5.6-sol -c model_reasoning_effort=ultra -c service_tier=fast`; requires codex-cli ≥ 0.144.5).
+- **Codex** — model `gpt-5.6-sol`, effort `ultra`, speed `fast` (invoke: `codex exec -m gpt-5.6-sol -c model_reasoning_effort=ultra -c service_tier=fast … < /dev/null`; requires codex-cli ≥ 0.144.5). **Always redirect stdin `< /dev/null`** — otherwise `codex exec` blocks waiting on stdin and emits no output until the command times out. Run it **synchronously in the foreground** (a single blocking call); never background it or wrap it in a poll/Monitor loop (that reintroduces the stdin hang and stalls the agent).
 - **Claude** — model `Opus 4.8`, effort `xhigh`.
 
 ## Working Language
