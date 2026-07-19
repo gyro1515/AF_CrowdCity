@@ -85,16 +85,10 @@ public sealed class CrowdSimState : IDisposable
     public NativeArray<Vector2> GridPos;
 
     /// <summary>
-    /// 밀도장(grid-averaged O(N)) 분리 전용 팀별 cell 격자다(길이 = teamCount * densityCellsPerTeam). 인덱스는 teamBase + cy*cols + cx.
-    /// 밀도장 분리 ON일 때만 직렬 프리패스가 tick마다 0으로 비운 뒤 같은 팀 인원 수를 누적하고, SteeringForceJob이 read-only로 gradient를 읽는다.
-    /// </summary>
-    public NativeArray<int> DensityField;
-
-    /// <summary>
     /// agent capacity와 team 수에 맞춰 모든 Persistent NativeArray를 미리 할당한다.
     /// 도중 할당이 실패하면 이미 만든 배열을 해제하고 예외를 다시 던진다(부분 할당 누수 방지).
     /// </summary>
-    public CrowdSimState(int agentCapacity, int teamCount, int densityFieldLength)
+    public CrowdSimState(int agentCapacity, int teamCount)
     {
         try
         {
@@ -117,7 +111,6 @@ public sealed class CrowdSimState : IDisposable
             GridCellX = new NativeArray<int>(agentCapacity, Allocator.Persistent);
             GridCellY = new NativeArray<int>(agentCapacity, Allocator.Persistent);
             GridPos = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
-            DensityField = new NativeArray<int>(densityFieldLength, Allocator.Persistent);
         }
         catch
         {
@@ -216,11 +209,6 @@ public sealed class CrowdSimState : IDisposable
         if (GridPos.IsCreated)
         {
             GridPos.Dispose();
-        }
-
-        if (DensityField.IsCreated)
-        {
-            DensityField.Dispose();
         }
     }
 }

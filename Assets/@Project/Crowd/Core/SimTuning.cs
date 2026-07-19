@@ -66,16 +66,4 @@ public struct SimTuning
     /// </summary>
     [UnityEngine.Tooltip("전투 전향율 flat 토글. OFF(false)=기존 규칙(rate = ConvertPerSecond * clamp01(접촉 pair 수 / PairNormalizer)). ON(true)=접촉이 하나라도 있으면 clamp01=1.0로 보고 최대 전향율(ConvertPerSecond)을 적용하며 접촉 pair 수 계수를 계산하지 않는다.")]
     public bool CombatFlatConvertRate;
-
-    /// <summary>
-    /// 팔로워 분리를 pairwise 이웃 합 대신 팀별 밀도장(grid-averaged, O(N))의 음의 gradient로 근사하는 토글이다. 기본값 false(기존 pairwise 분리).
-    /// </summary>
-    [UnityEngine.Tooltip("팔로워 분리 밀도장 토글. OFF(false)=기존 pairwise 분리(같은 팀 이웃 쌍마다 선형 반발을 합산). ON(true)=팀별 cell(=SeparationRadius) 밀도(같은 팀 인원 수) 중앙차분 gradient의 음수로 분리 벡터를 근사(O(N)). 산출된 분리 벡터만 다르고 이후 blend/clamp/가속 제한은 동일.")]
-    public bool DensityFieldSeparation;
-
-    /// <summary>
-    /// 밀도장 분리의 gradient→힘 변환 gain이다. source of truth는 GameConfigSO이며 기본값 0.5. struct-default 0이면 밀도장 분리 힘이 사라진다.
-    /// </summary>
-    [UnityEngine.Tooltip("밀도장 분리 힘의 gain. cell 밀도 중앙차분 gradient에 곱해 분리 벡터를 만든다(DensityFieldSeparation ON일 때만). source of truth는 GameConfigSO.")]
-    public float DensityFieldGain;
 }

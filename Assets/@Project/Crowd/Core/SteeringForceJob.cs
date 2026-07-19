@@ -49,18 +49,6 @@ public struct SteeringForceJob : IJobParallelFor
     public int SepBudget;     // _config.Sim.SeparationVisitBudget
     public float Dt;
 
-    // 밀도장(grid-averaged O(N)) 분리 토글/파라미터. UseDensityField==0이면 기존 pairwise 분리(OFF 경로, byte-identical),
-    // !=0이면 팀별 밀도장(cell=SepRadius, cell당 같은 팀 인원 수)의 음의 중앙차분 gradient로 분리 벡터를 근사한다.
-    public int UseDensityField;
-    [ReadOnly] public NativeArray<int> DensityField; // 인덱스: teamBase + cy*Cols + cx. OFF여도 유효 배열이 배선되며 Execute가 읽지 않는다.
-    public int DensityCols;
-    public int DensityRows;
-    public float DensityOriginX;
-    public float DensityOriginZ;
-    public float DensityInvCellSize;
-    public int DensityCellsPerTeam;
-    public float DensityFieldGain;
-
     // 출력: 이동 이전 명령 속도(직렬 루프 velocity 적분 직후 값). 인덱스는 팔로워 슬롯 k(= parallel-for 인덱스)라 parallel-for 제약을 만족한다.
     public NativeArray<Vector2> CommandedVelocity;
 
@@ -82,11 +70,8 @@ public struct SteeringForceJob : IJobParallelFor
             desired = (toCenter / d) * (arriveSpeed * CohesionGain);
         }
 
-        // (b) 같은 팀 분리. UseDensityField==0(기본/OFF)이면 아래 pairwise 블록을 그대로(byte-identical) 실행하고,
-        //     !=0(ON)이면 팀별 밀도장 gradient로 분리 벡터만 다르게 근사한다. 이후 (c)/(d) blend·clamp·적분은 두 경로 공유.
+        // (b) 같은 팀 분리.
         Vector2 separation = Vector2.zero;
-        if (UseDensityField == 0)
-        {
         // grid 열거를 QueryCircle(예산 없음)/QueryCircleCapped(예산>0)와 동일 순서로 재현하고,
         // 방출된 이웃마다 즉시 분리 기여를 누적한다(직렬의 "리스트 방출 → 순서대로 합"과 동일 결과).
         if (GridCount != 0 && QueryRadius >= 0f)
@@ -152,18 +137,6 @@ public struct SteeringForceJob : IJobParallelFor
                 }
             }
         }
-        }
-        else
-        {
-            // 밀도장(grid-averaged) 분리: 자기 cell 밀도의 음의 gradient(중앙차분)를 분리 방향으로 쓴다.
-            // 각 tap은 마지막 도달 가능 cell로 clamp(clamp-to-edge/Neumann)한다. Pos[index].y == world Z.
-            int cx = Mathf.Clamp(Mathf.FloorToInt((Pos[index].x - DensityOriginX) * DensityInvCellSize), 0, DensityCols - 1);
-            int cy = Mathf.Clamp(Mathf.FloorToInt((Pos[index].y - DensityOriginZ) * DensityInvCellSize), 0, DensityRows - 1);
-            int teamBase = t * DensityCellsPerTeam;
-            int gx = DensitySample(teamBase, cx + 1, cy) - DensitySample(teamBase, cx - 1, cy);
-            int gy = DensitySample(teamBase, cx, cy + 1) - DensitySample(teamBase, cx, cy - 1);
-            separation = new Vector2(-gx, -gy) * DensityFieldGain;
-        }
 
         // (c) 분리 기여를 maxSpeed로 상한(방향 보존)한 뒤 desired에 더하고, desired 전체를 maxSpeed로 클램프한다.
         Vector2 sepForce = separation * SepPush;
@@ -194,13 +167,5 @@ public struct SteeringForceJob : IJobParallelFor
         velocity += dv;
 
         CommandedVelocity[k] = velocity; // 이동 이전 명령 속도. 직렬 이동 단계가 같은 k 순서로 읽어 CC/SDF 이동을 수행한다.
-    }
-
-    // 밀도장 중앙차분 tap. x/y 인덱스를 마지막 도달 가능 cell로 clamp(clamp-to-edge/Neumann)해 out-of-range/padding cell을 절대 읽지 않는다.
-    private int DensitySample(int teamBase, int x, int y)
-    {
-        int cx = Mathf.Clamp(x, 0, DensityCols - 1);
-        int cy = Mathf.Clamp(y, 0, DensityRows - 1);
-        return DensityField[teamBase + cy * DensityCols + cx];
     }
 }
