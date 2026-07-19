@@ -22,6 +22,10 @@ MonoBehaviour:
   slotSpacing: 1
   separationRadius: 2
   separationPush: 3
+  separationMode: 0
+  overcrowdThreshold: 8
+  radialSeparationGain: 2
+  separationTangentialFraction: 0
   groundY: 0.5
   followerCohesionGain: 1
   followerArriveRadius: 1
