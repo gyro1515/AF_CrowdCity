@@ -683,7 +683,8 @@ public sealed class CrowdRoot : MonoBehaviour
             // 직전 프레임 RenderInterpolate가 덮어쓴 시각 위치를 논리 위치(_visualCur)로 되돌린다.
             // 이후 모든 transform 읽기/CC.Move/미러링이 항상 논리 위치를 보게 한다(결정성 보장).
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Restore);
-            for (int i = 0; i < _buffer.Count; i++) _transformByAgent[i].position = _visualCur[i];
+            // S4a: SDF 경로에서는 팔로워/중립 transform을 되돌리지 않는다(이동이 buffer.Pos를 직접 저작하고 sim이 transform을 읽지 않으므로). 리더는 항상 되돌린다(MoveLeaders/카메라/HUD가 live 리더 transform을 읽음). !sdfActive면 전 agent 복원(CC 경로가 transform 사용).
+            for (int i = 0; i < _buffer.Count; i++) { if (!sdfActive || _buffer.IsLeader[i]) _transformByAgent[i].position = _visualCur[i]; }
             CrowdSimProfiler.End(CrowdSimProfiler.Seg.Restore);
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Heading);
             UpdateHeadings(dt);                                                          // ②
@@ -1245,9 +1246,8 @@ public sealed class CrowdRoot : MonoBehaviour
 
                 if (sdfActive)
                 {
-                    // 이동 job이 쓸 현재 위치를 원본 직렬 루프와 동일 원천(followerTransform.position)에서 캡처한다(힘 job은 transform을 건드리지 않아 이동까지 불변).
-                    Vector3 followerPos = _transformByAgent[followerIndex].position;
-                    _simState.MovePositionCurrent[followerCount] = new Vector2(followerPos.x, followerPos.z);
+                    // 이동 job이 쓸 현재 위치를 tick 시작 PrevPos에서 취한다(Restore 후 transform.position과 bit-identical, S4a: SDF 경로 transform 읽기 제거).
+                    _simState.MovePositionCurrent[followerCount] = new Vector2(_simState.PrevPos[followerIndex].x, _simState.PrevPos[followerIndex].y);
                 }
 
                 if (leaderRadial)
@@ -1505,8 +1505,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
                 int k = neutralCount;
                 _simState.NeutralList[k] = i;
-                Vector3 cur = _transformByAgent[i].position; // 이동 전 현재 위치(job은 transform을 건드리지 않아 제시 패스까지 불변).
-                _simState.NeutralMovePositionCurrent[k] = new Vector2(cur.x, cur.z);
+                _simState.NeutralMovePositionCurrent[k] = new Vector2(_simState.PrevPos[i].x, _simState.PrevPos[i].y); // 이동 전 위치를 PrevPos에서 취한다(Restore 후 transform.position과 bit-identical, S4a).
                 float rad = _wanderHeadingDeg[i] * Mathf.Deg2Rad;
                 Vector3 d = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (wanderSpeed * dt); // Mathf.Sin/Cos는 여기(직렬)서 산출, job 안이 아님.
                 _simState.NeutralCommandedDelta[k] = new Vector2(d.x, d.z);
@@ -1609,7 +1608,8 @@ public sealed class CrowdRoot : MonoBehaviour
         _wanderTimer[agentIndex] = Mathf.Lerp(
             _config.WanderRepickMinSeconds, _config.WanderRepickMaxSeconds, (float)_rng.NextDouble());
 
-        Vector3 origin = _transformByAgent[agentIndex].position + Vector3.up * WanderRayHeight;
+        // S4a: SDF 경로가 중립 transform을 더는 Restore하지 않으므로 raycast 원점을 PrevPos에서 취한다(양 경로 모두 Restore 후 transform.position과 bit-identical).
+        Vector3 origin = new Vector3(_simState.PrevPos[agentIndex].x, _groundY, _simState.PrevPos[agentIndex].y) + Vector3.up * WanderRayHeight;
         for (int attempt = 0; attempt < WanderRepickTries; attempt++)
         {
             float heading = (float)(_rng.NextDouble() * 360.0);
