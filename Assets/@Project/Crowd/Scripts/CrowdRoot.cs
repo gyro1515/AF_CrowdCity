@@ -676,6 +676,10 @@ public sealed class CrowdRoot : MonoBehaviour
             // 이 스냅샷을 보게 해, 이후 단계가 이동 중 buffer.Pos를 저작하더라도 그 읽기가 오염되지 않게 한다.
             NativeArray<Vector2>.Copy(_buffer.Pos, _simState.PrevPos, _buffer.Count);
 
+            // S3 GUARD 0: SDF 이동 경로 활성 여부를 tick당 1회만 캡처한다. 이동 제시 저작(SteerFollowersAndNeutrals)과
+            // 미러 모드(MirrorPositionsToBuffer)가 반드시 같은 플래그를 보게 해, 두 단계가 서로 다른 경로로 갈리는 것을 막는다.
+            bool sdfActive = IsSdfActive;
+
             // 직전 프레임 RenderInterpolate가 덮어쓴 시각 위치를 논리 위치(_visualCur)로 되돌린다.
             // 이후 모든 transform 읽기/CC.Move/미러링이 항상 논리 위치를 보게 한다(결정성 보장).
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Restore);
@@ -687,9 +691,9 @@ public sealed class CrowdRoot : MonoBehaviour
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.LeaderMove);
             MoveLeaders(dt);                                                             // ③
             CrowdSimProfiler.End(CrowdSimProfiler.Seg.LeaderMove);
-            SteerFollowersAndNeutrals(dt);                                               // ④ (FollowerSteer/NeutralMove는 내부에서 계측)
+            SteerFollowersAndNeutrals(dt, sdfActive);                                    // ④ (FollowerSteer/NeutralMove는 내부에서 계측)
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Mirror);
-            MirrorPositionsToBuffer();                                                   // ⑤
+            MirrorPositionsToBuffer(sdfActive);                                          // ⑤
             CrowdSimProfiler.End(CrowdSimProfiler.Seg.Mirror);
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.GridRebuild);
             _grid.Rebuild(_buffer);                                                      // ⑥
@@ -1162,7 +1166,8 @@ public sealed class CrowdRoot : MonoBehaviour
     }
 
     // ④ 팔로워를 가속 제한 arrive 조향으로 리더 뒤 blob에 모으고(CC.Move로 충돌), 중립을 배회시킨다.
-    private void SteerFollowersAndNeutrals(float dt)
+    // sdfActive는 SimTick이 tick당 1회 캡처해 넘긴 플래그다(미러 모드와 반드시 동일한 값).
+    private void SteerFollowersAndNeutrals(float dt, bool sdfActive)
     {
         CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.FollowerSteer);
         float sepRadius = _config.SeparationRadius;
@@ -1181,7 +1186,7 @@ public sealed class CrowdRoot : MonoBehaviour
         //
         // 이동(MOVE): SDF 경로 활성(_useSdfSolver ON + WallField 로드)이면 순수 SDF 수학이라 FollowerSdfMoveJob으로 병렬화한다(read-only 조회, 자기 슬롯만 쓰기).
         //    CC fallback은 CharacterController.Move가 main-thread 물리라 병렬화하지 않고 기존 직렬 이동을 그대로 유지한다.
-        bool sdfActive = IsSdfActive;
+        //    sdfActive는 SimTick이 캡처해 파라미터로 넘긴다(GUARD 0: 미러 모드와 동일 플래그).
 
         // LeaderRadial 분리 모드일 때만 O(N) 프리컴퓨트(팀 무리 중심 + per-bucket per-team 점유)를 돌린다. Pairwise는 이 블록을 전부 건너뛴다(추가 O(N) 비용 0).
         bool leaderRadial = _config.CrowdSeparationMode == GameConfigSO.SeparationMode.LeaderRadial;
@@ -1356,16 +1361,18 @@ public sealed class CrowdRoot : MonoBehaviour
                 {
                     int index = followerIndices[f];
                     Transform followerTransform = _transformByAgent[index];
-                    _visualPrev[index] = followerTransform.position; // prev = 이동 전 논리 위치.
 
                     Vector2 finalXZ = _simState.MovePositionNext[followerSlot];
                     Vector2 velocity = _simState.MoveVelocityOut[followerSlot];
                     followerSlot++;
 
-                    // job이 해소·clamp한 위치를 그대로 적용한다(원본의 조건부 clamp-write 두 분기가 낳는 finalPos 값과 동일: 항상 (x, groundY, z)).
-                    Vector3 finalPos = new Vector3(finalXZ.x, _groundY, finalXZ.y);
-                    followerTransform.position = finalPos;
-                    _visualCur[index] = finalPos; // cur = 이동+clamp 후 논리 위치.
+                    // S3: 이동 결과(job이 해소·clamp한 위치, 항상 (x, groundY, z))를 buffer.Pos에 직접 저작한다. SDF 경로는
+                    // transform을 미러링하지 않으므로 여기서 transform.position은 쓰지 않는다(RenderInterpolate가 렌더 프레임에만 쓴다).
+                    // finalXZ는 예전에 transform에 쓰던 XZ와 동일하고, _visualPrev는 이번 tick 시작의 PrevPos(=직전 tick 미러 위치,
+                    // Restore가 transform에 되돌린 값과 bit-identical)로 만든다.
+                    _buffer.Pos[index] = finalXZ;
+                    _visualPrev[index] = new Vector3(_simState.PrevPos[index].x, _groundY, _simState.PrevPos[index].y); // prev = 이동 전 논리 위치.
+                    _visualCur[index] = new Vector3(finalXZ.x, _groundY, finalXZ.y); // cur = 이동+clamp 후 논리 위치.
                     _followerVelocity[index] = velocity;
 
                     float speed = velocity.magnitude;
@@ -1541,14 +1548,14 @@ public sealed class CrowdRoot : MonoBehaviour
             for (int k = 0; k < neutralCount; k++)
             {
                 int i = _simState.NeutralList[k];
-                Transform neutralTransform = _transformByAgent[i];
-                _visualPrev[i] = neutralTransform.position; // prev = 이동 전 논리 위치(job이 transform을 건드리지 않아 아직 이동 전).
 
                 Vector2 fx = _simState.NeutralMovePositionNext[k];
-                // job이 해소·clamp한 위치를 그대로 적용한다(원본의 조건부 clamp-write 두 분기가 낳는 위치 값과 동일: 항상 (x, groundY, z)).
-                neutralTransform.position = new Vector3(fx.x, _groundY, fx.y);
-
-                _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
+                // S3: 이동 결과(job이 해소·clamp한 위치, 항상 (x, groundY, z))를 buffer.Pos에 직접 저작한다. SDF 경로는
+                // transform을 미러링하지 않으므로 여기서 transform.position은 쓰지 않는다(RenderInterpolate가 렌더 프레임에만 쓴다).
+                // _visualPrev는 이번 tick 시작의 PrevPos(=직전 tick 미러 위치, Restore가 transform에 되돌린 값과 bit-identical)로 만든다.
+                _buffer.Pos[i] = new Vector2(fx.x, fx.y);
+                _visualPrev[i] = new Vector3(_simState.PrevPos[i].x, _groundY, _simState.PrevPos[i].y); // prev = 이동 전 논리 위치.
+                _visualCur[i] = new Vector3(fx.x, _groundY, fx.y); // cur = 이동+clamp 후 논리 위치.
                 // GPU phase 적분에 쓰는 저장 속도를 CPU 경로(Human.SetHeadingAndSpeed의 Animator.speed clamp)와 동일하게 clamp해
                 // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
                 _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
@@ -1648,15 +1655,37 @@ public sealed class CrowdRoot : MonoBehaviour
         }
     }
 
-    // ⑤ Unity transform이 저작한 위치를 buffer로 미러링한다(buffer는 team/IsLeader의 최종 권한).
-    private void MirrorPositionsToBuffer()
+    // ⑤ 이동 결과를 buffer로 반영한다(buffer는 team/IsLeader의 최종 권한).
+    // !sdfActive(CC 경로): 이동이 모든 agent의 transform을 저작하므로 전 agent의 transform XZ를 미러링한다(기존 경로, byte-unchanged).
+    // sdfActive(SDF 경로): 팔로워/중립은 이동 단계가 buffer.Pos를 이미 직접 저작했으므로, 여기서는 live 리더의 transform XZ만
+    // 미러링한다(MoveLeaders가 transform을 저작한 것과 정확히 같은 집합). 탈락 팀(LeaderAgentIndex==-1)은 건너뛴다.
+    private void MirrorPositionsToBuffer(bool sdfActive)
     {
-        int agentCount = _buffer.Count;
         NativeArray<Vector2> bufferPos = _buffer.Pos;
-        for (int i = 0; i < agentCount; i++)
+        if (!sdfActive)
         {
-            Vector3 pos = _transformByAgent[i].position;
-            bufferPos[i] = new Vector2(pos.x, pos.z);
+            int agentCount = _buffer.Count;
+            for (int i = 0; i < agentCount; i++)
+            {
+                Vector3 pos = _transformByAgent[i].position;
+                bufferPos[i] = new Vector2(pos.x, pos.z);
+            }
+
+            return;
+        }
+
+        // SDF 경로: MoveLeaders와 동일한 순회/집합(live 팀)의 리더 transform XZ만 미러링한다. 팔로워/중립 인덱스는 이동 단계가 직접 저작했으므로 건드리지 않는다.
+        for (int t = 0; t < _teamCount; t++)
+        {
+            CrowdModel model = _crowds[t];
+            if (model.Eliminated || model.LeaderAgentIndex < 0)
+            {
+                continue;
+            }
+
+            int leaderIndex = model.LeaderAgentIndex;
+            Vector3 pos = _transformByAgent[leaderIndex].position;
+            bufferPos[leaderIndex] = new Vector2(pos.x, pos.z);
         }
     }
 
