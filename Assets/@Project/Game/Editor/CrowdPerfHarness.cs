@@ -436,23 +436,32 @@ public sealed class CrowdPerfDriver : MonoBehaviour
         cam.targetTexture = prevTarget;
     }
 
-    // 스폰된 Human clone(rig 파괴돼도 root transform은 생존) 위치로 크라우드 bounds를 구해 카메라를 3/4 뷰로 배치한다.
+    // 크라우드 bounds를 구해 카메라를 3/4 뷰로 배치한다. GPU+SDF 경로에서 팔로워/중립 transform이 동결되므로 네이티브 렌더 위치 기반
+    // bounds(warmup의 RenderInterpolate가 채운 _visualRender)를 우선 쓰고, 미가용이면 기존 transform 기반(rig 파괴돼도 root transform은 생존) 계산으로 폴백한다.
     private static void FrameCameraOnCrowd(Camera cam, CrowdRoot crowd)
     {
-        Human[] humans = crowd.GetComponentsInChildren<Human>(true);
         Vector3 center;
         float radius;
-        if (humans.Length == 0)
+        if (crowd.TryGetCrowdRenderBounds(out Bounds nb))
         {
-            center = Vector3.zero;
-            radius = 40f;
+            center = nb.center;
+            radius = Mathf.Max(8f, Mathf.Max(nb.extents.x, nb.extents.z));
         }
         else
         {
-            Bounds b = new Bounds(humans[0].transform.position, Vector3.zero);
-            for (int i = 1; i < humans.Length; i++) b.Encapsulate(humans[i].transform.position);
-            center = b.center;
-            radius = Mathf.Max(8f, Mathf.Max(b.extents.x, b.extents.z));
+            Human[] humans = crowd.GetComponentsInChildren<Human>(true);
+            if (humans.Length == 0)
+            {
+                center = Vector3.zero;
+                radius = 40f;
+            }
+            else
+            {
+                Bounds b = new Bounds(humans[0].transform.position, Vector3.zero);
+                for (int i = 1; i < humans.Length; i++) b.Encapsulate(humans[i].transform.position);
+                center = b.center;
+                radius = Mathf.Max(8f, Mathf.Max(b.extents.x, b.extents.z));
+            }
         }
 
         Vector3 lookAt = center + Vector3.up * (radius * 0.15f);

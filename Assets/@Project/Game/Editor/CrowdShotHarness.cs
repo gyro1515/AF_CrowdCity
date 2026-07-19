@@ -134,6 +134,9 @@ public static class CrowdShotHarness
 
                 DriveSim(crowd, ticks);
 
+                // 프레이밍 전에 _visualRender를 한 번 채운다: GPU+SDF 경로에서 팔로워/중립 transform이 동결되므로(DriveSim은 RenderInterpolate를 부르지 않음)
+                // ComputeCrowdBounds가 stale transform 대신 최신 네이티브 렌더 위치로 프레임하게 한다.
+                crowd.RenderInterpolate(1f);
                 Bounds b = ComputeCrowdBounds(crowd);
                 center = b.center;
                 radius = Mathf.Max(8f, Mathf.Max(b.extents.x, b.extents.z));
@@ -230,9 +233,16 @@ public static class CrowdShotHarness
         }
     }
 
-    // 스폰된 Human clone 위치로 크라우드 XZ bounds를 구한다(카메라 프레이밍용). groundY 근처 얇은 슬래브.
+    // 크라우드 XZ bounds를 구한다(카메라 프레이밍용). GPU+SDF 경로에서 팔로워/중립 transform이 동결되므로
+    // 네이티브 렌더 위치 기반 bounds(RenderInterpolate가 채운 _visualRender)를 우선 쓰고, 미가용(미스폰/렌더 이전)이면
+    // 기존 transform 기반 계산으로 폴백한다(groundY 근처 얇은 슬래브).
     private static Bounds ComputeCrowdBounds(CrowdRoot crowd)
     {
+        if (crowd.TryGetCrowdRenderBounds(out Bounds nativeBounds))
+        {
+            return nativeBounds;
+        }
+
         Human[] humans = crowd.GetComponentsInChildren<Human>(true);
         if (humans.Length == 0)
         {

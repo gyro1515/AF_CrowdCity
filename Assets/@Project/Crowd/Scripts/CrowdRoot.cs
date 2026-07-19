@@ -117,6 +117,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private CrowdRenderer.InstanceData[] _instanceScratch; // GPU 업로드용 per-frame 스크래치(GPU 활성 시에만 할당).
     private int[] _leaderScratch;      // 리더 agent index 스크래치(그림자 draw용, teamCount 이하).
     private bool _gpuRenderActive;     // CrowdRenderer.Init 성공 + 스위치 ON일 때만 true. false면 SMR 경로.
+    private bool _visualRenderFilled;  // RenderInterpolate가 _visualRender를 최소 1회 채웠는지. TryGetCrowdRenderBounds가 렌더 이전(전부 0) bounds를 반환하지 않게 하는 가드.
     private Bounds _crowdWorldBounds;  // 인스턴스 draw의 world bounds(region + 유닛 높이). SpawnInitial에서 계산.
 
     private IEventPublisher<CrowdCountChangedEvent> _countPublisher;
@@ -733,24 +734,62 @@ public sealed class CrowdRoot : MonoBehaviour
         int count = _buffer.Count;
 
         // Playing이 아니면 tick이 prev/cur를 더 이상 갱신하지 않아 alpha가 마지막 tick의 prev→cur 구간을 계속 sawtooth해 무리가 진동한다. 논리 위치(_visualCur)로 스냅해 정적으로 고정한다(시각 전용).
+        // S4b2: _visualRender는 항상 채운다(아래 RenderGpuCrowd와 TryGetCrowdRenderBounds가 같은 값을 읽는다). transform.position 쓰기만 게이트한다.
+        // GPU 활성 시 팔로워/중립은 _visualRender/_visualYaw로 렌더되고 rig가 파괴돼 transform이 불필요하므로 리더만 쓴다(카메라/HUD가 리더 transform을 읽음).
+        // SMR 폴백(!_gpuRenderActive)이면 SMR이 transform으로 렌더하므로 전원 쓴다.
+        // (의도된 stranded CC) GPU+SDF 경로에서 팔로워/중립 transform이 동결되면 그들의 베이크 CharacterController도 stale 위치에 남는다. 안전하다:
+        // 런타임 물리 질의가 이 유닛 CC의 위치에 의존하지 않는다(배회/AI raycast는 Unit 레이어 제외, CC.Move는 !sdfActive 폴백에서만 실행). 물리 broadphase 정리/CC 제거는 향후 M-sim-3 패스로 미룬다.
         if (_matchState != MatchState.Playing)
         {
-            for (int i = 0; i < count; i++) _transformByAgent[i].position = _visualRender[i] = _visualCur[i];
+            for (int i = 0; i < count; i++)
+            {
+                _visualRender[i] = _visualCur[i];
+                if (!_gpuRenderActive || _buffer.IsLeader[i]) _transformByAgent[i].position = _visualRender[i];
+            }
         }
         else
         {
             for (int i = 0; i < count; i++)
             {
-                _transformByAgent[i].position = _visualRender[i] = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
+                _visualRender[i] = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
+                if (!_gpuRenderActive || _buffer.IsLeader[i]) _transformByAgent[i].position = _visualRender[i];
             }
         }
 
-        // GPU-anim Stage 1 Chunk B: transform(카메라/HUD가 읽는 리더 포함)은 위에서 그대로 갱신했고, 같은 렌더 위치에서
+        _visualRenderFilled = true; // TryGetCrowdRenderBounds 가드: _visualRender가 이제 유효하다.
+
+        // GPU-anim Stage 1 Chunk B: 리더 transform(카메라/HUD)은 위에서 갱신했고, 같은 _visualRender 위치에서
         // GPU 인스턴스 버퍼를 병렬로 채워 draw한다. 스위치 OFF/미초기화면 _gpuRenderActive=false라 no-op다.
         if (_gpuRenderActive)
         {
             RenderGpuCrowd(count);
         }
+    }
+
+    /// <summary>
+    /// 네이티브 렌더 위치(_visualRender)로 크라우드의 world Bounds를 계산해 out으로 돌려준다(Editor harness 카메라 프레이밍 전용).
+    /// GPU+SDF 경로에서 팔로워/중립 transform이 동결돼도 프레이밍이 stale transform 대신 최신 렌더 위치를 보게 한다.
+    /// _visualRender는 RenderInterpolate가 채우므로 최소 1회 렌더 이후에만 true를 돌려준다. 미스폰/렌더 이전이면 false를
+    /// 돌려주고 호출측이 transform 폴백을 쓴다. 시뮬 상태를 바꾸지 않는 읽기 전용 관찰 API다.
+    /// </summary>
+    public bool TryGetCrowdRenderBounds(out Bounds bounds)
+    {
+        bounds = default;
+        if (!_visualRenderFilled || _visualRender == null || _buffer == null || _buffer.Count <= 0)
+        {
+            return false;
+        }
+
+        Vector3 min = _visualRender[0];
+        Vector3 max = _visualRender[0];
+        for (int i = 1; i < _buffer.Count; i++)
+        {
+            min = Vector3.Min(min, _visualRender[i]);
+            max = Vector3.Max(max, _visualRender[i]);
+        }
+
+        bounds = new Bounds((min + max) * 0.5f, max - min);
+        return true;
     }
 
     /// <summary>
