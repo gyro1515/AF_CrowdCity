@@ -103,6 +103,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private NativeArray<Vector2> _followerVelocity; // 팔로워 조향의 현재 속도 상태(agent index별). 가속 제한 적분에 쓴다.
     private Vector3[] _visualPrev;       // 렌더 보간용 직전 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
     private Vector3[] _visualCur;        // 렌더 보간용 최신 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
+    private Vector3[] _visualRender;     // 이번 프레임 보간 결과 렌더 위치(agent index별). RenderGpuCrowd가 transform 재읽기 없이 재사용. 시각 전용, 커널/미러 미참조.
     private NativeArray<float> _leaderYawDeg;       // team별 리더의 현재 실제 yaw(도).
     private NativeArray<float> _wanderHeadingDeg;   // 중립 agent의 배회 heading(도).
     private NativeArray<float> _wanderTimer;        // 중립 agent의 방향 재선택 잔여 시간(초).
@@ -307,6 +308,7 @@ public sealed class CrowdRoot : MonoBehaviour
         _wanderTimer = _simState.WanderTimer;
         _visualPrev = new Vector3[_agentCapacity];
         _visualCur = new Vector3[_agentCapacity];
+        _visualRender = new Vector3[_agentCapacity];
         _visualSpeed01 = new float[_agentCapacity]; // 시각 전용(기본 0=정지 포즈, 첫 Playing 틱에서 갱신).
         _phase01 = new float[_agentCapacity];
         _lastPublishedCounts = new int[_teamCount];
@@ -722,13 +724,13 @@ public sealed class CrowdRoot : MonoBehaviour
         // Playing이 아니면 tick이 prev/cur를 더 이상 갱신하지 않아 alpha가 마지막 tick의 prev→cur 구간을 계속 sawtooth해 무리가 진동한다. 논리 위치(_visualCur)로 스냅해 정적으로 고정한다(시각 전용).
         if (_matchState != MatchState.Playing)
         {
-            for (int i = 0; i < count; i++) _transformByAgent[i].position = _visualCur[i];
+            for (int i = 0; i < count; i++) _transformByAgent[i].position = _visualRender[i] = _visualCur[i];
         }
         else
         {
             for (int i = 0; i < count; i++)
             {
-                _transformByAgent[i].position = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
+                _transformByAgent[i].position = _visualRender[i] = Vector3.Lerp(_visualPrev[i], _visualCur[i], alpha);
             }
         }
 
@@ -859,7 +861,7 @@ public sealed class CrowdRoot : MonoBehaviour
             _phase01[i] = p;
 
             Transform tr = _transformByAgent[i];
-            Vector3 pos = tr.position;                       // 위에서 쓴 렌더 위치(Lerp 또는 snap)를 그대로 읽는다(CPU 경로와 동일).
+            Vector3 pos = _visualRender[i];                  // 위에서 쓴 렌더 위치(Lerp 또는 snap)를 그대로 읽는다(transform 재읽기 없이 CPU 경로와 동일).
             float yawRad = tr.eulerAngles.y * Mathf.Deg2Rad; // yaw는 보간하지 않는다(SMR 경로도 회전 미보간).
 
             CrowdRenderer.InstanceData d;
