@@ -104,6 +104,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private Vector3[] _visualPrev;       // 렌더 보간용 직전 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
     private Vector3[] _visualCur;        // 렌더 보간용 최신 sim step 논리 위치(agent index별). 시각 전용, 커널/미러 미참조.
     private Vector3[] _visualRender;     // 이번 프레임 보간 결과 렌더 위치(agent index별). RenderGpuCrowd가 transform 재읽기 없이 재사용. 시각 전용, 커널/미러 미참조.
+    private float[] _visualYaw;          // 렌더용 정규화 yaw(도, agent index별). SetHeadingAndSpeed와 동일 값을 저장해 RenderGpuCrowd가 transform 회전 재읽기 없이 재사용. 시각 전용, 커널/미러 미참조.
     private NativeArray<float> _leaderYawDeg;       // team별 리더의 현재 실제 yaw(도).
     private NativeArray<float> _wanderHeadingDeg;   // 중립 agent의 배회 heading(도).
     private NativeArray<float> _wanderTimer;        // 중립 agent의 방향 재선택 잔여 시간(초).
@@ -309,6 +310,7 @@ public sealed class CrowdRoot : MonoBehaviour
         _visualPrev = new Vector3[_agentCapacity];
         _visualCur = new Vector3[_agentCapacity];
         _visualRender = new Vector3[_agentCapacity];
+        _visualYaw = new float[_agentCapacity]; // 시각 전용(기본 0=스폰 Quaternion.identity의 eulerAngles.y와 일치).
         _visualSpeed01 = new float[_agentCapacity]; // 시각 전용(기본 0=정지 포즈, 첫 Playing 틱에서 갱신).
         _phase01 = new float[_agentCapacity];
         _lastPublishedCounts = new int[_teamCount];
@@ -869,9 +871,8 @@ public sealed class CrowdRoot : MonoBehaviour
             p -= Mathf.Floor(p); // frac → [0,1)
             _phase01[i] = p;
 
-            Transform tr = _transformByAgent[i];
             Vector3 pos = _visualRender[i];                  // 위에서 쓴 렌더 위치(Lerp 또는 snap)를 그대로 읽는다(transform 재읽기 없이 CPU 경로와 동일).
-            float yawRad = tr.eulerAngles.y * Mathf.Deg2Rad; // yaw는 보간하지 않는다(SMR 경로도 회전 미보간).
+            float yawRad = _visualYaw[i] * Mathf.Deg2Rad;    // 네이티브 yaw(SetHeadingAndSpeed와 동일 값)를 읽는다. yaw는 보간하지 않는다(SMR 경로도 회전 미보간).
 
             CrowdRenderer.InstanceData d;
             d.Pos = pos;
@@ -1162,6 +1163,7 @@ public sealed class CrowdRoot : MonoBehaviour
             _visualCur[index] = _transformByAgent[index].position;
             float leaderSpeed01 = moving ? 1f : 0f;
             _visualSpeed01[index] = leaderSpeed01; // 시각 전용(GPU phase 적분용).
+            _visualYaw[index] = Quaternion.Euler(0f, yaw, 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
             _humanByAgent[index].SetHeadingAndSpeed(yaw, leaderSpeed01);
         }
     }
@@ -1380,12 +1382,15 @@ public sealed class CrowdRoot : MonoBehaviour
                     _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
                     if (speed > 0.001f)
                     {
+                        _visualYaw[index] = Quaternion.Euler(0f, Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
                         human.SetHeadingAndSpeed(
                             Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
                     }
                     else
                     {
-                        human.SetHeadingAndSpeed(followerTransform.eulerAngles.y, 1f);
+                        float headingDeg = _visualYaw[index]; // 정지 시 저장된 yaw 유지(과거 transform.eulerAngles.y 읽기 대체).
+                        _visualYaw[index] = Quaternion.Euler(0f, headingDeg, 0f).eulerAngles.y; // 정규화 재적용(멱등).
+                        human.SetHeadingAndSpeed(headingDeg, 1f);
                     }
                 }
             }
@@ -1467,12 +1472,15 @@ public sealed class CrowdRoot : MonoBehaviour
                     _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
                     if (speed > 0.001f)
                     {
+                        _visualYaw[index] = Quaternion.Euler(0f, Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
                         human.SetHeadingAndSpeed(
                             Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
                     }
                     else
                     {
-                        human.SetHeadingAndSpeed(followerTransform.eulerAngles.y, 1f);
+                        float headingDeg = _visualYaw[index]; // 정지 시 저장된 yaw 유지(과거 transform.eulerAngles.y 읽기 대체).
+                        _visualYaw[index] = Quaternion.Euler(0f, headingDeg, 0f).eulerAngles.y; // 정규화 재적용(멱등).
+                        human.SetHeadingAndSpeed(headingDeg, 1f);
                     }
                 }
             }
@@ -1558,6 +1566,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 // GPU phase 적분에 쓰는 저장 속도를 CPU 경로(Human.SetHeadingAndSpeed의 Animator.speed clamp)와 동일하게 clamp해
                 // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
                 _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
+                _visualYaw[i] = Quaternion.Euler(0f, _wanderHeadingDeg[i], 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
                 _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
             }
         }
@@ -1595,6 +1604,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 // GPU phase 적분에 쓰는 저장 속도를 CPU 경로(Human.SetHeadingAndSpeed의 Animator.speed clamp)와 동일하게 clamp해
                 // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
                 _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
+                _visualYaw[i] = Quaternion.Euler(0f, _wanderHeadingDeg[i], 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
                 _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
             }
         }
