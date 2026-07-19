@@ -1,5 +1,44 @@
 # Crowd Sim CPU 최적화 — 실행 핸드오프 (콜드스타트용)
 
+---
+
+## 🔄 최신 상태 업데이트 (2026-07-19) — 크라우드 성능 세션 결과 + 남은 작업
+
+> 이 절이 현재 상태의 정본이다(2026-07-19 성능 세션 이후). 아래 2026-07-17 마커/게이트/계획은 배경·상세 참조용으로 남겨둔다.
+
+브랜치: `feat/crowd-sdf-perf` (다른 PC에서 `git fetch && git checkout feat/crowd-sdf-perf && git pull`로 재개)
+
+### 완료 (커밋·푸시됨)
+- Burst 핫잡 활성(FloatMode.Strict): 10k SimTick 22.95→14.04ms (−38.8%)
+- GPU 크라우드 렌더러 토글 → GameConfigSO, 기본 ON (Animator/SMR 제거, 미지원 기기 자동 폴백)
+- 밀도필드 separation: 추가했다가 제거(사용 불가 — 튕김)
+- 설정 기본값: useGpuCrowdRenderer=ON, CombatFlatConvertRate=ON, SeparationVisitBudget=0(캡 되돌림 — 조밀군집 떨림 유발), neutralCount=3000(에디터 60fps), ConvertPerSecond=100
+- DevHudRoot: 개발용 시작 인원 선택 + FPS 오버레이 (게이트: Debug.isDebugBuild && !batchmode) — 빌드에서 인원별 실측
+- 청크(멀티프레임) 스포닝 — 고인원 스폰 프리즈 완화
+- 리더-방사형 separation A/B 토글(SeparationMode, 기본 OFF=Pairwise 바이트동일) — 동작하나 줄무늬, 폴리시 필요
+- 측정/스크린샷 에디터 하네스, CLAUDE.md Codex `< /dev/null` 규칙
+
+### 핵심 현황
+- 10k CPU 시뮬 해결: 14.86ms/tick, 20ms(50Hz) 예산 아래.
+- 에디터 60fps 인원 상한 ≈ 3400 = 렌더-바운드(디메이션 안 된 2964버텍스 메시 × N), 시뮬 아님. 측정 하네스는 GPU 강제동기라 보수적 → 실제 빌드는 더 높을 가능성.
+- 인원 상향 핵심 레버 = 디메이션 렌더 메시(아트).
+- separation 결정성 기준선: OFF/Pairwise 오라클 n=2000 s12345 md5 = 2b3aad7f786004f1185a067bc1b31f4a.
+
+### 남은 작업 (우선순위)
+1. [사용자] Development 빌드 + DevHudRoot FPS로 인원별 실 프레임 측정 → 진짜 파이프라인 60fps 인원 + 시뮬/렌더 병목 판정.
+2. [아트] 디메이션 렌더 메시(~200~500 vert) — 높은 온스크린 인원의 핵심 경로, GPU 렌더러 모바일 출하 게이트.
+3. [시뮬-병목 될 때까지 연기] 리더-방사형 폴리시: (a) 버킷→정확한 셀 점유수 수정(Codex: 해시충돌이 occ 부풀려 오탐 → 줄무늬), (b) T/gain/tangential 튜닝.
+4. [빌드 실측 후] 네이티브 위치 권위 — 틱마다 10k 트랜스폼 왕복(Restore+Mirror) 제거 = 남은 최대 직렬 시뮬 이득(결정성 재기준선 필요).
+5. Scope B: §4 밀스톤 Burst 골든 baseline(확장 스냅샷 필드, 수치 허용오차, 플레이어 AOT 빌드).
+6. 수동 확인: DevHudRoot 버튼/FPS 동작, 청크 스폰 후 튐 없음, GPU 경로 스폰중 pop-in 허용 여부(점진표시로 수정 가능).
+7. 하네스 정리(Shutdown 후 DestroyImmediate — 경미).
+
+### 워크플로우
+- 반복: 최적화 → neutralCount 상향 → 반복. 목표 = 에디터 안정 60fps. ConvertPerSecond=100은 의도된 튜닝.
+- 교차검증: Codex(gpt-5.6-sol ultra) `< /dev/null` 동기 ↔ Claude, 합의까지.
+
+---
+
 ## 🔄 다른 PC 재개 마커 (2026-07-17 업데이트)
 - **기준 커밋(baseline HEAD) = 이 브랜치(`feat/crowd-sdf-perf`)의 최신 push된 커밋** — `origin/feat/crowd-sdf-perf` 에 push 완료(이전 마커의 `fb14a41`에서 진행됨). 다른 PC에서는 `git pull` (branch `feat/crowd-sdf-perf`)로 전부 수신됨. 로컬 미커밋/stash 없음 → 유실 없음.
 - **레이(`Physics.Raycast`) = 벽 판정 용도지만 layermask 버그가 있었고, 이번 세션에 수정 완료.** 두 곳뿐: `Assets/@Project/Crowd/Scripts/RivalAiDriver.cs`(`ApplyWallAvoidance`/`ProbeClearance`, 벽 회피)와 `Assets/@Project/Crowd/Scripts/CrowdRoot.cs:1099`(`RepickWanderHeading`, wander 방향 벽 판정). 용도는 둘 다 벽 판정이지만 **layermask 없이(`Physics.DefaultRaycastLayers`) 쏘고 있어 Unit(crowd) 콜라이더를 벽으로 오판하던 실제 버그였음** — 이전 마커는 레이의 *용도*만 확인하고 layermask를 보지 않아 "이미 정리됨"으로 잘못 판단했다. mask에서 Unit 레이어 제외로 이번 세션에 **FIXED**.
