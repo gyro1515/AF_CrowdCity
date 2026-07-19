@@ -18,10 +18,11 @@ public sealed class Human : MonoBehaviour
     /// <summary>
     /// clone이 활성화된 뒤 CrowdRoot가 호출한다.
     /// SkinnedMeshRenderer와 Animator를 자식에서 찾아 캐시하고 팀 material과 그림자 casting을 적용한 뒤
-    /// 걷기 상태를 무작위 normalized time offset으로 재생한다.
+    /// 걷기 상태를 결정적 normalized time offset(phase01, id 해시)으로 재생한다.
+    /// phase01은 GPU 경로의 phase 시드와 같은 값이라 CPU/GPU 재생 위상이 일치하고, 스폰이 UnityEngine.Random에 의존하지 않는다.
     /// Animator는 editor setup이 아직 적용되지 않았을 수 있으므로 없으면 조용히 건너뛴다.
     /// </summary>
-    public void Init(Material teamMaterial, bool isLeader)
+    public void Init(Material teamMaterial, bool isLeader, float phase01)
     {
         _renderer = GetComponentInChildren<SkinnedMeshRenderer>();
         _animator = GetComponentInChildren<Animator>();
@@ -32,7 +33,7 @@ public sealed class Human : MonoBehaviour
         if (_animator != null)
         {
             // Animator는 활성화 시점에 bind되므로 clone 활성화 이후에 Play해야 유효하다.
-            _animator.Play(WalkStateHash, 0, Random.value);
+            _animator.Play(WalkStateHash, 0, phase01);
             _animator.speed = 0f; // 첫 드래그(Playing) 전까지 정지 포즈; 첫 Playing 틱의 SetHeadingAndSpeed가 재개
         }
     }

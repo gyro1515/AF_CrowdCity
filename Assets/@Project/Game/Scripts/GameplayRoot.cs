@@ -23,6 +23,11 @@ public sealed class GameplayRoot : MonoBehaviour
     private bool _isShutdown;
     private bool _reloadRaised;
 
+    // 인터랙티브 청크 스폰 상태. _spawning 동안 Update는 SimTick/입력/렌더 이전에 반환해 tick을 돌리지 않는다.
+    // 스폰 완료 다음 프레임에 누적된 큰 delta를 1회 폐기(_discardDeltaOnce)해 시뮬 catch-up 폭주를 막는다.
+    private bool _spawning;
+    private bool _discardDeltaOnce;
+
     /// <summary>
     /// session이 Finished 상태일 때 재시작 입력이 들어오면 발생한다.
     /// scene reload 실행은 구독자(GameSceneController)의 책임이며,
@@ -33,9 +38,10 @@ public sealed class GameplayRoot : MonoBehaviour
     /// <summary>
     /// 4개 root를 생성하고 고정된 순서로 초기화한다.
     /// 순서: 4개 root 생성 -> inputRoot -> crowdRoot -> cameraRoot -> hudRoot Initialize
-    /// -> session.Initialize -> C# event binding -> crowdRoot.SpawnInitial
-    /// -> cameraRoot.SetTarget -> hudRoot.BindLeaderLabels.
-    /// 모든 bus 구독이 첫 발행(SpawnInitial) 전에 등록되도록 보장한다.
+    /// -> session.Initialize -> C# event binding -> 스폰(배치=SpawnInitial 동기 / 인터랙티브=BeginChunkedSpawn)
+    /// -> 리더 전용 바인딩(BindLeaders: cameraRoot.SetTarget + hudRoot.BindLeaderLabels).
+    /// 리더는 어느 경로든 이 시점에 존재하고, 리더 바인딩은 로스터 무관이라 1회만 수행한다(재바인딩 없음).
+    /// 모든 bus 구독이 첫 발행(스폰의 첫 coalesced publish) 전에 등록되도록 보장한다.
     /// </summary>
     public void Initialize(
         GameSession session,
@@ -79,11 +85,25 @@ public sealed class GameplayRoot : MonoBehaviour
             _session.StateChanged += OnSessionStateChanged;
 
             // ⑤ 첫 스폰. 모든 구독자가 이미 듣고 있는 상태에서 첫 coalesced count 발행이 일어난다.
-            _crowdRoot.SpawnInitial();
+            //    배치모드(오라클/샷 하네스 결정성 계약)는 한 프레임에 동기 스폰한다. 인터랙티브는 첫 프레임 스파이크를
+            //    분산하려 리더까지만 만들고 남은 중립을 여러 프레임에 걸쳐 채운다(Update의 청크 스폰 루프가 이어받는다).
+            if (Application.isBatchMode)
+            {
+                _crowdRoot.SpawnInitial();
 
-            // ⑥ presentation binding.
-            _cameraRoot.SetTarget(_crowdRoot.PlayerLeaderTransform);
-            _hudRoot.BindLeaderLabels(BuildLeaderLabelBindings());
+                // ⑥ 리더 전용 presentation 바인딩(로스터 무관, 1회). 리더는 방금 스폰돼 존재한다.
+                BindLeaders();
+            }
+            else
+            {
+                _crowdRoot.BeginChunkedSpawn();
+
+                // ⑥ 리더 전용 presentation 바인딩(로스터 무관, 1회). BeginChunkedSpawn이 리더를 이미 만들었다.
+                BindLeaders();
+
+                // 남은 중립은 Update의 청크 스폰 루프가 프레임마다 채운다. 완료 전에는 tick하지 않는다.
+                _spawning = true;
+            }
         }
         catch
         {
@@ -161,12 +181,42 @@ public sealed class GameplayRoot : MonoBehaviour
             return;
         }
 
+        // ⓪ 청크 스폰 진행 중: 입력 Poll·accumulator·SimTick·렌더 이전에 중립 배치를 한 배치 진행하고 즉시 반환한다.
+        //    accumulator를 건드리지 않아 스폰 동안 tick이 0이고 catch-up이 쌓이지 않는다(완료 delta는 다음 프레임에 폐기).
+        if (_spawning)
+        {
+            try
+            {
+                if (_crowdRoot.StepChunkedSpawn())
+                {
+                    _spawning = false;
+                    _discardDeltaOnce = true;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                Shutdown();
+            }
+
+            return;
+        }
+
         // ① 입력 폴링. single-driver 규칙 — InputRoot는 자체 Update가 없다.
         _inputRoot.Poll();
 
         // ② 재시작 게이트. reload가 발생한 프레임부터는 고정 스텝 루프를 돌지 않는다.
         if (_reloadRaised)
         {
+            return;
+        }
+
+        // 스폰 완료 직후 프레임: 청크 스폰에 걸린 벽시계 시간이 누적된 큰 delta로 시뮬에 새지 않도록 이 프레임의 delta를 1회 폐기한다.
+        // accumulate/tick은 건너뛰되, tick이 없는 프레임의 기존 동작대로 입력 Poll(위)과 렌더 보간은 유지한다(accumulator=0이라 alpha=0 스냅).
+        if (_discardDeltaOnce)
+        {
+            _discardDeltaOnce = false;
+            _crowdRoot.RenderInterpolate(Mathf.Clamp01(_accumulator / FixedStepSeconds));
             return;
         }
 
@@ -242,6 +292,14 @@ public sealed class GameplayRoot : MonoBehaviour
         T component = Instantiate(prefabComponent, transform, false);
         component.gameObject.name = rootName;
         return component;
+    }
+
+    // 리더 전용 presentation 바인딩. 카메라 타깃과 HUD 라벨은 팀 리더(로스터 무관)에만 걸리므로 리더 생성 직후 1회만 수행한다.
+    // 동기·청크 두 스폰 경로 모두 이 시점에 리더가 존재한다(중립 로스터 변화와 무관해 재바인딩이 필요 없다).
+    private void BindLeaders()
+    {
+        _cameraRoot.SetTarget(_crowdRoot.PlayerLeaderTransform);
+        _hudRoot.BindLeaderLabels(BuildLeaderLabelBindings());
     }
 
     private List<CrowdLabelBinding> BuildLeaderLabelBindings()

@@ -137,6 +137,18 @@ public sealed class CrowdRoot : MonoBehaviour
     private bool _shutdown;
     private Transform _playerLeaderTransform;
 
+    // ---- 청크(다중 프레임) 스폰 스냅샷 상태 ----
+    // PrepareSpawnPlacements가 계산해 채우고 SpawnLeaders/SpawnNeutralRange가 읽는다. 동기(SpawnInitial)·청크 경로가 같은 스냅샷을 공유한다.
+    private Vector3[] _leaderSpots;
+    private Vector3[] _neutralSpots;
+    private float[] _neutralHeadings;
+    private float[] _neutralTimers;
+    private float[] _neutralScales;
+    private int _placedNeutrals;
+    private int _neutralCursor;      // StepChunkedSpawn가 지금까지 채운 중립 수(다음 배치 시작 인덱스).
+    private bool _spawnInProgress;   // BeginChunkedSpawn부터 마지막 배치까지 true. 중복 Begin을 막는 가드에서 읽는다.
+    [SerializeField, Min(1)] private int _spawnBatchSize = 128; // 프레임당 인스턴스화할 중립 수(byte-identity와 무관).
+
     /// <summary>
     /// 중립 스폰 sampling의 기각률(0..1)이다. rejected 시도 수 ÷ 전체 시도 수이며 SpawnInitial이 기록한다.
     /// play-smoke가 0.8 이하를 단언한다.
@@ -348,10 +360,11 @@ public sealed class CrowdRoot : MonoBehaviour
     }
 
     /// <summary>
-    /// 초기 스폰을 수행한다. 리더와 중립의 모든 배치 좌표를 Instantiate 이전에 먼저 계산해
-    /// CheckSphere가 city collider만 보게 한 뒤(런타임 CharacterController가 아직 없음),
-    /// prefab clone을 생성하고 마지막에 첫 coalesced 인원 수 publish로 끝난다.
+    /// 초기 스폰을 동기(한 프레임) 경로로 수행한다. 배치 계산 → 리더 → 중립 전체 → 마무리를 순서대로 호출한다.
+    /// 리더와 중립의 모든 배치 좌표를 Instantiate 이전에 먼저 계산해 CheckSphere가 city collider만 보게 한 뒤
+    /// (런타임 CharacterController가 아직 없음), prefab clone을 생성하고 마지막에 첫 coalesced 인원 수 publish로 끝난다.
     /// player는 영역 중앙, 라이벌은 15% inset 코너(team id 순), 중립은 seeded System.Random 기각 sampling이다.
+    /// 오라클/샷 하네스가 부르는 결정성 계약 경로이며, _rng draw·CheckSphere 순서/횟수는 청크 경로 도입과 무관하게 불변이다.
     /// </summary>
     /// <exception cref="InvalidOperationException">Initialize 이전에 호출하면 발생한다.</exception>
     public void SpawnInitial()
@@ -371,24 +384,88 @@ public sealed class CrowdRoot : MonoBehaviour
             return;
         }
 
+        PrepareSpawnPlacements();
+        SpawnLeaders();
+        SpawnNeutralRange(0, _placedNeutrals);
+        FinalizeSpawn();
+    }
+
+    /// <summary>
+    /// 인터랙티브 청크(다중 프레임) 스폰을 시작한다. 배치 계산과 리더 생성까지 이 프레임에 수행하고 진행 플래그를 세운다.
+    /// 남은 중립은 <see cref="StepChunkedSpawn"/>가 프레임마다 배치 단위로 채운다. 동기 <see cref="SpawnInitial"/>와
+    /// 같은 헬퍼를 같은 순서로 호출하므로 최종 상태는 byte-identical하다.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Initialize 이전에 호출하면 발생한다.</exception>
+    public void BeginChunkedSpawn()
+    {
+        if (_shutdown)
+        {
+            return;
+        }
+
+        if (!_initialized)
+        {
+            throw new InvalidOperationException("CrowdRoot.BeginChunkedSpawn은 Initialize 이후에 호출해야 합니다.");
+        }
+
+        if (_spawned || _spawnInProgress)
+        {
+            return;
+        }
+
+        PrepareSpawnPlacements();
+        SpawnLeaders();
+        _neutralCursor = 0;
+        _spawnInProgress = true;
+    }
+
+    /// <summary>
+    /// 청크 스폰을 한 배치(최대 _spawnBatchSize명) 진행한다. 남은 중립을 모두 채우면 <see cref="FinalizeSpawn"/>를
+    /// 호출하고 true(완료)를 반환하며, 아직 남았으면 false를 반환한다. 종료(_shutdown) 중이면 즉시 true를 반환한다.
+    /// </summary>
+    public bool StepChunkedSpawn()
+    {
+        if (_shutdown)
+        {
+            return true;
+        }
+
+        int n = Mathf.Min(Mathf.Max(1, _spawnBatchSize), _placedNeutrals - _neutralCursor);
+        SpawnNeutralRange(_neutralCursor, _neutralCursor + n);
+        _neutralCursor += n;
+        if (_neutralCursor >= _placedNeutrals)
+        {
+            FinalizeSpawn();
+            _spawnInProgress = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    // 배치 계산 phase: GPU 렌더러 활성화 + 리더/중립의 모든 배치 좌표·헤딩·타이머·스케일을 필드에 스냅샷한다.
+    // 이 메서드만 _rng를 뽑고 Physics.CheckSphere를 호출한다(Instantiate 이전이라 CheckSphere는 city collider만 만난다).
+    private void PrepareSpawnPlacements()
+    {
         // GPU-anim Stage 1 Chunk B: 스위치 ON이면 스폰 루프 이전에 GPU 렌더러를 초기화한다(Init 인자 capacity/teamCount/
         // worldBounds는 스폰 전 이미 확정). 성공(_gpuRenderActive)하면 아래 스폰 루프가 각 유닛을 Instantiate+Init 직후
         // rig를 파괴해 10k rig가 동시에 상주하지 않게 한다(peak 억제). 실패/스위치 OFF/미배선이면 SMR 경로를 그대로 유지한다.
         TryActivateGpuRenderer();
 
         // ---- 1) 모든 배치 좌표를 Instantiate 이전에 계산한다 ----
-        Vector3[] leaderSpots = new Vector3[_teamCount];
-        leaderSpots[0] = ResolveLeaderSpot(RegionPoint(0.5f, 0.5f));
+        _leaderSpots = new Vector3[_teamCount];
+        _leaderSpots[0] = ResolveLeaderSpot(RegionPoint(0.5f, 0.5f));
         for (int t = 1; t < _teamCount; t++)
         {
             Vector2 corner = RivalCornerLerp[t - 1];
-            leaderSpots[t] = ResolveLeaderSpot(RegionPoint(corner.x, corner.y));
+            _leaderSpots[t] = ResolveLeaderSpot(RegionPoint(corner.x, corner.y));
         }
 
         int neutralCount = _neutralCount;
-        Vector3[] neutralSpots = new Vector3[Mathf.Max(1, neutralCount)];
-        float[] neutralHeadings = new float[Mathf.Max(1, neutralCount)];
-        float[] neutralTimers = new float[Mathf.Max(1, neutralCount)];
+        _neutralSpots = new Vector3[Mathf.Max(1, neutralCount)];
+        _neutralHeadings = new float[Mathf.Max(1, neutralCount)];
+        _neutralTimers = new float[Mathf.Max(1, neutralCount)];
+        _neutralScales = new float[Mathf.Max(1, neutralCount)];
         int placedNeutrals = 0;
         int totalAttempts = 0;
         int rejectedAttempts = 0;
@@ -409,10 +486,12 @@ public sealed class CrowdRoot : MonoBehaviour
                 Vector3 candidate = new Vector3(x, _groundY, z);
                 if (IsSpotValid(candidate, checkRadius))
                 {
-                    neutralSpots[placedNeutrals] = candidate;
-                    neutralHeadings[placedNeutrals] = (float)(_rng.NextDouble() * 360.0);
-                    neutralTimers[placedNeutrals] = Mathf.Lerp(
+                    _neutralSpots[placedNeutrals] = candidate;
+                    _neutralHeadings[placedNeutrals] = (float)(_rng.NextDouble() * 360.0);
+                    _neutralTimers[placedNeutrals] = Mathf.Lerp(
                         _config.WanderRepickMinSeconds, _config.WanderRepickMaxSeconds, (float)_rng.NextDouble());
+                    // 위에서 이미 계산한 스케일 값(_rng·physics 미소비)을 그대로 스냅샷한다. 인스턴스화 phase가 이 값을 읽어 재계산을 없앤다(draw/physics 불변).
+                    _neutralScales[placedNeutrals] = neutralScale;
                     placedNeutrals++;
                     placed = true;
                     break;
@@ -427,6 +506,7 @@ public sealed class CrowdRoot : MonoBehaviour
             }
         }
 
+        _placedNeutrals = placedNeutrals;
         RejectionRate = totalAttempts > 0 ? (float)rejectedAttempts / totalAttempts : 0f;
         if (skippedNeutrals > 0)
         {
@@ -434,19 +514,25 @@ public sealed class CrowdRoot : MonoBehaviour
                 $"[CrowdRoot] 중립 {skippedNeutrals}명이 {NeutralAttemptMax}회 시도 후에도 유효 위치를 찾지 못해 생략되었습니다. " +
                 $"RejectionRate={RejectionRate:F2}");
         }
+    }
 
+    // 리더 생성 phase: ≤4명의 리더를 Instantiate하고 CrowdModel·per-agent 배열·buffer에 등록한다(team id=agent id 오름차순).
+    // PrepareSpawnPlacements가 스냅샷한 _leaderSpots만 읽으며 _rng draw/physics 질의를 하지 않는다.
+    private void SpawnLeaders()
+    {
         // ---- 2) 리더 Instantiate + CrowdModel 생성 (team id 오름차순 = agent id 오름차순) ----
         int nextId = 0;
         for (int t = 0; t < _teamCount; t++)
         {
-            Vector3 spot = leaderSpots[t];
+            Vector3 spot = _leaderSpots[t];
             Human leader = SpawnClone(spot, "Human_Leader_" + t);
 
             // Init/CC 취득은 buffer 등록(_buffer.Add) 이전에 끝낸다. 실패 시 미등록 clone을 파괴하고 다시 던진다.
             CharacterController controller;
             try
             {
-                leader.Init(_config.TeamMaterials[t], true);
+                // phase01은 id 해시(Hash01(nextId)=Hash01(_buffer.Id[index]))로 준다. UnityEngine.Random 의존을 없애 스폰을 결정화한다.
+                leader.Init(_config.TeamMaterials[t], true, Hash01(nextId));
                 controller = GetBakedController(leader);
             }
             catch
@@ -479,12 +565,19 @@ public sealed class CrowdRoot : MonoBehaviour
                 leader.DestroyVisualRig();
             }
         }
+    }
 
+    // 중립 생성 phase: [start, endExclusive) 연속 구간의 중립을 Instantiate한다. PrepareSpawnPlacements가 스냅샷한
+    // _neutralSpots/_neutralHeadings/_neutralTimers/_neutralScales만 읽으며 _rng draw/physics 질의를 하지 않는다.
+    // id·buffer 인덱스는 _teamCount 이후로 단조 증가한다(동기·청크 경로가 같은 순서로 채운다).
+    private void SpawnNeutralRange(int start, int endExclusive)
+    {
         // ---- 3) 중립 Instantiate ----
         Material neutralMaterial = _config.TeamMaterials[4];
-        for (int n = 0; n < placedNeutrals; n++)
+        for (int n = start; n < endExclusive; n++)
         {
-            Vector3 spot = neutralSpots[n];
+            int nextId = _teamCount + n;
+            Vector3 spot = _neutralSpots[n];
             Human neutral = SpawnClone(spot, "Human_Neutral_" + n);
 
             // Init/스케일/CC 취득은 buffer 등록(_buffer.Add) 이전에 끝낸다. 실패 시 미등록 clone을 파괴하고 다시 던진다.
@@ -492,14 +585,14 @@ public sealed class CrowdRoot : MonoBehaviour
             CharacterController controller;
             try
             {
-                neutral.Init(neutralMaterial, false);
+                // phase01은 id 해시(Hash01(nextId)=Hash01(_buffer.Id[index]))로 준다. UnityEngine.Random 의존을 없애 스폰을 결정화한다.
+                neutral.Init(neutralMaterial, false, Hash01(nextId));
 
-                // 결정적 해시 기반 split 분포로 스케일을 준다: baselineChance 확률로 정확히 1.0, 나머지는 1.1~neutralMaxScale
-                // 큰 버킷에서 0.1 단위로 균일 양자화해 뽑아 큰 개체를 희소화한다(ComputeNeutralScale 참고).
+                // 스케일은 PrepareSpawnPlacements가 같은 (seed,id)로 계산해 스냅샷한 값이다(clearance 검사 반경과 동일 원천).
                 // 시뮬레이션 RNG(_rng)를 소비하지 않아 배회/시뮬레이션 draw 순서가 그대로 유지된다. 발/피벗이 바닥에 있어
                 // 스케일이 접지를 보존하고, CharacterController 충돌 캡슐도 lossyScale로 함께 스케일되므로 상수를 따로 스케일하지 않는다.
                 // 이 단일 원천이 localScale과 buffer.Scale에 모두 흘러간다.
-                scale = ComputeNeutralScale(_config.Seed, nextId);
+                scale = _neutralScales[n];
                 neutral.transform.localScale = Vector3.one * scale;
 
                 controller = GetBakedController(neutral);
@@ -513,14 +606,13 @@ public sealed class CrowdRoot : MonoBehaviour
             // scale을 buffer의 단일 진실 원천에 기록한다(kernel의 스케일 인지 접촉/영입/분리가 buffer.Scale을 읽는다).
             // 영입/팀 변경으로도 스케일은 불변이라 이후 갱신 없음.
             int index = _buffer.Add(nextId, AgentBuffer.NeutralTeam, false, new Vector2(spot.x, spot.z), scale);
-            nextId++;
 
             _humanByAgent[index] = neutral;
             _transformByAgent[index] = neutral.transform;
             _controllerByAgent[index] = controller;
             _visualPrev[index] = _visualCur[index] = spot; // 첫 프레임 Lerp가 정적이도록 스폰 위치로 시드.
-            _wanderHeadingDeg[index] = neutralHeadings[n];
-            _wanderTimer[index] = neutralTimers[n];
+            _wanderHeadingDeg[index] = _neutralHeadings[n];
+            _wanderTimer[index] = _neutralTimers[n];
 
             // GPU 경로 활성 시 이 clone의 죽은 rig를 즉시 파괴하고(스킨/애니메이터/본 transform 비용 제거) phase를 id 해시로 시드한다.
             if (_gpuRenderActive)
@@ -529,7 +621,11 @@ public sealed class CrowdRoot : MonoBehaviour
                 neutral.DestroyVisualRig();
             }
         }
+    }
 
+    // 마무리 phase: grid를 한 번 채우고 spawned 플래그를 세운 뒤 첫 coalesced 인원 수 publish로 끝낸다.
+    private void FinalizeSpawn()
+    {
         // 첫 tick의 AI/조향이 유효한 이웃 정보를 읽도록 grid를 한 번 채워 둔다.
         _grid.Rebuild(_buffer);
 
