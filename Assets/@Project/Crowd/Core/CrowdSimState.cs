@@ -38,6 +38,12 @@ public sealed class CrowdSimState : IDisposable
     /// </summary>
     public NativeArray<float> WanderTimer;
 
+    /// <summary>
+    /// 직전 tick 말에 미러링된 위치의 tick 시작 스냅샷(agent index별)이다. tick 시작 시 buffer.Pos를 memcpy해 두고,
+    /// 이동 단계(2~4)의 '직전 tick 위치' 읽기가 이 스냅샷을 보게 해, 이후 단계가 이동 중 buffer.Pos를 저작해도 그 읽기가 오염되지 않게 한다.
+    /// </summary>
+    public NativeArray<Vector2> PrevPos;
+
     // ---- M2-a3 병렬 조향(SteeringForceJob) 전용 per-tick scratch. tick마다 채워 쓰고 재사용하며, 값은 job 이후에만 유효하다. ----
 
     /// <summary>
@@ -131,6 +137,7 @@ public sealed class CrowdSimState : IDisposable
             LeaderYawDeg = new NativeArray<float>(teamCount, Allocator.Persistent);
             WanderHeadingDeg = new NativeArray<float>(agentCapacity, Allocator.Persistent);
             WanderTimer = new NativeArray<float>(agentCapacity, Allocator.Persistent);
+            PrevPos = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
 
             // M2-a3 병렬 조향 scratch. GridBucketHead는 grid와 동일한 table 크기 공식을 단일 원천에서 가져온다.
             CommandedVelocity = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
@@ -191,6 +198,11 @@ public sealed class CrowdSimState : IDisposable
         if (WanderTimer.IsCreated)
         {
             WanderTimer.Dispose();
+        }
+
+        if (PrevPos.IsCreated)
+        {
+            PrevPos.Dispose();
         }
 
         if (CommandedVelocity.IsCreated)

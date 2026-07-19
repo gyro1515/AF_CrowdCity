@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 /// <summary>
@@ -52,7 +53,7 @@ public sealed class RivalAiDriver
     // else nearest crowd with MemberCount < HuntSizeRatio * own (own >= HuntMinCount) within AiVisionRadius -> chase;
     // else densest neutral direction (grid QueryCircle around self, neutral majority vector); fallback: keep heading.
     // Wall avoidance: Physics.Raycast forward/±35° at WallProbeDistance from leader position; blocked -> rotate toward clearest probe.
-    public float DecideHeadingDeg(CrowdModel self, IReadOnlyList<CrowdModel> crowds, AgentBuffer buffer, SpatialGrid grid)
+    public float DecideHeadingDeg(CrowdModel self, IReadOnlyList<CrowdModel> crowds, AgentBuffer buffer, NativeArray<Vector2> prevPos, SpatialGrid grid)
     {
         if (self.Eliminated || self.Leader == null || self.LeaderAgentIndex < 0)
         {
@@ -60,7 +61,7 @@ public sealed class RivalAiDriver
             return self.HeadingDeg;
         }
 
-        Vector2 selfPos = buffer.Pos[self.LeaderAgentIndex];
+        Vector2 selfPos = prevPos[self.LeaderAgentIndex];
         int ownCount = self.MemberCount;
         float visionSqr = _config.AiVisionRadius * _config.AiVisionRadius;
         bool canHunt = ownCount >= _config.HuntMinCount;
@@ -80,7 +81,7 @@ public sealed class RivalAiDriver
                 continue;
             }
 
-            float distSqr = (buffer.Pos[other.LeaderAgentIndex] - selfPos).sqrMagnitude;
+            float distSqr = (prevPos[other.LeaderAgentIndex] - selfPos).sqrMagnitude;
             if (distSqr > visionSqr)
             {
                 continue;
@@ -106,7 +107,7 @@ public sealed class RivalAiDriver
         if (fleeIndex >= 0)
         {
             // 도주가 최우선: 가장 가까운 위협의 반대 방향.
-            Vector2 away = selfPos - buffer.Pos[crowds[fleeIndex].LeaderAgentIndex];
+            Vector2 away = selfPos - prevPos[crowds[fleeIndex].LeaderAgentIndex];
             if (away.sqrMagnitude > DegenerateSqr)
             {
                 desiredDeg = ToHeadingDeg(away);
@@ -115,7 +116,7 @@ public sealed class RivalAiDriver
         else if (huntIndex >= 0)
         {
             // 추격: 가장 가까운 먹잇감을 향한 방향.
-            Vector2 toward = buffer.Pos[crowds[huntIndex].LeaderAgentIndex] - selfPos;
+            Vector2 toward = prevPos[crowds[huntIndex].LeaderAgentIndex] - selfPos;
             if (toward.sqrMagnitude > DegenerateSqr)
             {
                 desiredDeg = ToHeadingDeg(toward);
@@ -135,7 +136,7 @@ public sealed class RivalAiDriver
                     continue;
                 }
 
-                Vector2 offset = buffer.Pos[agentIndex] - selfPos;
+                Vector2 offset = prevPos[agentIndex] - selfPos;
                 float magnitude = offset.magnitude;
                 if (magnitude > 1e-3f)
                 {

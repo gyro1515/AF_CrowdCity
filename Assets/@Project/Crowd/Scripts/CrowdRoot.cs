@@ -672,6 +672,10 @@ public sealed class CrowdRoot : MonoBehaviour
         CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Total);
         if (_matchState == MatchState.Playing)
         {
+            // 직전 tick 말에 미러링된 buffer.Pos를 tick 시작 시점에 스냅샷한다. 이동 단계(②~④)의 '직전 tick 위치' 읽기가
+            // 이 스냅샷을 보게 해, 이후 단계가 이동 중 buffer.Pos를 저작하더라도 그 읽기가 오염되지 않게 한다.
+            NativeArray<Vector2>.Copy(_buffer.Pos, _simState.PrevPos, _buffer.Count);
+
             // 직전 프레임 RenderInterpolate가 덮어쓴 시각 위치를 논리 위치(_visualCur)로 되돌린다.
             // 이후 모든 transform 읽기/CC.Move/미러링이 항상 논리 위치를 보게 한다(결정성 보장).
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.Restore);
@@ -707,7 +711,7 @@ public sealed class CrowdRoot : MonoBehaviour
         CrowdSimProfiler.End(CrowdSimProfiler.Seg.Total);
     }
 
-    /// <summary>
+    /// <summary>   
     /// 렌더 프레임마다 논리 위치 prev→cur를 alpha로 보간해 transform.position만 덮어쓴다(시각 전용, 회전 미보간).
     /// GameplayRoot가 accumulator 루프 종료 후에만 호출한다. 다음 SimTick 시작의 restore가 논리 위치로 되돌리므로
     /// 커널/미러는 항상 논리 위치만 본다. prev==cur이면 무해하다.
@@ -1099,7 +1103,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 }
 
                 // AI는 직전 tick 말의 grid/buffer snapshot을 읽는다(이번 tick의 이동 이전 상태).
-                model.HeadingDeg = _aiDrivers[t].DecideHeadingDeg(model, _crowds, _buffer, _grid);
+                model.HeadingDeg = _aiDrivers[t].DecideHeadingDeg(model, _crowds, _buffer, _simState.PrevPos, _grid);
             }
         }
     }
@@ -1221,7 +1225,7 @@ public sealed class CrowdRoot : MonoBehaviour
             int centroidCount = 0;
             if (leaderRadial)
             {
-                Vector2 leaderPrev = _buffer.Pos[model.LeaderAgentIndex];
+                Vector2 leaderPrev = _simState.PrevPos[model.LeaderAgentIndex];
                 centroidSum = leaderPrev;
                 centroidCount = 1;
                 int lcx = Mathf.FloorToInt(leaderPrev.x * gridInvCellSize);
@@ -1243,7 +1247,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
                 if (leaderRadial)
                 {
-                    Vector2 followerPrev = _buffer.Pos[followerIndex];
+                    Vector2 followerPrev = _simState.PrevPos[followerIndex];
                     centroidSum += followerPrev;
                     centroidCount++;
                     int fcx = Mathf.FloorToInt(followerPrev.x * gridInvCellSize);
@@ -1271,7 +1275,7 @@ public sealed class CrowdRoot : MonoBehaviour
             ArriveRadiusPerTeam = _simState.ArriveRadiusPerTeam,
             Team = _buffer.Team,
             Scale = _buffer.Scale,
-            Pos = _buffer.Pos,
+            Pos = _simState.PrevPos,
             FollowerVelocityIn = _followerVelocity,
             BucketHead = _simState.GridBucketHead,
             NextInBucket = _simState.GridNext,
