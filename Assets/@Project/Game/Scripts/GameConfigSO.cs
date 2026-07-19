@@ -20,7 +20,7 @@ public sealed class GameConfigSO : ScriptableObject
     public int RivalCount => rivalCount;
 
     [Tooltip("맵에 처음 배치되는 중립 인원 수. 클수록 초반에 영입할 대상이 많아짐.")]
-    [SerializeField] private int neutralCount = 800;
+    [SerializeField] private int neutralCount = 3000;
     /// <summary>초기 중립 인원 수다.</summary>
     public int NeutralCount => neutralCount;
 
@@ -99,7 +99,7 @@ public sealed class GameConfigSO : ScriptableObject
 
     [Header("Rules")]
     [Tooltip("영입/전투 규칙에 쓰이는 시뮬레이션 커널 튜닝 값 묶음(각 하위 항목 tooltip 참고).")]
-    [SerializeField] private SimTuning sim = new SimTuning { RecruitRadius = 1.2f, CombatRadius = 0.5f, LeaderAloneRadius = 0.7f, ConvertPerSecond = 40f, PairNormalizer = 15, RateLimitConversion = true, LeaderProtection = true };
+    [SerializeField] private SimTuning sim = new SimTuning { RecruitRadius = 1.2f, CombatRadius = 0.5f, LeaderAloneRadius = 0.7f, ConvertPerSecond = 100f, PairNormalizer = 15, RateLimitConversion = true, LeaderProtection = true, SeparationVisitBudget = 48, CombatFlatConvertRate = true };
     /// <summary>영입/전투 규칙에 쓰이는 시뮬레이션 커널 튜닝 값이다.</summary>
     public SimTuning Sim => sim;
 
@@ -193,7 +193,7 @@ public sealed class GameConfigSO : ScriptableObject
 
     [Header("Rendering")]
     [Tooltip("VAT 인스턴스 크라우드 렌더러 스위치(기본 OFF, 동작 보존). OFF면 기존 SkinnedMeshRenderer+Animator 경로가 바이트 동일하게 유지된다. ON이면 스폰 후 CrowdRenderer 초기화 성공 시에만 각 유닛의 SMR+Animator를 런타임에 끄고 인스턴스 렌더 경로로 그린다(저작 프리팹 불변). 시뮬/커널/RNG/이벤트/결정성에는 영향이 없다.")]
-    [SerializeField] private bool useGpuCrowdRenderer = false;
+    [SerializeField] private bool useGpuCrowdRenderer = true;
     /// <summary>VAT 인스턴스 크라우드 렌더러 스위치다(기본 OFF, 동작 보존). ON이면 CrowdRenderer 초기화 성공 시에만 SMR+Animator 대신 인스턴스 렌더 경로로 그린다. 시뮬/결정성에는 영향이 없다.</summary>
     public bool UseGpuCrowdRenderer => useGpuCrowdRenderer;
 

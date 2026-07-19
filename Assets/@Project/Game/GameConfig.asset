@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GameConfigSO
   matchSeconds: 120
   rivalCount: 3
-  neutralCount: 2000
+  neutralCount: 3000
   seed: 12345
   leaderSpeed: 5
   followerMaxSpeed: 10
@@ -33,11 +33,13 @@ MonoBehaviour:
     RecruitRadius: 0.7
     CombatRadius: 0.7
     LeaderAloneRadius: 5
-    ConvertPerSecond: 40
+    ConvertPerSecond: 100
     PairNormalizer: 15
     RateLimitConversion: 1
     MaxScale: 0
     LeaderProtection: 1
+    SeparationVisitBudget: 48
+    CombatFlatConvertRate: 1
   aiDecideInterval: 0.4
   fleeSizeRatio: 1.15
   huntSizeRatio: 0.7
@@ -55,7 +57,7 @@ MonoBehaviour:
   camDistancePerSqrtCount: 0.8
   camMaxDistance: 40
   camFollowSmoothTime: 0.25
-  useGpuCrowdRenderer: 0
+  useGpuCrowdRenderer: 1
   teamColors:
   - {r: 0.18, g: 0.525, b: 1, a: 1}
   - {r: 1, g: 0.255, b: 0.212, a: 1}
