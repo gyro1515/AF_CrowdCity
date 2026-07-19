@@ -17,7 +17,7 @@ MonoBehaviour:
   neutralCount: 3000
   seed: 12345
   leaderSpeed: 5
-  followerMaxSpeed: 10
+  followerMaxSpeed: 15
   turnRateDegPerSec: 720
   slotSpacing: 1
   separationRadius: 2
@@ -30,7 +30,7 @@ MonoBehaviour:
   followerCohesionGain: 1
   followerArriveRadius: 1
   followerArriveRadiusPerSqrtMember: 1
-  followerMaxAccel: 100
+  followerMaxAccel: 225
   followerTrailingOffset: 0.3
   followerBlockedDamping: 0
   sim:
