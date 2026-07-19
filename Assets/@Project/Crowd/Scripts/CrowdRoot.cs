@@ -1469,43 +1469,124 @@ public sealed class CrowdRoot : MonoBehaviour
 
         CrowdSimProfiler.End(CrowdSimProfiler.Seg.FollowerSteer);
 
-        // 중립 배회: 2~5초마다 seeded rng로 방향을 재선택하고 CC.Move로 이동한 뒤 영역 안으로 clamp한다.
+        // 중립 배회: 2~5초마다 seeded rng로 방향을 재선택하고 이동(SDF ON: NeutralSdfMoveJob 병렬 / OFF: CC.Move 직렬)한 뒤 영역 안으로 clamp한다.
         CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.NeutralMove);
         float wanderSpeed = _config.NeutralWanderSpeed;
         int agentCount = _buffer.Count;
-        for (int i = 0; i < agentCount; i++)
+        if (sdfActive)
         {
-            if (_buffer.Team[i] != AgentBuffer.NeutralTeam)
+            // ── Stage A: SDF 경로 활성이면 순수 SDF 수학이라 NeutralSdfMoveJob으로 병렬화한다(read-only 조회, 자기 슬롯만 쓰기 → 직렬 등가; job은 Burst Strict라 near-Mono지만 bit-identical하지는 않다).
+            //    (1) 직렬 프리패스: 원래 agent-index 오름차순 그대로 배회 타이머 감산·방향 재선택(shared _rng draw + Physics.Raycast는 반드시 직렬·순서 유지)과 Mathf.Sin/Cos 명령 변위 산출을 하고 작업 리스트를 평탄화한다.
+            //    (2) 병렬 job: 중립별 SDF 해소+walkable clamp를 산출한다. (3) 직렬 제시: transform/시각 배열/애니메이션에 반영한다.
+            int neutralCount = 0;
+            for (int i = 0; i < agentCount; i++)
             {
-                continue;
+                if (_buffer.Team[i] != AgentBuffer.NeutralTeam)
+                {
+                    continue;
+                }
+
+                _wanderTimer[i] -= dt;
+                if (_wanderTimer[i] <= 0f)
+                {
+                    RepickWanderHeading(i); // shared _rng draw + Physics.Raycast. 반드시 직렬·agent-index 오름차순 유지(결정성).
+                }
+
+                int k = neutralCount;
+                _simState.NeutralList[k] = i;
+                Vector3 cur = _transformByAgent[i].position; // 이동 전 현재 위치(job은 transform을 건드리지 않아 제시 패스까지 불변).
+                _simState.NeutralMovePositionCurrent[k] = new Vector2(cur.x, cur.z);
+                float rad = _wanderHeadingDeg[i] * Mathf.Deg2Rad;
+                Vector3 d = new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (wanderSpeed * dt); // Mathf.Sin/Cos는 여기(직렬)서 산출, job 안이 아님.
+                _simState.NeutralCommandedDelta[k] = new Vector2(d.x, d.z);
+                CrowdSimCounters.CountSdfResolve(); // 원본 SDF 분기와 동일: 직렬로 중립당 1회(무침습 계측; Enabled=false면 no-op).
+                neutralCount++;
             }
 
-            _wanderTimer[i] -= dt;
-            if (_wanderTimer[i] <= 0f)
+            if (neutralCount > 0)
             {
-                RepickWanderHeading(i);
+                WallFieldView wallView = _wallField.AsView();
+                var moveJob = new NeutralSdfMoveJob
+                {
+                    NeutralList = _simState.NeutralList,
+                    PositionCurrent = _simState.NeutralMovePositionCurrent,
+                    CommandedDelta = _simState.NeutralCommandedDelta,
+                    Scale = _buffer.Scale,
+                    WallDist = wallView.Dist,
+                    WallOriginX = wallView.OriginX,
+                    WallOriginZ = wallView.OriginZ,
+                    WallCellSize = wallView.CellSize,
+                    WallInvCellSize = wallView.InvCellSize,
+                    WallCols = wallView.Cols,
+                    WallRows = wallView.Rows,
+                    WallMaxDistance = wallView.MaxDistance,
+                    WallBilinearBias = wallView.BilinearBias,
+                    WallClearance = WallCollisionClearance,
+                    RegionMinX = _regionMinX,
+                    RegionMaxX = _regionMaxX,
+                    RegionMinZ = _regionMinZ,
+                    RegionMaxZ = _regionMaxZ,
+                    PositionNext = _simState.NeutralMovePositionNext,
+                };
+                CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove); // SDF ON: 이 구간은 WallSolver.Resolve(중립 SDF 이동 해소)의 병렬 벽시계다.
+                moveJob.Schedule(neutralCount, SteeringForceBatch).Complete();
+                CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
             }
 
-            float rad = _wanderHeadingDeg[i] * Mathf.Deg2Rad;
-            Transform neutralTransform = _transformByAgent[i];
-            _visualPrev[i] = neutralTransform.position; // prev = 이동 전 논리 위치.
-            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove);
-            ApplyHorizontalMove(i, new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (wanderSpeed * dt));
-            CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
-
-            Vector3 pos = neutralTransform.position;
-            float nx = Mathf.Clamp(pos.x, _regionMinX, _regionMaxX);
-            float nz = Mathf.Clamp(pos.z, _regionMinZ, _regionMaxZ);
-            if (nx != pos.x || nz != pos.z || pos.y != _groundY)
+            // 직렬 제시 패스(프리패스와 동일 순서 = agent-index 오름차순): job 산출 위치를 transform·시각 배열·애니메이션에 반영한다(managed, main-thread).
+            for (int k = 0; k < neutralCount; k++)
             {
-                neutralTransform.position = new Vector3(nx, _groundY, nz);
-            }
+                int i = _simState.NeutralList[k];
+                Transform neutralTransform = _transformByAgent[i];
+                _visualPrev[i] = neutralTransform.position; // prev = 이동 전 논리 위치(job이 transform을 건드리지 않아 아직 이동 전).
 
-            _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
-            // GPU phase 적분에 쓰는 저장 속도를 CPU 경로(Human.SetHeadingAndSpeed의 Animator.speed clamp)와 동일하게 clamp해
-            // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
-            _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
-            _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
+                Vector2 fx = _simState.NeutralMovePositionNext[k];
+                // job이 해소·clamp한 위치를 그대로 적용한다(원본의 조건부 clamp-write 두 분기가 낳는 위치 값과 동일: 항상 (x, groundY, z)).
+                neutralTransform.position = new Vector3(fx.x, _groundY, fx.y);
+
+                _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
+                // GPU phase 적분에 쓰는 저장 속도를 CPU 경로(Human.SetHeadingAndSpeed의 Animator.speed clamp)와 동일하게 clamp해
+                // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
+                _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
+                _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < agentCount; i++)
+            {
+                if (_buffer.Team[i] != AgentBuffer.NeutralTeam)
+                {
+                    continue;
+                }
+
+                _wanderTimer[i] -= dt;
+                if (_wanderTimer[i] <= 0f)
+                {
+                    RepickWanderHeading(i);
+                }
+
+                float rad = _wanderHeadingDeg[i] * Mathf.Deg2Rad;
+                Transform neutralTransform = _transformByAgent[i];
+                _visualPrev[i] = neutralTransform.position; // prev = 이동 전 논리 위치.
+                CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove);
+                ApplyHorizontalMove(i, new Vector3(Mathf.Sin(rad), 0f, Mathf.Cos(rad)) * (wanderSpeed * dt));
+                CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
+
+                Vector3 pos = neutralTransform.position;
+                float nx = Mathf.Clamp(pos.x, _regionMinX, _regionMaxX);
+                float nz = Mathf.Clamp(pos.z, _regionMinZ, _regionMaxZ);
+                if (nx != pos.x || nz != pos.z || pos.y != _groundY)
+                {
+                    neutralTransform.position = new Vector3(nx, _groundY, nz);
+                }
+
+                _visualCur[i] = neutralTransform.position; // cur = 이동+clamp 후 논리 위치.
+                // GPU phase 적분에 쓰는 저장 속도를 CPU 경로(Human.SetHeadingAndSpeed의 Animator.speed clamp)와 동일하게 clamp해
+                // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
+                _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
+                _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
+            }
         }
 
         CrowdSimProfiler.End(CrowdSimProfiler.Seg.NeutralMove);

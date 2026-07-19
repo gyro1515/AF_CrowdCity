@@ -89,6 +89,28 @@ public sealed class CrowdSimState : IDisposable
     /// </summary>
     public NativeArray<Vector2> MoveVelocityOut;
 
+    // ---- Stage A 중립 SDF 이동 병렬화(NeutralSdfMoveJob) 전용 per-tick scratch. 중립 슬롯 k로 인덱싱하며, 직렬 제시 패스가 같은 순서로 읽는다. 중립은 속도 상태가 없어 velocity 배열이 없다. ----
+
+    /// <summary>
+    /// 이번 tick의 중립 agent index를 agent-index 오름차순으로 평탄화한 작업 리스트다(직렬 프리패스에서 채운다).
+    /// </summary>
+    public NativeArray<int> NeutralList;
+
+    /// <summary>
+    /// 이동 전 중립 현재 world XZ다(슬롯 k). 직렬 프리패스가 neutralTransform.position에서 캡처해 이동 job에 전달한다(원본 직렬 루프의 이동 전 위치와 동일 원천).
+    /// </summary>
+    public NativeArray<Vector2> NeutralMovePositionCurrent;
+
+    /// <summary>
+    /// 이번 tick 중립 명령 배회 변위((sin,cos)*wanderSpeed*dt)다(슬롯 k). Mathf.Sin/Cos는 직렬 프리패스가 계산해 담는다(job은 재계산하지 않는다).
+    /// </summary>
+    public NativeArray<Vector2> NeutralCommandedDelta;
+
+    /// <summary>
+    /// SDF 해소+walkable clamp 후 중립 world XZ다(슬롯 k). 직렬 제시 패스가 transform.position에 반영한다.
+    /// </summary>
+    public NativeArray<Vector2> NeutralMovePositionNext;
+
     // grid의 관리형 내부 배열을 tick마다 복사해 두는 native snapshot. job이 QueryCircle/QueryCircleCapped 열거를 in-place로 재현한다.
     public NativeArray<int> GridBucketHead;
     public NativeArray<int> GridNext;
@@ -116,6 +138,11 @@ public sealed class CrowdSimState : IDisposable
             MovePositionNext = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
             MoveVelocityOut = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
             FollowerList = new NativeArray<int>(agentCapacity, Allocator.Persistent);
+            // Stage A 중립 SDF 이동 scratch. follower move 배열과 동일 capacity(agentCapacity)로 미리 할당한다.
+            NeutralList = new NativeArray<int>(agentCapacity, Allocator.Persistent);
+            NeutralMovePositionCurrent = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
+            NeutralCommandedDelta = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
+            NeutralMovePositionNext = new NativeArray<Vector2>(agentCapacity, Allocator.Persistent);
             CenterPerTeam = new NativeArray<Vector2>(teamCount, Allocator.Persistent);
             ArriveRadiusPerTeam = new NativeArray<float>(teamCount, Allocator.Persistent);
             // LeaderRadial 분리 scratch. BucketTeamCount는 grid와 동일한 table 크기 공식을 단일 원천에서 가져와 teamCount만큼 곱한 flat 배열이다.
@@ -189,6 +216,26 @@ public sealed class CrowdSimState : IDisposable
         if (FollowerList.IsCreated)
         {
             FollowerList.Dispose();
+        }
+
+        if (NeutralList.IsCreated)
+        {
+            NeutralList.Dispose();
+        }
+
+        if (NeutralMovePositionCurrent.IsCreated)
+        {
+            NeutralMovePositionCurrent.Dispose();
+        }
+
+        if (NeutralCommandedDelta.IsCreated)
+        {
+            NeutralCommandedDelta.Dispose();
+        }
+
+        if (NeutralMovePositionNext.IsCreated)
+        {
+            NeutralMovePositionNext.Dispose();
         }
 
         if (CenterPerTeam.IsCreated)
