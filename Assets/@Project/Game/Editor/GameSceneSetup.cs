@@ -7,6 +7,8 @@ using UnityEditor;
 using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
@@ -176,6 +178,11 @@ public static class GameSceneSetup
     private const string CameraRootPrefabPath = GameRootsFolder + "/" + nameof(CameraRoot) + ".prefab"; // 로드 키 Prefabs/CameraRoot
     private const string CrowdLabelPrefabPath = HudPrefabsFolder + "/CrowdLabel.prefab";                // HudRoot._crowdLabelPrefab
     private const string RivalMarkerPrefabPath = HudPrefabsFolder + "/RivalMarker.prefab";              // HudRoot._rivalMarkerPrefab
+    // Dev 전용 HUD root 프리팹. UI 카테고리(Resources/UI). 런타임이 ResourceLoader.LoadUI<DevHudRoot>()로 로드 키 "UI/DevHudRoot"를 소유한다.
+    private const string DevHudRootsFolder = "Assets/@Project/DevTools/Resources/UI";
+    private const string DevHudRootPrefabPath = DevHudRootsFolder + "/" + nameof(DevHudRoot) + ".prefab"; // 로드 키 UI/DevHudRoot
+    // Dev HUD 프리셋 버튼 값(라벨 텍스트와 DevHudRoot._presetValues 배선의 단일 원천).
+    private static readonly int[] DevHudPresetValues = { 500, 1000, 2000, 5000, 10000 };
 
     // ---- HUD uGUI 프리팹 저작 스펙 (pinned) ----
     // HudRoot.cs의 원래 런타임 BuildCanvas/BuildLeaderboard/CreateLabel/CreateRivalMarker가 쓰던 레이아웃 상수를 그대로 옮긴 것이다.
@@ -1285,6 +1292,7 @@ public static class GameSceneSetup
         ConvergeLogicRootPrefab<CameraRoot>(GameRootsFolder, changed, unchanged);
         ConvergeLogicRootPrefab<CrowdRoot>(CrowdRootsFolder, changed, unchanged);
         ConvergeHudPrefabs(changed, unchanged);
+        ConvergeDevHudRootPrefab(changed, unchanged); // Dev 전용 UI 카테고리 root(로드 키 UI/DevHudRoot).
 
         // 단일 소비자 asset을 소비 feature root 프리팹의 직렬화 필드로 배선한다(Init/직접 런타임 로드 체인 제거).
         // 배선 대상 asset/프리팹은 이 프리팹 수렴 뒤에 존재해야 하므로 위 프리팹 수렴 뒤에 실행한다.
@@ -1962,6 +1970,335 @@ public static class GameSceneSetup
         {
             Debug.LogException(exception);
             EditorApplication.Exit(1);
+        }
+    }
+
+    // ---- Dev 전용 HUD root 프리팹 (UI 카테고리: 시작 패널 + 카운트/프리셋 버튼 + FPS) ----
+
+    // DevHudRoot.prefab: root(RectTransform + Canvas ScreenSpaceOverlay(sortingOrder 32000) + CanvasScaler 1080x1920 match 0.5
+    // + GraphicRaycaster + DevHudRoot) 아래 자체 완결 EventSystem(InputSystem UI 모듈), 전체 화면 StartupPanel(딤 배경 +
+    // 카운트 텍스트/증감 버튼/프리셋 5개/START), 좌상단 FpsText를 저작하고 DevHudRoot 직렬화 참조를 배선한다.
+    // 이미 DevHudRoot+Canvas가 저작된 프리팹이면 건드리지 않는다(idempotent).
+    private static void ConvergeDevHudRootPrefab(List<string> changed, List<string> unchanged)
+    {
+        EnsureFolder(DevHudRootsFolder);
+
+        GameObject existing = AssetDatabase.LoadAssetAtPath<GameObject>(DevHudRootPrefabPath);
+        if (existing != null && existing.GetComponent<DevHudRoot>() != null && existing.GetComponent<Canvas>() != null)
+        {
+            unchanged.Add("Dev HUD 프리팹: DevHudRoot (Canvas 저작 완료)");
+            return;
+        }
+
+        TMP_FontAsset font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(HudFontAssetPath);
+        if (font == null)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] Dev HUD TMP 폰트 에셋을 찾지 못했습니다: " + HudFontAssetPath);
+        }
+
+        GameObject root = new GameObject("DevHudRoot", typeof(RectTransform));
+        try
+        {
+            Canvas canvas = root.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 32000;
+
+            CanvasScaler scaler = root.AddComponent<CanvasScaler>();
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1080f, 1920f);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 0.5f;
+
+            root.AddComponent<GraphicRaycaster>();
+
+            DevHudRoot dev = root.AddComponent<DevHudRoot>();
+
+            Transform canvasTransform = root.transform;
+
+            // 자체 완결 EventSystem(씬에 EventSystem 없음) — Input System UI 입력 모듈을 사용한다.
+            GameObject eventSystemGo = new GameObject("EventSystem");
+            eventSystemGo.transform.SetParent(canvasTransform, false);
+            eventSystemGo.AddComponent<EventSystem>();
+            eventSystemGo.AddComponent<InputSystemUIInputModule>();
+
+            // StartupPanel: 전체 화면 딤 배경(입력 차단 target).
+            GameObject panelGo = new GameObject("StartupPanel", typeof(RectTransform));
+            panelGo.transform.SetParent(canvasTransform, false);
+            RectTransform panelRect = (RectTransform)panelGo.transform;
+            panelRect.anchorMin = Vector2.zero;
+            panelRect.anchorMax = Vector2.one;
+            panelRect.offsetMin = Vector2.zero;
+            panelRect.offsetMax = Vector2.zero;
+            Image panelBg = panelGo.AddComponent<Image>();
+            panelBg.color = new Color(0f, 0f, 0f, 0.6f);
+            panelBg.raycastTarget = true;
+
+            Transform panelTransform = panelGo.transform;
+
+            TextMeshProUGUI countText = CreateHudText(
+                panelTransform, font, "CountText", 64, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+            SetHudRect(countText.rectTransform,
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f), new Vector2(0f, -380f), new Vector2(500f, 160f));
+            countText.text = "3000";
+
+            Button decButton = CreateDevButton(panelTransform, font, "DecButton", "-");
+            SetHudRect((RectTransform)decButton.transform,
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f), new Vector2(-380f, -380f), new Vector2(200f, 160f));
+
+            Button incButton = CreateDevButton(panelTransform, font, "IncButton", "+");
+            SetHudRect((RectTransform)incButton.transform,
+                new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f), new Vector2(380f, -380f), new Vector2(200f, 160f));
+
+            Button[] presetButtons = new Button[DevHudPresetValues.Length];
+            for (int i = 0; i < DevHudPresetValues.Length; i++)
+            {
+                Button preset = CreateDevButton(
+                    panelTransform, font, "PresetButton" + i, DevHudPresetValues[i].ToString());
+                SetHudRect((RectTransform)preset.transform,
+                    new Vector2(0.5f, 1f), new Vector2(0.5f, 0.5f),
+                    new Vector2((i - 2) * 210f, -680f), new Vector2(200f, 160f));
+                presetButtons[i] = preset;
+            }
+
+            Button startButton = CreateDevButton(panelTransform, font, "StartButton", "START");
+            SetHudRect((RectTransform)startButton.transform,
+                new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 160f), new Vector2(520f, 200f));
+
+            // FpsText: 좌상단, 입력을 절대 막지 않도록 raycastTarget off(CreateHudText가 보장).
+            TextMeshProUGUI fpsText = CreateHudText(
+                canvasTransform, font, "FpsText", 32, TextAlignmentOptions.TopLeft, Color.white, FontStyles.Normal);
+            SetHudRect(fpsText.rectTransform,
+                new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(20f, -20f), new Vector2(400f, 60f));
+            fpsText.text = "-- FPS";
+
+            // DevHudRoot 직렬화 참조 배선(필드명 계약; 어긋나면 SetDevHudRef가 예외를 던진다).
+            SerializedObject serialized = new SerializedObject(dev);
+            SetDevHudRef(serialized, "_startupPanel", panelGo);
+            SetDevHudRef(serialized, "_countText", countText);
+            SetDevHudRef(serialized, "_decButton", decButton);
+            SetDevHudRef(serialized, "_incButton", incButton);
+            SetDevHudRef(serialized, "_startButton", startButton);
+            SetDevHudRef(serialized, "_fpsText", fpsText);
+            SetDevHudRefArray(serialized, "_presetButtons", presetButtons);
+            SetDevHudIntArray(serialized, "_presetValues", DevHudPresetValues);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            GameObject saved = PrefabUtility.SaveAsPrefabAsset(root, DevHudRootPrefabPath);
+            if (saved == null)
+            {
+                throw new InvalidOperationException(
+                    "[GameSceneSetup] DevHudRoot 프리팹 저장에 실패했습니다: " + DevHudRootPrefabPath);
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(root);
+        }
+
+        changed.Add("Dev HUD 프리팹 저작/갱신: DevHudRoot (Canvas+StartupPanel+FpsText)");
+    }
+
+    // Dev HUD 버튼 템플릿: RectTransform + Image(raycast target) + Button 아래 stretch된 TMP 라벨 자식을 저작해 반환한다.
+    private static Button CreateDevButton(Transform parent, TMP_FontAsset font, string name, string label)
+    {
+        GameObject go = new GameObject(name, typeof(RectTransform));
+        go.transform.SetParent(parent, false);
+
+        Image image = go.AddComponent<Image>();
+        image.color = new Color(0.20f, 0.24f, 0.30f, 0.95f);
+        image.raycastTarget = true;
+
+        Button button = go.AddComponent<Button>();
+        button.targetGraphic = image;
+
+        TextMeshProUGUI labelText = CreateHudText(
+            go.transform, font, "Label", 48, TextAlignmentOptions.Center, Color.white, FontStyles.Bold);
+        RectTransform labelRect = labelText.rectTransform;
+        labelRect.anchorMin = Vector2.zero;
+        labelRect.anchorMax = Vector2.one;
+        labelRect.offsetMin = Vector2.zero;
+        labelRect.offsetMax = Vector2.zero;
+        labelText.text = label;
+
+        return button;
+    }
+
+    private static void SetDevHudRef(SerializedObject serialized, string propertyName, UnityEngine.Object value)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot에서 직렬화 필드 '{propertyName}'을(를) 찾지 못했습니다.");
+        }
+
+        property.objectReferenceValue = value;
+    }
+
+    private static void SetDevHudRefArray(SerializedObject serialized, string propertyName, UnityEngine.Object[] values)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot에서 직렬화 배열 필드 '{propertyName}'을(를) 찾지 못했습니다.");
+        }
+
+        property.arraySize = values.Length;
+        for (int i = 0; i < values.Length; i++)
+        {
+            property.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+        }
+    }
+
+    private static void SetDevHudIntArray(SerializedObject serialized, string propertyName, int[] values)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot에서 직렬화 배열 필드 '{propertyName}'을(를) 찾지 못했습니다.");
+        }
+
+        property.arraySize = values.Length;
+        for (int i = 0; i < values.Length; i++)
+        {
+            property.GetArrayElementAtIndex(i).intValue = values[i];
+        }
+    }
+
+    /// <summary>
+    /// Dev 전용: DevHudRoot 프리팹을 UI 카테고리(Resources/UI)로 load-or-create 수렴하고 저장 결과를 검증한다.
+    /// City/씬/Config 수렴 없이 prefab asset만 갱신하므로 batchmode에서 독립 실행할 수 있다. idempotent.
+    /// </summary>
+    [MenuItem("AF/CrowdCity/Bake Dev HUD (Resources)")]
+    public static void BakeDevHudRoot()
+    {
+        List<string> changed = new List<string>(1);
+        List<string> unchanged = new List<string>(1);
+        ConvergeDevHudRootPrefab(changed, unchanged);
+
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+
+        VerifyDevHudRoot();
+
+        Debug.Log(
+            "[BakeDevHudRoot] PASS — DevHudRoot 프리팹 저작 완료(UI/DevHudRoot). " +
+            BuildSummary(changed, unchanged));
+    }
+
+    /// <summary>
+    /// batch mode 진입점. <see cref="BakeDevHudRoot"/>를 실행하고 성공 시 exit 0, 예외 시 로그 후 exit 1로 종료한다.
+    /// </summary>
+    public static void BakeDevHudRootBatch()
+    {
+        try
+        {
+            BakeDevHudRoot();
+            EditorApplication.Exit(0);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            EditorApplication.Exit(1);
+        }
+    }
+
+    // 저장된 DevHudRoot 프리팹을 다시 로드해 구조(DevHudRoot/Canvas/EventSystem/입력 모듈)와 직렬화 참조 전부를 검증한다.
+    private static void VerifyDevHudRoot()
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(DevHudRootPrefabPath);
+        if (prefab == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot 검증 실패: 프리팹을 로드하지 못했습니다: {DevHudRootPrefabPath}");
+        }
+
+        DevHudRoot dev = prefab.GetComponent<DevHudRoot>();
+        if (dev == null)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] DevHudRoot 검증 실패: root에 DevHudRoot 컴포넌트가 없습니다.");
+        }
+
+        Canvas[] canvases = prefab.GetComponents<Canvas>();
+        if (canvases.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot 검증 실패: root Canvas가 정확히 1개가 아닙니다({canvases.Length}개).");
+        }
+
+        if (prefab.GetComponentInChildren<EventSystem>(true) == null)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] DevHudRoot 검증 실패: 자식에 EventSystem이 없습니다.");
+        }
+
+        if (prefab.GetComponentInChildren<InputSystemUIInputModule>(true) == null)
+        {
+            throw new InvalidOperationException(
+                "[GameSceneSetup] DevHudRoot 검증 실패: 자식에 InputSystemUIInputModule이 없습니다.");
+        }
+
+        SerializedObject serialized = new SerializedObject(dev);
+        RequireDevHudRefNonNull(serialized, "_startupPanel");
+        RequireDevHudRefNonNull(serialized, "_countText");
+        RequireDevHudRefNonNull(serialized, "_decButton");
+        RequireDevHudRefNonNull(serialized, "_incButton");
+        RequireDevHudRefNonNull(serialized, "_startButton");
+        RequireDevHudRefNonNull(serialized, "_fpsText");
+
+        SerializedProperty presetButtons = serialized.FindProperty("_presetButtons");
+        if (presetButtons == null || presetButtons.arraySize != DevHudPresetValues.Length)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot 검증 실패: '_presetButtons' 길이가 {DevHudPresetValues.Length}이(가) 아닙니다" +
+                $"({(presetButtons == null ? "필드 없음" : presetButtons.arraySize.ToString())}).");
+        }
+
+        for (int i = 0; i < presetButtons.arraySize; i++)
+        {
+            if (presetButtons.GetArrayElementAtIndex(i).objectReferenceValue == null)
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] DevHudRoot 검증 실패: '_presetButtons[{i}]'이(가) 미배선(null)입니다.");
+            }
+        }
+
+        SerializedProperty presetValues = serialized.FindProperty("_presetValues");
+        if (presetValues == null || presetValues.arraySize != DevHudPresetValues.Length)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot 검증 실패: '_presetValues' 길이가 {DevHudPresetValues.Length}이(가) 아닙니다" +
+                $"({(presetValues == null ? "필드 없음" : presetValues.arraySize.ToString())}).");
+        }
+
+        for (int i = 0; i < presetValues.arraySize; i++)
+        {
+            if (presetValues.GetArrayElementAtIndex(i).intValue != DevHudPresetValues[i])
+            {
+                throw new InvalidOperationException(
+                    $"[GameSceneSetup] DevHudRoot 검증 실패: '_presetValues[{i}]'이(가) {DevHudPresetValues[i]}이(가) 아닙니다" +
+                    $"(actual={presetValues.GetArrayElementAtIndex(i).intValue}).");
+            }
+        }
+    }
+
+    private static void RequireDevHudRefNonNull(SerializedObject serialized, string propertyName)
+    {
+        SerializedProperty property = serialized.FindProperty(propertyName);
+        if (property == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot 검증 실패: 직렬화 필드 '{propertyName}'을(를) 찾지 못했습니다.");
+        }
+
+        if (property.objectReferenceValue == null)
+        {
+            throw new InvalidOperationException(
+                $"[GameSceneSetup] DevHudRoot 검증 실패: '{propertyName}'이(가) 미배선(null)입니다.");
         }
     }
 

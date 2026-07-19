@@ -17,6 +17,12 @@ public sealed class GameSceneController : MonoBehaviour
     private GameSession _session;
     private GameplayRoot _gameplayRoot;
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+    // dev 시작 화면에서만 참조하는 count 입력 UI와 상한. 두 심볼 모두 dev 브랜치 전용이라 함께 가드한다.
+    private const int MaxNeutralCount = 50000;
+    private DevHudRoot _devHud;
+#endif
+
 #if UNITY_EDITOR
     /// <summary>
     /// play-smoke 검증이 세션 상태를 읽기 위한 Editor 전용 hook이다.
@@ -58,7 +64,39 @@ public sealed class GameSceneController : MonoBehaviour
 
     private void Start()
     {
-        _session = new GameSession(config);
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+        // dev 빌드/에디터에서는 count 입력 화면을 먼저 띄우고, 확정(OnCountConfirmed) 후에 gameplay를 조립한다.
+        // batchmode(play-smoke 등)는 이 화면을 건너뛰고 아래 config 기본값 경로로 즉시 조립한다.
+        if (Debug.isDebugBuild && !Application.isBatchMode)
+        {
+            _devHud = Instantiate(ResourceLoader.LoadUI<DevHudRoot>(), transform, false);
+            _devHud.gameObject.name = "DevHudRoot";
+            GameObject devHudGo = _devHud.gameObject;
+
+            try
+            {
+                _devHud.Init(config.NeutralCount, 0, MaxNeutralCount);
+            }
+            catch
+            {
+                // Init 실패 시 방금 만든 DevHudRoot clone을 파괴하고 참조를 비운 뒤 다시 던진다(소유자 롤백, §11.5).
+                Destroy(devHudGo);
+                _devHud = null;
+                throw;
+            }
+
+            _devHud.CountConfirmed += OnCountConfirmed; // Init 성공 후 구독(throw가 dangling 구독을 남기지 못하게).
+            return;
+        }
+#endif
+        BuildGameplay(config.NeutralCount);
+    }
+
+    // GameSession/GameplayRoot 조립을 수행한다. batchmode/production은 Start에서 즉시,
+    // dev 시작 화면은 count 확정 후 호출한다. neutralCount는 세션의 단일 count 권위가 된다.
+    private void BuildGameplay(int neutralCount)
+    {
+        _session = new GameSession(config, neutralCount);
 
         // GameplayRoot는 스크립트 사전부착 프리팹을 ResourceLoader.LoadPrefab(클래스 이름) + Instantiate로 생성한다(소유권/조립 체인의 시작).
         // 프리팹은 active로 저작돼 있고 GameplayRoot.Awake/OnEnable은 의존성-free이므로, 배선(Initialize) 이전 활성 상태가 안전하다.
@@ -74,20 +112,39 @@ public sealed class GameSceneController : MonoBehaviour
         }
         catch
         {
-            // Initialize가 예외를 던지면 방금 만든 GameplayRoot clone을 파괴하고 다시 던진다.
+            // Initialize가 예외를 던지면 방금 만든 GameplayRoot clone을 파괴하고 세션도 Dispose한 뒤 다시 던진다.
             // GameplayRoot.Initialize는 실패 시 자기 child root를 이미 역순 정리하고 나오므로 여기서는 root clone만 파괴한다.
             Destroy(gameplayRootGo);
             _gameplayRoot = null;
+            _session.Dispose();
+            _session = null;
             throw;
         }
 
         _gameplayRoot.ReloadRequested += OnReloadRequested;
     }
 
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+    private void OnCountConfirmed(int count)
+    {
+        if (_devHud != null) _devHud.CountConfirmed -= OnCountConfirmed; // single-shot
+        if (_devHud != null) _devHud.HideStartupPanel();                 // keep the FPS overlay visible
+        BuildGameplay(count);
+    }
+#endif
+
     private void OnDestroy()
     {
         // 고정된 해체 순서: ① 자신의 바인딩 해제 ② GameplayRoot 해체 ③ 세션 Dispose는 마지막.
         // 세션이 root 해체 중 발생하는 늦은 이벤트까지 처리할 수 있도록 root보다 오래 살린다.
+        // dev 시작 화면만 뜨고 count 미확정으로 파괴되면 _gameplayRoot/_session이 null일 수 있으므로 아래는 모두 null-guard한다.
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+        if (_devHud != null)
+        {
+            _devHud.CountConfirmed -= OnCountConfirmed;
+        }
+#endif
+
         if (_gameplayRoot != null)
         {
             _gameplayRoot.ReloadRequested -= OnReloadRequested;

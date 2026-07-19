@@ -122,6 +122,7 @@ public sealed class CrowdRoot : MonoBehaviour
 
     private int _teamCount;
     private int _agentCapacity;
+    private int _neutralCount;
     private int _lastScheduledFollowerCount; // 직전 SimTick에서 조향/이동 job에 스케줄된 팔로워 수(harness의 0-팔로워 degenerate run 방지 단언용).
     private int _unitLayer = -1;         // 모든 Human root의 물리 레이어. -1이면 레이어 미해결(무시 설정/레이어 지정을 건너뜀).
     private int _wallProbeMask;          // 벽 탐지 raycast용 레이어 마스크(기본 raycast 레이어에서 Unit 제외). Initialize에서 1회 계산.
@@ -208,7 +209,7 @@ public sealed class CrowdRoot : MonoBehaviour
     /// </summary>
     /// <exception cref="ArgumentNullException">필수 참조가 null이면 발생한다.</exception>
     /// <exception cref="InvalidOperationException">cityRoot 아래에 "Ground" 자식 또는 그 renderer가 없으면 발생한다.</exception>
-    public void Initialize(GameConfigSO config, Transform cityRoot)
+    public void Initialize(GameConfigSO config, Transform cityRoot, int spawnCount)
     {
         if (_initialized || _shutdown)
         {
@@ -245,6 +246,7 @@ public sealed class CrowdRoot : MonoBehaviour
         }
 
         _config = config;
+        _neutralCount = spawnCount;
 
         // CrowdRoot가 자기 스폰 대상을 소유한다(프리팹 직렬화 필드). 미배선이면 즉시 예외(하드 페일)로 스폰 불가를 알린다.
         if (_humanPrefab == null)
@@ -260,7 +262,7 @@ public sealed class CrowdRoot : MonoBehaviour
         ComputeWalkableRegion(cityRoot);
 
         _teamCount = 1 + config.RivalCount;
-        _agentCapacity = _teamCount + config.NeutralCount;
+        _agentCapacity = _teamCount + spawnCount;
 
         // M2-a1: 권한 있는 agent 상태를 Persistent NativeArray로 1회 할당한다(storage 이관, 결과 byte-identical).
         // _buffer와 아래 조향 필드는 _simState 소유 배열의 별칭이다(해제는 Shutdown에서 _simState만).
@@ -271,7 +273,7 @@ public sealed class CrowdRoot : MonoBehaviour
         _combatResolver = new CombatResolver(_teamCount, _agentCapacity);
         _combatState = new CombatState(_teamCount);
         _combatOutcome = new CombatOutcome(_agentCapacity);
-        _recruits = new List<RecruitAssignment>(Mathf.Max(1, config.NeutralCount));
+        _recruits = new List<RecruitAssignment>(Mathf.Max(1, spawnCount));
         _killerOf = new int[_teamCount]; // 제거 그래프 해소용. teamCount(<=4)로 확보해 per-tick 재할당을 막는다.
         _isEliminatedThisTick = new bool[_teamCount];
         _terminalVisited = new bool[_teamCount];
@@ -280,7 +282,7 @@ public sealed class CrowdRoot : MonoBehaviour
         _aiDrivers = new RivalAiDriver[_teamCount];
         for (int t = 1; t < _teamCount; t++)
         {
-            _aiDrivers[t] = new RivalAiDriver(t, config, config.Seed + t);
+            _aiDrivers[t] = new RivalAiDriver(t, config, config.Seed + t, spawnCount);
         }
 
         _humanByAgent = new Human[_agentCapacity];
@@ -383,7 +385,7 @@ public sealed class CrowdRoot : MonoBehaviour
             leaderSpots[t] = ResolveLeaderSpot(RegionPoint(corner.x, corner.y));
         }
 
-        int neutralCount = _config.NeutralCount;
+        int neutralCount = _neutralCount;
         Vector3[] neutralSpots = new Vector3[Mathf.Max(1, neutralCount)];
         float[] neutralHeadings = new float[Mathf.Max(1, neutralCount)];
         float[] neutralTimers = new float[Mathf.Max(1, neutralCount)];

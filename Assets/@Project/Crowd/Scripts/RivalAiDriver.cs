@@ -35,12 +35,12 @@ public sealed class RivalAiDriver
     /// 담당 팀 id, 설정 SO, 결정적 seed로 driver를 생성한다.
     /// seed는 좌우 clearance가 정확히 동률일 때의 방향 선택에만 쓰이므로 결정성이 유지된다.
     /// </summary>
-    public RivalAiDriver(int teamId, GameConfigSO config, int seed)
+    public RivalAiDriver(int teamId, GameConfigSO config, int seed, int spawnCount)
     {
         _teamId = teamId;
         _config = config;
         _random = new System.Random(seed);
-        _neutralQuery = new List<int>(1 + config.RivalCount + config.NeutralCount);
+        _neutralQuery = new List<int>(1 + config.RivalCount + spawnCount);
     }
 
     /// <summary>

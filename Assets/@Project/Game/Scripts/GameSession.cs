@@ -23,8 +23,10 @@ public sealed class GameSession : IGameSessionReadOnly, IDisposable
     /// <summary>
     /// 설정 SO에서 매치 시간과 팀 수를 읽어 세션을 Ready 상태로 생성한다. 아직 bus 구독은 하지 않는다.
     /// </summary>
-    public GameSession(GameConfigSO config)
+    public GameSession(GameConfigSO config, int neutralCount)
     {
+        NeutralCount = neutralCount;
+
         int teamCount = config.RivalCount + 1;
         _countsByTeam = new int[teamCount];
         _eliminated = new bool[teamCount];
@@ -59,6 +61,11 @@ public sealed class GameSession : IGameSessionReadOnly, IDisposable
         EventManager.GetSubscriber<CrowdCountChangedEvent>().Subscribe(_onCrowdCountChanged);
         EventManager.GetSubscriber<CrowdEliminatedEvent>().Subscribe(_onCrowdEliminated);
     }
+
+    /// <summary>
+    /// 이 매치의 neutral crowd 스폰 인원. 세션 생성 시 확정되는 단일 count 권위이다.
+    /// </summary>
+    public int NeutralCount { get; }
 
     /// <summary>
     /// 현재 매치 상태를 반환한다.

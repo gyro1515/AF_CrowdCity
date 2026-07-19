@@ -199,7 +199,7 @@ public static class CrowdProfileHarness
 
                 // SDF solver 경로를 명시적으로 켠 뒤 초기화한다. Initialize가 WallField를 로드한다.
                 crowd.UseSdfSolver = true;
-                crowd.Initialize(cfg, cityRoot);
+                crowd.Initialize(cfg, cityRoot, cfg.NeutralCount);
 
                 // 플래그가 아니라 WallField가 실제 로드돼 SDF 경로가 활성인지 단언한다(아니면 baseline 불인정 → 하드 페일).
                 if (!crowd.IsSdfActive)

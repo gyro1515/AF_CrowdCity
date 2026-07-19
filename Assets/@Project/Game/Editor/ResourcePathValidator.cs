@@ -61,6 +61,7 @@ public static class ResourcePathValidator
     private static readonly Type[] UiRootTypes =
     {
         typeof(HudRoot),
+        typeof(DevHudRoot),
     };
 
     /// <summary>

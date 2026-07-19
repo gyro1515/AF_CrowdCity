@@ -205,7 +205,7 @@ public static class CrowdOracleHarness
 
             // SDF solver 경로를 명시적으로 켜 SDF ON 결정성 오라클로 만든다. Initialize가 WallField를 로드한다.
             crowd.UseSdfSolver = true;
-            crowd.Initialize(cfg, cityRoot);
+            crowd.Initialize(cfg, cityRoot, cfg.NeutralCount);
             if (!crowd.IsSdfActive)
             {
                 throw new InvalidOperationException(
