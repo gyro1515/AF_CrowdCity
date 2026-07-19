@@ -38,7 +38,7 @@ MonoBehaviour:
     RateLimitConversion: 1
     MaxScale: 0
     LeaderProtection: 1
-    SeparationVisitBudget: 48
+    SeparationVisitBudget: 0
     CombatFlatConvertRate: 1
   aiDecideInterval: 0.4
   fleeSizeRatio: 1.15
