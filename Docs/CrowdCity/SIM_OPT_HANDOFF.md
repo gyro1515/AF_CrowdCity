@@ -60,7 +60,7 @@
 ## ⚠️ 시작 전 게이트 (P0 — 통과 못 하면 착수 금지)
 1. **리팩토링 완료 확인**: 이 계획은 사용자의 `Crowd/Core` + `CrowdRoot` 리팩토링 **완료 후** 시작한다. 완료 여부는 **문서로 판별 불가 → 사용자에게 명시 확인**받거나 사용자가 지정한 "완료 커밋/브랜치"로 판정한다. 착수 시 baseline 고정 기록: `git branch --show-current`, `git rev-parse HEAD`. (이 계획 작성 시점엔 리팩토링이 진행 중이었다.)
 2. **정본 우선순위**: **코드 > 이 HANDOFF/PLAN > DESIGN/INTERFACES/STATUS.** `DESIGN.md`/`INTERFACES.md`/`STATUS.md`는 **Phase C 이전 스냅샷**이라 SDF/`UseSdfSolver`/`WallField`/`OracleAgentCount`가 누락돼 현재 상태를 오도할 수 있다 — 현 상태 근거로 쓰지 말 것. 계약 확인은 **현재 코드가 유일 진실**.
-3. **산출물은 tracked 커밋**: `codex_burst_*.txt`가 untracked로 방치된 전례가 있다. M-sim-0 CSV·오라클 baseline·측정 manifest는 반드시 기준 브랜치에 커밋(clean/clone 시 소멸 방지).
+3. **산출물은 tracked 커밋**: 설계 라운드 트랜스크립트(`codex_*.txt`)가 untracked로 방치된 전례가 있다(이후 `fb14a41`에 커밋 → 결론 이관 후 워킹트리에서 제거, 원본은 `git show fb14a41:<파일>`로 복구). M-sim-0 CSV·오라클 baseline·측정 manifest는 반드시 기준 브랜치에 커밋(clean/clone 시 소멸 방지).
 4. **의도적 계약 변경 목록 유지**: 밀도 캡(거동), RNG 스트림(시드 재현), baked CC 제거, SDF probe 등은 의도된 변경 → 별도 목록으로 추적하고 DESIGN/INTERFACES를 그에 맞춰 갱신.
 
 ---
@@ -79,7 +79,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - 오케스트레이션: `Assets/@Project/Crowd/Scripts/` — `CrowdRoot`(SimTick), `CrowdModel`, `RivalAiDriver`, `CrowdSimProfiler`.
 - 하네스(Editor): `Assets/@Project/Game/Editor/` — `CrowdProfileHarness`(성능), `CrowdOracleHarness`(결정성 오라클).
 - 루프: `Assets/@Project/Game/Scripts/GameplayRoot.cs`(FixedStep 0.02s=50Hz, 프레임당 최대 4스텝).
-- 브랜치: `feat/crowd-sdf-perf`. 감사 추적: 워킹트리의 `codex_burst_*.txt`(설계 라운드 산출물).
+- 브랜치: `feat/crowd-sdf-perf`. 감사 추적: 설계 라운드 산출물(`codex_burst_*.txt`)은 워킹트리에 없다 — `git show fb14a41:<파일>`로 히스토리에서 복구(§8 참조).
 
 ## 3. 운영 모델 (CLAUDE.md 준수 — 반드시 지킬 것)
 - **메인 에이전트 = 매니저만**. 조사/파일읽기/분석/구현/편집/테스트/diff 리뷰는 **전부 서브에이전트에 위임**. 메인은 목표·범위·성공기준 정의, 위임, 판정, 최종보고만.
@@ -167,4 +167,4 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - 상세 설계: `Docs/CrowdCity/SIM_OPT_PLAN.md`
 - 규칙: `CLAUDE.md`(root)
 - crowd 계약: `Docs/CrowdCity/{DESIGN,INTERFACES,STATUS}.md`
-- 설계 라운드 산출물(감사): 워킹트리 `codex_burst_prompt{,2..7}.txt` / `codex_burst_out{,2..7}.txt` — ⚠️ **현재 untracked라 clean/clone 시 소멸**. 감사에 필요하면 tracked 경로로 커밋.
+- 설계 라운드 산출물(감사): `codex_burst_prompt{,2..7}.txt` / `codex_burst_out{,2..7}.txt` + `codex_{ccmove,design,explain}_*.txt` — **워킹트리에서 제거됨**(결론은 이 문서·`SIM_OPT_PLAN.md`·`SIM_OPT_10K_PLAN.md` §5로 이관 완료). 원본은 히스토리에 남아 `git show fb14a41:<파일>`로 언제든 복구.

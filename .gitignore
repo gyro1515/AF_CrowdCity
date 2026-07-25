@@ -60,6 +60,9 @@ ExportedObj/
 # Unity3D generated file on crash reports
 sysinfo.txt
 
+# Codex cross-verification transcripts (local scratch, recoverable from history)
+codex_*.txt
+
 # Builds
 *.apk
 *.aab
