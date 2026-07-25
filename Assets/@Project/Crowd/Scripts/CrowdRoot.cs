@@ -1424,19 +1424,24 @@ public sealed class CrowdRoot : MonoBehaviour
                     _followerVelocity[index] = velocity;
 
                     float speed = velocity.magnitude;
-                    Human human = _humanByAgent[index];
                     _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
                     if (speed > 0.001f)
                     {
                         _visualYaw[index] = Quaternion.Euler(0f, Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
-                        human.SetHeadingAndSpeed(
-                            Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
+                        if (!_gpuRenderActive) // GPU 경로는 _visualYaw/_visualSpeed01로 렌더하므로 이 transform.rotation·Animator 쓰기는 dead다.
+                        {
+                            _humanByAgent[index].SetHeadingAndSpeed(
+                                Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
+                        }
                     }
                     else
                     {
                         float headingDeg = _visualYaw[index]; // 정지 시 저장된 yaw 유지(과거 transform.eulerAngles.y 읽기 대체).
                         _visualYaw[index] = Quaternion.Euler(0f, headingDeg, 0f).eulerAngles.y; // 정규화 재적용(멱등).
-                        human.SetHeadingAndSpeed(headingDeg, 1f);
+                        if (!_gpuRenderActive) // GPU 경로는 _visualYaw/_visualSpeed01로 렌더하므로 이 transform.rotation·Animator 쓰기는 dead다.
+                        {
+                            _humanByAgent[index].SetHeadingAndSpeed(headingDeg, 1f);
+                        }
                     }
                 }
             }
@@ -1515,19 +1520,24 @@ public sealed class CrowdRoot : MonoBehaviour
                     _followerVelocity[index] = velocity;
 
                     float speed = velocity.magnitude;
-                    Human human = _humanByAgent[index];
                     _visualSpeed01[index] = 1f; // 팔로워는 항상 1(시각 전용, GPU phase 적분용).
                     if (speed > 0.001f)
                     {
                         _visualYaw[index] = Quaternion.Euler(0f, Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
-                        human.SetHeadingAndSpeed(
-                            Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
+                        if (!_gpuRenderActive) // GPU 경로는 _visualYaw/_visualSpeed01로 렌더하므로 이 transform.rotation·Animator 쓰기는 dead다.
+                        {
+                            _humanByAgent[index].SetHeadingAndSpeed(
+                                Mathf.Atan2(velocity.x, velocity.y) * Mathf.Rad2Deg, 1f);
+                        }
                     }
                     else
                     {
                         float headingDeg = _visualYaw[index]; // 정지 시 저장된 yaw 유지(과거 transform.eulerAngles.y 읽기 대체).
                         _visualYaw[index] = Quaternion.Euler(0f, headingDeg, 0f).eulerAngles.y; // 정규화 재적용(멱등).
-                        human.SetHeadingAndSpeed(headingDeg, 1f);
+                        if (!_gpuRenderActive) // GPU 경로는 _visualYaw/_visualSpeed01로 렌더하므로 이 transform.rotation·Animator 쓰기는 dead다.
+                        {
+                            _humanByAgent[index].SetHeadingAndSpeed(headingDeg, 1f);
+                        }
                     }
                 }
             }
@@ -1619,7 +1629,10 @@ public sealed class CrowdRoot : MonoBehaviour
                 // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
                 _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
                 _visualYaw[i] = Quaternion.Euler(0f, _wanderHeadingDeg[i], 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
-                _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
+                if (!_gpuRenderActive) // GPU 경로는 _visualYaw/_visualSpeed01로 렌더하므로 이 transform.rotation·Animator 쓰기는 dead다.
+                {
+                    _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
+                }
             }
             CrowdSimProfiler.End(CrowdSimProfiler.Seg.NeutralPresent);
         }
@@ -1658,7 +1671,10 @@ public sealed class CrowdRoot : MonoBehaviour
                 // 범위 밖 config 값에서도 플래그와 무관하게 동일하게 동작시킨다.
                 _visualSpeed01[i] = Mathf.Clamp(_config.NeutralAnimationSpeed, 0f, Human.MaxAnimatorSpeed); // 시각 전용(GPU phase 적분용).
                 _visualYaw[i] = Quaternion.Euler(0f, _wanderHeadingDeg[i], 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
-                _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
+                if (!_gpuRenderActive) // GPU 경로는 _visualYaw/_visualSpeed01로 렌더하므로 이 transform.rotation·Animator 쓰기는 dead다.
+                {
+                    _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
+                }
             }
         }
 
