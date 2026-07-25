@@ -4,6 +4,13 @@
 
 **성능 수치를 인용할 때 반드시 모드를 함께 적을 것.** 이 문서에는 같은 하네스·같은 세그먼트의 두 데이터셋이 있다 — §1~§6은 **SMR 경로**(`_gpuRenderActive == false`), §8은 **GPU 경로**(`== true`)다. 모드를 떼면 두 배 이상 차이 나는 값이 뒤섞인다.
 
+> ⚠️ **§7의 절대 수치는 출하 설정의 수치가 아니다 — 하네스가 config를 덮어쓴다.**
+> `CrowdPerfHarness`/`CrowdPerfHarnessP95`는 복제 config에 **`SeparationVisitBudget = 48`을 무조건 강제**한다(`CrowdPerfHarness.cs:235`, `CrowdPerfHarnessP95.cs:290`). 출하 `Assets/@Project/Game/GameConfig.asset`은 **0**이다 — `79db659`가 0→48로 켰다가 `4adb502`("조밀 군집 떨림 제거")가 48→0으로 되돌렸고 하네스의 하드코딩 48만 남았다. 하네스가 왜 48을 고정하는지는 코드에 적혀 있지 않다(주석은 "밀도 cap 강제 ON"뿐) — 위 이력이 정황일 뿐 의도는 기록되지 않았다. 0은 이웃 전수 방문, 48은 48번째 매칭 후보에서 스캔 중단이므로(`SteeringForceJob.cs:100`, `:144`) **하네스는 조밀 구간에서 출하본보다 적게 일한다.**
+>
+> - **적용 범위는 §7뿐이다.** §1~§6·§8은 `CrowdProfileHarness`가 override 없이 돌아 원시 파일이 `# SeparationVisitBudget override: config-default(off)`를 인쇄했다 — 출하 값 0으로 측정됐다. §7의 원시 CSV 1행만 `SeparationVisitBudget=48`을 인쇄한다. (`CrowdOracleHarness`도 마찬가지로 `-oracleSepBudget`을 준 런에서만 덮어쓴다 — 바이트 동일 게이트는 출하 값으로 돈다.)
+> - **A/B 델타는 유효, 절대값은 무효.** §7.6의 판정은 그대로다(§7.7-h).
+> - `useGpuCrowdRenderer = true` 강제(`CrowdPerfHarness.cs:239`, `CrowdPerfHarnessP95.cs:294`)는 **분기가 아니다** — 출하 asset이 이미 `useGpuCrowdRenderer: 1`이라(`79db659`) 중복 고정일 뿐이다. §1~§6·§8의 SMR/GPU 구분은 이 플래그가 아니라 `-nographics` 유무가 갈랐다.
+
 - 측정일: 2026-07-26
 - 대상 질문: [`../SIM_OPT_10K_PLAN.md`](../SIM_OPT_10K_PLAN.md) §2 — 다음 단계가 **T1b**(직렬 제시 패스 잡화)인가 **T2**(잡 일 축소)인가
 - 원시 출력: 이 디렉터리의 `simopt10k_step1_r1.txt` / `r2.txt` / `r3.txt`
@@ -163,7 +170,7 @@ r2만 r1/r3의 약 2.3배 부하에서 돌았다. 그러나 **잡 대기가 계�
 | sim cadence | `FixedStep = 0.02`, `MaxStepsPerFrame = 4`, 실제 `Time.deltaTime` 누산 (`CrowdPerfHarnessP95.cs:164-165`, `:459`) |
 | 런 수 | **arm당 2런** (BEFORE r1/r2, AFTER r1/r2) |
 
-`SeparationVisitBudget = 48`은 하네스가 CSV 1행 헤더에 인쇄한다(양 arm 동일).
+`SeparationVisitBudget = 48`은 하네스가 CSV 1행 헤더에 인쇄한다(양 arm 동일). **이 값은 하네스가 강제한 것이고 출하 asset은 0이다** — 문서 머리의 경고와 §7.7-h를 함께 읽을 것.
 
 ### 7.2 커맨드라인 (verbatim)
 
@@ -305,6 +312,9 @@ Editor + Mono 스크립팅 백엔드, Ryzen 5 5600X(6C/12T) + RTX 4080, D3D11에
 **(f) 남은 부하 비대칭.** §7.4대로 BEFORE arm의 평균 ambient CPU가 더 높다(14.25% vs 10.99%). 결론 부호에는 영향이 없으나 효과 크기를 얼마간 과대평가할 수 있고, 그 정도는 정량화되지 않았다.
 
 **(g) §6의 `RenderInterpolate` 공백은 여기서 닫힌다(값은 아니고 범위만).** 헤드리스 프로파일은 `SimTick`만 돌려 `RenderInterpolate`의 per-agent transform 쓰기(`CrowdRoot.cs:747`, `:755`)를 아예 제외했다. 이 play-mode 측정은 프레임마다 그것을 호출하므로 `full_*`/`mainthread_*`/`simtick_*` 전부에 그 비용이 들어 있다. 다만 (c)·(d)대로 **분리해 출력되지는 않는다.**
+
+**(h) 이 절의 절대 수치는 출하 설정의 수치가 아니다 — 델타는 그대로 유효하다.**
+양 arm 모두 하네스가 강제한 `SeparationVisitBudget = 48`로 돌았고 출하 `GameConfig.asset`은 **0**이다(문서 머리 경고). **§7.6의 판정은 그대로다** — 두 arm이 같은 override를 공유하므로 `simtick_median_ms` 23.113 → 10.287(**Δ −12.826 ms/틱, −55.5%, spread의 7.99배 → 개선 확정**)의 **델타와 판정은 유효하다.** 무효인 것은 **절대값**이다: 23.113도 10.287도 게임이 도는 설정에서 나올 수치가 아니다. 출하본은 분리 스캔이 캡 없이 돌므로 조밀 구간에서 **더 많이 일한다**(방향만 확실하고 크기는 이 측정으로 정량화되지 않았다). 같은 제한이 §7의 다른 절대 수치 전부에 걸린다 — `full_*`/`mainthread_*`/`render_*`, (a)의 92.302 / 9.382 / 97.805 ms 환산, (b)의 호출당 1.28 µs, (d)의 `ΔSimTick ∈ [−20.76, −12.83]`. 이 제한은 (e)의 "데스크톱 Editor/Mono 범위"와 **별개로 겹치는** 축이다. 반대로 §1~§6·§8은 override 없이 돌았으므로 이 항의 대상이 아니다.
 
 ---
 

@@ -62,6 +62,9 @@
 - **TMP 에셋 부수 효과.** 헤드리스 하네스를 돌릴 때마다 `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset`이 더럽혀진다(약 10 insertions / 911 deletions). 커밋 전 되돌릴 것. **`git add -A` 금지** — 항상 경로를 명시한다.
 - **타이밍 측정은 조용한 머신에서.** 런 직전 호스트 전체 CPU를 읽고 **약 30% 초과면 미룬다.** 포그라운드 게임이 코어 하나를 점유했을 때 **병렬 구간 +66%** vs **직렬 구간 +8~13%** 로 갈렸다 — 배경 부하는 병렬 구간에 집중된다.
 - **성능 목표 수치 지어내기 금지**(아래 §7). 게이트는 "런 간 spread를 넘는 개선"으로 서술하고, spread 안의 델타는 **판정 불가(inconclusive)** 로 보고한다.
+- **하네스가 config를 덮어쓴다 — 어느 수치가 출하 설정의 수치인지 먼저 가릴 것.**
+  - **`CrowdPerfHarness` / `CrowdPerfHarnessP95`는 복제 config에 `SeparationVisitBudget = 48`을 무조건 강제한다**(`CrowdPerfHarness.cs:235`, `CrowdPerfHarnessP95.cs:290`). 출하 `Assets/@Project/Game/GameConfig.asset`은 **0**이다(`79db659`가 0→48, `4adb502`가 조밀 군집 떨림 때문에 48→0으로 되돌림 — 하네스의 하드코딩 48만 남았다). 0=이웃 전수 방문, 48=48번째 매칭 후보에서 스캔 중단(`SteeringForceJob.cs:100`, `:144`)이므로 **두 하네스는 조밀 구간에서 출하본보다 적게 일한다** → 그 절대 수치는 **게임이 도는 시뮬의 수치가 아니다**. 반면 **같은 하네스의 두 arm을 비교하는 A/B는 유효하다** — 양 arm이 같은 override를 공유하므로 델타는 살고, 절대값만 죽는다. 두 하네스의 `useGpuCrowdRenderer = true` 강제(`:239`, `:294`)는 **분기가 아니다** — 출하 asset이 이미 `1`이라 중복 고정일 뿐이다.
+  - **`CrowdProfileHarness` / `CrowdOracleHarness`는 강제하지 않는다.** `-profileSepBudget`/`-oracleSepBudget`을 준 런에서만 덮어쓰고 기본은 config 값 그대로다(`CrowdProfileHarness.cs:78`·`:192`, `CrowdOracleHarness.cs:49`·`:193`). 두 하네스의 `UseSdfSolver = true`(`:201`, `:215`)도 프리팹 직렬화 값(`CrowdRoot.prefab` `_useSdfSolver: 1`)과 같아 분기가 아니다. 결과적으로 `Perf/MANIFEST.md` **§1~§6·§8은 출하 예산(0)으로**, **§7만 48로** 측정됐다.
 
 ### 함정
 
