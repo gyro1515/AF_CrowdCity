@@ -1,0 +1,67 @@
+# Phase C 단계 0 baseline profile
+# label: step1_serialsplit_r3
+# generated: 2026-07-26 02:30:10
+# scene: Assets/@Project/Scenes/GameScene.unity, seed=12345, rivalCount=3, groundY=0.5
+# dt=0.02, warmupTicks=200, timingTicks=1000, gcTicks=500, sdfVerifyTicks=20, counterTicks=300
+# Stopwatch.Frequency=10000000, HighResolution=True
+# 주의: edit-mode headless 측정(Animator/스키닝/렌더 제외). Raycast/CheckSphere는 실제 physics 수행.
+# 소스: live 프리팹 인스턴스(_useSdfSolver=1). SDF ON 강제 + IsSdfActive 단언 + CC.Move 폴백 0 단언(baseline 인정 조건).
+# 주의(SDF ON): CCMove 구간은 ApplyHorizontalMove(리더/팔로워/중립)를 감싸므로 SDF ON에서는 WallSolver.Resolve(SDF 이동 해소) 벽시계다.
+#   즉 CCMove≈CharacterController.Move가 아니라 SDF 이동 적용 비용이며(실제 CC.Move 호출 수=0, CcMoveFallbacks 카운터로 별도 검증), 각 이동 구간(LeaderMove/FollowerSteer/NeutralMove)에 중첩된다.
+# work counter는 timing을 교란하므로 timing/GC pass는 counter OFF, 진단 counter는 -profileCounters 별도 pass에서만 집계.
+# alloc_*는 GC.GetTotalMemory(false) tick 델타(음수 clamp) 프록시 = per-tick 관리 힙 할당 하한 지표(GC 수집 노이즈 존재).
+
+# SeparationVisitBudget override: config-default(off)
+## SUMMARY (ms/tick, bytes/tick)
+neutralCount,agents,simtick_median_ms,simtick_p95_ms,simtick_max_ms,alloc_total_bytes,alloc_mean_bytes_per_tick,alloc_max_bytes_per_tick,moved_agents,leader_disp_m
+5000,5004,6.2788,8.2966,13.4818,0,0,0,3,0
+10000,10004,20.3106,22.6695,36.3295,0,0,0,3,0
+
+## SEGMENTS (mean ms/tick, % of Total)
+neutralCount,segment,mean_ms,pct_of_total
+5000,Total,6.4747,100
+5000,Restore,0.0184,0.2849
+5000,Heading,0.0077,0.1194
+5000,LeaderMove,0.029,0.4486
+5000,FollowerSteer,1.3618,21.0327
+5000,NeutralMove,3.5926,55.4875
+5000,Mirror,0.0012,0.0192
+5000,GridRebuild,0.0945,1.46
+5000,Recruit,1.0724,16.5632
+5000,Combat,0.2926,4.5187
+5000,CommitPublish,0.0018,0.0273
+5000,CCMove,0.5622,8.683
+5000,FollowerPrepass,0.0295,0.4551
+5000,FollowerGridSnapshot,0.0076,0.118
+5000,FollowerJobWait,0.4377,6.7601
+5000,FollowerPresent,0.8829,13.6356
+5000,NeutralPrepass,0.6633,10.2453
+5000,NeutralJobWait,0.1001,1.5466
+5000,NeutralPresent,2.8284,43.684
+5000,DERIVED_CCMove,0.5622,8.683
+5000,DERIVED_TransformMarshal,0.0197,0.3041
+5000,DERIVED_MoveMathPure,4.4213,68.2858
+5000,DERIVED_KernelResolvers,1.4595,22.5419
+10000,Total,20.4962,100
+10000,Restore,0.0343,0.1675
+10000,Heading,0.0097,0.0472
+10000,LeaderMove,0.0176,0.0857
+10000,FollowerSteer,11.6937,57.053
+10000,NeutralMove,5.5277,26.9695
+10000,Mirror,0.0019,0.0094
+10000,GridRebuild,0.2147,1.0473
+10000,Recruit,1.6014,7.8131
+10000,Combat,1.3833,6.7493
+10000,CommitPublish,0.008,0.0389
+10000,CCMove,2.7676,13.5031
+10000,FollowerPrepass,0.1756,0.8569
+10000,FollowerGridSnapshot,0.0182,0.0886
+10000,FollowerJobWait,2.641,12.8854
+10000,FollowerPresent,8.8528,43.1925
+10000,NeutralPrepass,0.6979,3.4051
+10000,NeutralJobWait,0.1146,0.5594
+10000,NeutralPresent,4.714,22.9993
+10000,DERIVED_CCMove,2.7676,13.5031
+10000,DERIVED_TransformMarshal,0.0362,0.1768
+10000,DERIVED_MoveMathPure,14.4713,70.605
+10000,DERIVED_KernelResolvers,3.1994,15.6097

@@ -49,12 +49,26 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 
 ---
 
-## 2. 미확정 (구현 전 측정 필요)
+## 2. 측정 완료 — 직렬 vs 잡 분리 → **T1b 확정** (2026-07-26, `fdf909d`)
 
-**FollowerSteer 11.83ms의 직렬 vs 잡-wall-clock 비율 미분리.**
-- 직렬(prepass 위치캡처 + presentation: `SetHeadingAndSpeed`·`Quaternion.Euler`·visual 배열 쓰기)이 크면 → **T1b(직렬 잡화)**가 유효.
-- 잡 wall-clock(SDF resolve + separation, 이미 병렬, 일 자체가 큼)이 크면 → **T2(일 축소 = 밀도 캡)**가 필요.
-- **액션:** prepass/presentation 구간과 `.Complete()` 대기를 분리 계측(임시 Seg 추가 또는 Stopwatch)해 T1b vs T2 우선순위 확정. CCMove(SDF resolve) 세그가 이미 10k 2.76ms로 잡혀 있으니, `FollowerSteer − CCMove − .Complete대기`가 직렬 몫의 근사.
+**정정.** 이 절의 초판이 제안했던 `FollowerSteer − CCMove − .Complete대기` 산식은 **성립하지 않는다.** `Seg.CCMove`는 다섯 지점(리더 `ApplyHorizontalMove`, 팔로워 SDF 이동 잡 대기, 팔로워 CC 폴백, 중립 SDF 이동 잡 대기, 중립 CC 폴백)을 합산하는 단일 버킷이라 10k의 `CCMove` 2.78ms에는 팔로워·중립 대기가 섞여 있고, `*JobWait`은 `CCMove`와 inclusive 중첩이라 이중 차감이 된다. 대신 `1485848`에서 분기별 Seg 7개(`Follower/Neutral × Prepass/JobWait/Present` + `FollowerGridSnapshot`)를 추가해 직접 계측했다.
+
+**측정:** headless SDF ON, 5000/10000, 동일 인자 3런. 환경·verbatim 커맨드라인·부하 통제·판정 규칙·판독 주의는 [`Perf/MANIFEST.md`](Perf/MANIFEST.md), 원시 출력은 [`Perf/simopt10k_step1_r{1,2,3}.txt`](Perf/).
+
+- **T1b 대상(직렬)** = `FollowerPrepass`+`FollowerGridSnapshot`+`FollowerPresent`+`NeutralPrepass`+`NeutralPresent`
+- **T2 대상(잡 벽시계)** = `FollowerJobWait`+`NeutralJobWait`
+- **spread** = 두 합 각각의 (max−min)을 더한 노이즈 대역. 차이가 spread를 못 넘으면 판정 불가.
+
+| 스케일 | T1b 대상 | T2 대상 | Total | 차이 / spread |
+|---|---|---|---|---|
+| 5000 | **4.39 (68.3%)** | 0.52 (8.1%) | 6.43 | 3.87 / 0.079 = **49배** |
+| 10000 | **14.47 (70.4%)** | 2.78 (13.5%) | 20.56 | 11.69 / 0.197 = **59배** |
+
+**판정: T1b.** 차이가 런 간 노이즈 대역의 49~59배 → 결정적. 10k 직렬 내역은 `FollowerPresent` 8.87(43.1%) > `NeutralPresent` 4.71(22.9%) ≫ `NeutralPrepass` 0.70 > `FollowerPrepass` 0.18 > `FollowerGridSnapshot` 0.02 — **두 Present 루프만으로 SimTick의 66%**다. 반면 **T2의 상한**은 두 잡 대기를 0으로 만들어도 10k 13.5% / 5k 8.1%다. (5k→10k Total 3.20배 = 에이전트 2배 대비 초선형이고, 그 증가분도 팔로워 계열 6~10배가 끌고 간다.)
+
+**상한 주의 + 손익분기.** 헤드리스는 SMR 경로라 `*Present`가 GPU 빌드에서는 게이팅되는 `transform.rotation`·`Animator.speed` 쓰기(T1a)까지 포함한다 → **`*Present`는 상한**이다. 그래도 판정은 뒤집히지 않는다: 5k는 `*Present`가 공짜여도 prepass만으로 0.70 > T2 0.52고, 10k는 `*Present` 비용의 **86.1% 초과**가 SMR 전용이어야 뒤집힌다. 두 루프 모두 `Quaternion.Euler(0f, X, 0f).eulerAngles.y`(`CrowdRoot.cs:1430`, `:1440`, `:1631`)를 게이트 **밖에서 무조건** 실행하고 이는 에이전트·틱당 managed→native→managed 왕복이라 GPU 빌드에서도 남으므로, 86.1%는 비현실적이다.
+
+**측정 공백(2건).** ①하네스가 팔로워/중립 모집단 수를 출력하지 않아 위 스케일링 비대칭의 원인(모집단 구성 이동)은 추론이며 미측정. ②`RenderInterpolate`의 per-agent transform 쓰기(`CrowdRoot.cs:747`, `:755`)는 하네스가 호출하지 않아 이 측정 범위 밖이다.
 
 ---
 
@@ -98,10 +112,10 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 ---
 
 ## 4. 권장 순서
-1. **§2 분리-측정** (T1b vs T2 우선순위 확정).
-2. **T1a** (죽은 rotation 쓰기 제거) — 저위험·GPU 빌드 즉효, 먼저.
-3. 측정 결과에 따라 **T1b 또는 T2**.
-4. 그다음 **T3a → T3b** (50k 목표 시).
+1. **[완료] §2 분리-측정** — `1485848`에서 Seg 7개 추가 → `fdf909d`에서 3런 측정 → **T1b 확정**(§2).
+2. **[완료] T1a** (죽은 rotation 쓰기 제거, `fdf909d`). 단 GPU 빌드 실측 이득은 아직 미검증.
+3. **[다음] T1b** (팔로워/뉴트럴 직렬 prepass + presentation 잡화). 최우선 타깃은 두 `*Present` 루프(10k SimTick의 66%).
+4. 그다음 **T3a → T3b** (50k 목표 시). **T2는 후순위** — §2 판정상 상한이 10k 13.5%다.
 5. 각 단계: 계획 교차검증 → 구현/검증 분리 → 오라클 byte-identical + shot → 커밋.
 
 ## 5. 모바일 최약기기 1만 "하한" 조건 (Codex R5 판단 — 외삽, 미측정)
