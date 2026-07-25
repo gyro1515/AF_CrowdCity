@@ -95,7 +95,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - **새 세션의 최초 행동 = 문서/코드 조사를 서브에이전트에 위임**(메인이 직접 읽으면 매니저 전용 규칙 위반). 메인은 확인된 결론만 받아 Step 0 구성.
 - **교차검증 reviewer는 항상 read-only**, 동일 HEAD SHA·frozen 작업트리·동일 요구사항/Decision Log/검증결과를 입력받는다. (Codex는 파일쓰기 필요 시에만 `workspace-write`; 설계·검증 리뷰는 read-only.)
 - **합의 종료 조건 = 미해결 BLOCKER/MAJOR 0건.** reviewer 의견이 끝내 충돌하면 임의 봉합 말고 **사용자가 최종 결정**. 참조: 메모리 `autonomous-decisions-via-cross-verification`.
-- **셸 주의**: 주 셸 = PowerShell(win32). codex 템플릿의 `< /dev/null` 등 POSIX 문법은 **Bash 툴**로 실행. 필수 CLI/인증/지정 모델(codex `gpt-5.6-sol`, Claude `opus`)이 없으면 임의 대체 말고 **중단→사용자 확인**.
+- **셸 주의**: 주 셸 = PowerShell(win32). codex 템플릿의 `< /dev/null` 등 POSIX 문법은 **Bash 툴**로 실행. 필수 CLI/인증/지정 모델(codex `gpt-5.6-sol`, Claude `Opus 5`)이 없으면 임의 대체 말고 **중단→사용자 확인**.
 - **성능 목표 수치를 지금 지어내지 말 것** — M-sim-0 실측 + 디바이스 budget 후 확정. 현재 문서의 모든 수치는 외삽.
 
 ---

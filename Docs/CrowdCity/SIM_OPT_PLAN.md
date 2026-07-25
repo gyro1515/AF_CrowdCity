@@ -1,6 +1,6 @@
 # Crowd Sim CPU 최적화 설계 (합의안)
 
-> 상태: **설계 확정 · 구현 대기**. Claude(opus 4.8) + Codex(gpt-5.6-sol) 유니티 시니어 관점 교차검증 1라운드 합의(2026-07-17).
+> 상태: **설계 확정 · 구현 대기**. Claude(Opus 5) + Codex(gpt-5.6-sol) 유니티 시니어 관점 교차검증 1라운드 합의(2026-07-17).
 > 전제: 현재 구조 리팩토링이 `Crowd/Core` + `CrowdRoot`를 전부 건드리므로, **리팩토링 완료 후 책임 단위로 rebase 적용**한다. 라인 번호는 근거 인용용이며 못박지 않는다.
 > 대상: **데스크톱 sim-bound**(확정 병목 = `GameplayRoot.Update → CrowdRoot.SimTick`, 사용자 Profiler 실측). 렌더/애니/GameObject 스택은 **불변**(모바일 만단위 렌더 재설계는 별도 트랙).
 
