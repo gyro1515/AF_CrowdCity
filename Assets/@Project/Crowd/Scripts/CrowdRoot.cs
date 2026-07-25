@@ -11,7 +11,7 @@ using UnityEngine;
 /// </summary>
 public sealed class CrowdRoot : MonoBehaviour
 {
-    // ---- 스폰/배치 계약 상수 (DESIGN.md §2 spawn/placement contract) ----
+    // ---- 스폰/배치 계약 상수 (소비처: PrepareSpawnPlacements / SpawnLeaders / SpawnNeutralRange). 아래 CheckSphere 검사는 전부 Instantiate 이전에 끝난다 — baked CC가 Instantiate 즉시 live이라 그 사이에 물리/overlap 질의가 들어가면 안 된다(CLAUDE.md §11.5 "Baked physics & determinism exception"). ----
     private const float RegionShrinkMeters = 2f;          // Ground renderer bounds를 이만큼 안쪽으로 줄인다.
     private const float CornerInset = 0.15f;               // 라이벌 코너 배치 inset 비율.
     private const float SpawnCheckHeight = 0.9f;           // 유효성 검사 sphere의 높이 offset.
@@ -22,7 +22,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private const float GoldenAngleRad = 2.39996f;          // spiral probe 각도 증분(라디안).
 
     // ---- 이동/조향 상수 ----
-    private const float GridCellSize = 1.5f;                // SpatialGrid cell 크기(DESIGN.md §4).
+    private const float GridCellSize = 1.5f;                // SpatialGrid cell 크기(m). 아래 _grid 생성 인자이며 결정성 고정 상수다.
     private const float WanderRayHeight = 0.9f;             // 중립 배회 방향 검사 raycast 높이.
     private const float WanderRayDistance = 1.5f;           // 중립 배회 방향 검사 raycast 거리.
     private const int WanderRepickTries = 8;                // 배회 방향 재선택 시 최대 후보 수.

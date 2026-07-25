@@ -1,6 +1,6 @@
 # WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
 
-> **검증 기준 커밋: `03b57a9`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
+> **검증 기준 커밋: `9f23df4`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
 
 > **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 작성됐다 — `4cd9260`이 `PROJECT_MAP.md`를, `a28aee3`이 CrowdCity 가이드 [`CROWD_GUIDE.md`](CrowdCity/CROWD_GUIDE.md)를 신설했다).
 > **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고(`ce53e44`), 그 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 다음 패스 몫이다.
@@ -10,7 +10,7 @@
 ## 🔴 운영 계약 (2026-07-26) — **이 영역 작업 전 반드시 읽을 것**
 
 > 이 절이 **현재 상태·불변식·게이트·함정의 정본**이다. 상태가 바뀌면 커밋이 없더라도 이 절을 갱신한다.
-> 변경 **이력**(무엇을 왜 바꿨는지, 기각한 대안)은 [`CHANGELOG.md`](CrowdCity/CHANGELOG.md)에 있다. 사실은 한 곳에만 둔다 — 이력은 CHANGELOG, 계약은 이 절.
+> 변경 **이력**(무엇을 왜 바꿨는지, 기각한 대안)은 **git 히스토리**에 있다(`Docs/CrowdCity/CHANGELOG.md`는 삭제됐다 — CLAUDE.md §1.1 Rule 1 "이력은 네 번째 문서가 아니다". 원본은 히스토리에 남아 `git log --diff-filter=D -- Docs/CrowdCity/CHANGELOG.md`로 커밋을 찾아 복구할 수 있다). 서술이 필요한 이력은 사람용 가이드 [`CROWD_GUIDE.md`](CrowdCity/CROWD_GUIDE.md)의 산문이 담고, 측정 이력은 [`Perf/MANIFEST.md`](CrowdCity/Perf/MANIFEST.md)가 담는다. 사실은 한 곳에만 둔다 — 계약은 이 절.
 
 브랜치: **`feat/crowd-sim-10k`** (다른 PC에서 `git fetch && git checkout feat/crowd-sim-10k && git pull`로 재개)
 
@@ -33,14 +33,14 @@
 - **5k: T1b 유지.** 1.74 vs 0.54, 3.17배.
 - **"그러면 T2"도 아니다.** 판정 불가는 우열을 못 가린다는 뜻이다. 게다가 이 데이터셋의 변동은 병렬 구간에 편중돼(잡 대기 변동폭이 직렬의 1.9배) **T2를 크게 보이게 하는 방향**인데도 T2가 앞서지 못했다.
 - 첫 판정("T1b 확정")은 **그 데이터 위에서는 옳았다.** 다만 그 근거의 대부분이 T1a가 이미 지운 쓰기였다 — 헤드리스는 SMR 경로이므로(`CrowdRenderer.Init`이 null graphics device에서 `false` 반환 — `CrowdRenderer.cs:98`~`:102`) `*Present`가 그 쓰기를 포함했다. GPU 경로에서 그 몫이 빠지자 남은 두 합이 동률이 됐다: `*Present` 합 13.58 → **2.22 ms(−83.6%)**.
-- 근거·환경·판독 주의는 `Perf/MANIFEST.md` §8, 판정 본문은 `SIM_OPT_10K_PLAN.md` §2. 여기서 반복하지 않는다.
+- 근거·환경·판독 주의·판정 본문은 전부 [`Perf/MANIFEST.md`](CrowdCity/Perf/MANIFEST.md) §8(특히 §8.5 판정, §8.7 손익분기 대조, §8.8 판독 주의)에 있다. 여기서 반복하지 않는다.
 
 **🔻 전제가 바뀌었다 — 다음 타깃은 10k에서 나오지 않는다.**
 
-`SIM_OPT_10K_PLAN.md`는 **"10k가 문제다"라는 전제로 쓰인 문서**다. 그 전제가 깨졌다. **T1a 하나만으로** GPU 경로 10k가 **9.56 ms/tick**(mean; p95 11.16)이 됐고, 50Hz 고정 스텝(`GameplayRoot` `FixedStep = 0.02`)의 틱 주기 20 ms 대비 **약 48%**(p95 약 56%)다. 이 20 ms는 **루프 케이던스라는 구조적 사실**이며 성능 목표치·수용 임계가 아니다(§7).
+이 브랜치의 최적화 계획은 **"10k가 문제다"라는 전제 위에 세워져 있었다**(그 전제로 쓰인 `SIM_OPT_10K_PLAN.md`는 삭제됐고, 살릴 사양은 §9로 옮겼다). 그 전제가 깨졌다. **T1a 하나만으로** GPU 경로 10k가 **9.56 ms/tick**(mean; p95 11.16)이 됐고, 50Hz 고정 스텝(`GameplayRoot` `FixedStep = 0.02`)의 틱 주기 20 ms 대비 **약 48%**(p95 약 56%)다. 이 20 ms는 **루프 케이던스라는 구조적 사실**이며 성능 목표치·수용 임계가 아니다(§7).
 
 - **다음 타깃은 20k~50k에서 무엇이 먼저 깨지는가로부터 재도출해야 한다.** 10k 세그먼트 점유율로 고르면 안 된다 — 그 지점에서 두 후보가 동률이고, 동률인 두 값의 순위는 노이즈가 정한다.
-- **타깃은 아직 정하지 않았다. 열려 있다.** 필요한 것은 더 정밀한 10k 측정이 아니라 **다른 판별자**다(스케일 지수 / 워커 코어가 적은 실기기의 병렬 구간 거동 / 렌더 티어 상한). 후보 축은 `SIM_OPT_10K_PLAN.md` §2.1에 열거해 뒀고 **어느 것도 아직 측정되지 않았다.**
+- **타깃은 아직 정하지 않았다. 열려 있다.** 필요한 것은 더 정밀한 10k 측정이 아니라 **다른 판별자**다(스케일 지수 / 워커 코어가 적은 실기기의 병렬 구간 거동 / 렌더 티어 상한). **세 축 어느 것도 아직 측정되지 않았다.** 세그먼트 점유율로 고르면 안 된다.
 - **`T2는 후순위 — 상한 13.5%`라는 이전 근거는 무효다.** 그건 SMR 경로 값이고 GPU 경로에서는 잡 대기가 Total의 **31.5%**다. T2가 이겼다는 뜻이 아니라, 그 후순위 논거를 다시 쓰면 안 된다는 뜻이다.
 
 ### 깨면 안 되는 불변식
@@ -73,7 +73,7 @@
 - **GPU 경로에서 팔로워/뉴트럴의 `transform.rotation`은 영구히 stale**이다(이미 stale이던 위치에 회전이 합류 — 기존 주석 `CrowdRoot.cs:740`). 앞으로 팔로워·뉴트럴의 `transform.rotation`이나 `.forward`를 읽는 기능을 추가하면 조용히 스폰 시점 값을 받는다.
 - **`fdf909d`(T1a)는 `dcb3bfb`와 결합되어 있다.** 되돌릴 때는 함께 되돌려야 한다 — `dcb3bfb` 이전이면 살아남은 edit-mode 유령의 facing이 얼어붙는 실제 시각 회귀가 된다.
 - **Unity는 에디트 모드에서 지연 `Object.Destroy`를 거부한다.** 모든 에디트 모드 하네스(`CrowdShotHarness`, `CrowdProfileHarness`, `CrowdOracleHarness`)가 런타임 코드는 파괴했다고 믿는 객체를 계속 본다. `GetComponentsInChildren<SkinnedMeshRenderer>(true)`는 비활성 객체까지 세므로 에디트 모드에서 `smr == 0` 단언은 여전히 실패한다. 플레이 모드 성능 하네스는 프레임마다 yield하므로 무관하다.
-- **`CrowdPerfHarnessP95`의 CSV 열 `simtick_median_ms`는 중앙값도 아니고 `SimTick` 전용도 아니다.** ①`CrowdPerfHarnessP95.cs:413`이 `totalSimMs / totalSteps`(0.02초 스텝당 산술 평균)를 계산한다 — 같은 행의 `full_median`·`render_median`은 실제 `Percentile(…, 0.50)`(`:409`, `:412`). ②계측 구간(`:364-367`)이 `StepSim()` 전체를 감싸고 `StepSim`이 `RenderInterpolate(alpha)`를 프레임당 1회 호출한다(`:472`) → `simtick = SimTick + RenderInterpolate / 프레임당 스텝수`. 상환 제수가 arm마다 달라 **순수 `SimTick`으로 arm 간 비교가 안 된다**. `RenderInterpolate`는 별도 계측이 없어 순수 `SimTick`은 **범위만 잡히고 측정되지 않는다**(T1a: `ΔSimTick ∈ [−20.76, −12.83]` ms/틱). 유도는 [`CHANGELOG.md`](CrowdCity/CHANGELOG.md) §6.9.1.
+- **`CrowdPerfHarnessP95`의 CSV 열 `simtick_median_ms`는 중앙값도 아니고 `SimTick` 전용도 아니다.** ①`CrowdPerfHarnessP95.cs:413`이 `totalSimMs / totalSteps`(0.02초 스텝당 산술 평균)를 계산한다 — 같은 행의 `full_median`·`render_median`은 실제 `Percentile(…, 0.50)`(`:409`, `:412`). ②계측 구간(`:364-367`)이 `StepSim()` 전체를 감싸고 `StepSim`이 `RenderInterpolate(alpha)`를 프레임당 1회 호출한다(`:472`) → `simtick = SimTick + RenderInterpolate / 프레임당 스텝수`. 상환 제수가 arm마다 달라 **순수 `SimTick`으로 arm 간 비교가 안 된다**. `RenderInterpolate`는 별도 계측이 없어 순수 `SimTick`은 **범위만 잡히고 측정되지 않는다**(T1a: `ΔSimTick ∈ [−20.76, −12.83]` ms/틱). 유도는 [`Perf/MANIFEST.md`](CrowdCity/Perf/MANIFEST.md) §7.7 (c)·(d).
 
 ---
 
@@ -149,14 +149,14 @@
 - **원인:** `MaxStepsPerFrame=4`(GameplayRoot.cs:13)로 SimTick이 프레임당 ~3회 실행 × 매 틱 [4개 `SpatialGrid.QueryCircle` 이웃질의(separation=`CrowdRoot.cs:929` / recruit=`RecruitResolver.cs:74` / combat=`CombatResolver.cs:271,461`) + 에이전트별 SDF `WallSolver.Resolve`(`CrowdRoot.cs:1125`)]. 커스텀 `CrowdSimProfiler`가 Unity ProfilerMarker를 안 써서 하위 단계가 전부 `GameplayRoot.Update` self로 뭉쳐 보임. → **M-sim-1(쿼리 밀도 캡핑)·M-sim-2(Burst)가 노리는 지점.** 기존 M-sim-0 베이스라인("dominant = SDF move-solve")과 일치.
 - **별개 correctness 버그 — 이번 세션 수정 완료:** 벽 감지 레이 2곳(`CrowdRoot.RepickWanderHeading` @~1099, `RivalAiDriver.ProbeClearance` @~199)이 layermask 없이 `Physics.DefaultRaycastLayers`로 쏴 Unit(crowd) 콜라이더를 벽으로 오판. `Physics.IgnoreLayerCollision(Unit,Unit)`은 raycast에 무효라 유닛 물리충돌을 꺼도 레이는 crowd를 맞음. → mask에서 Unit 레이어 제외(`Physics.DefaultRaycastLayers & ~(1<<unitLayer)`, 신규 직렬화 필드 없이 코드로 계산)로 수정. **오판 제거일 뿐 14.86ms와는 무관** (프레임 시간은 위 쿼리·SDF가 원인).
 
-> **이 문서의 용도**: 별도 세션(대화 컨텍스트 없음)이 이 문서의 CrowdCity 절 하나로 crowd sim CPU 최적화 작업을 **바로 시작**할 수 있게 하는 진입점이다. 상세 설계는 [`SIM_OPT_PLAN.md`](CrowdCity/SIM_OPT_PLAN.md)에 있다. 이 문서는 "어떻게 부팅하고 무엇부터 하는가"만 담는다.
+> **이 문서의 용도**: 별도 세션(대화 컨텍스트 없음)이 이 문서의 CrowdCity 절 하나로 crowd sim CPU 최적화 작업을 **바로 시작**할 수 있게 하는 진입점이다. 미착수 설계 사양은 **이 문서 §9**가 정본이다(별도 PLAN 문서 `SIM_OPT_PLAN.md`/`SIM_OPT_10K_PLAN.md`는 삭제됐다).
 > **선행 조건**: 사용자의 별도 구조 리팩토링이 **완료된 뒤** 시작한다. 리팩토링은 `Crowd/Core` + `CrowdRoot`를 전부 건드리므로, 이 계획은 라인이 아니라 **책임 단위로 rebase**한다.
 
 ---
 
 ## ⚠️ 시작 전 게이트 (P0 — 통과 못 하면 착수 금지)
 1. **리팩토링 완료 확인**: 이 계획은 사용자의 `Crowd/Core` + `CrowdRoot` 리팩토링 **완료 후** 시작한다. 완료 여부는 **문서로 판별 불가 → 사용자에게 명시 확인**받거나 사용자가 지정한 "완료 커밋/브랜치"로 판정한다. 착수 시 baseline 고정 기록: `git branch --show-current`, `git rev-parse HEAD`. (이 계획 작성 시점엔 리팩토링이 진행 중이었다.)
-2. **정본 우선순위**: **코드 > 이 WORK_STATE/PLAN > DESIGN/INTERFACES/STATUS.** `DESIGN.md`/`INTERFACES.md`/`STATUS.md`는 **Phase C 이전 스냅샷**이라 SDF/`UseSdfSolver`/`WallField`/`OracleAgentCount`가 누락돼 현재 상태를 오도할 수 있다 — 현 상태 근거로 쓰지 말 것. 계약 확인은 **현재 코드가 유일 진실**.
+2. **정본 우선순위**: **코드 > 이 문서(WORK_STATE) > 그 외.** 계약 확인은 **현재 코드가 유일 진실**이며, 이 문서의 §9 사양이 코드와 어긋나면 코드가 옳다. (Phase C 이전 스냅샷이던 `DESIGN.md`/`INTERFACES.md`/`STATUS.md`는 삭제됐다 — 오도 위험이 실제 이유였고, 살릴 내용은 이 문서와 `PROJECT_MAP.md`·`CROWD_GUIDE.md`로 이관 완료.)
 3. **산출물은 tracked 커밋**: 설계 라운드 트랜스크립트(`codex_*.txt`)가 untracked로 방치된 전례가 있다(이후 `fb14a41`에 커밋 → 결론 이관 후 워킹트리에서 제거, 원본은 `git show fb14a41:<파일>`로 복구). M-sim-0 CSV·오라클 baseline·측정 manifest는 반드시 기준 브랜치에 커밋(clean/clone 시 소멸 방지).
 4. **의도적 계약 변경 목록 유지**: 밀도 캡(거동), RNG 스트림(시드 재현), baked CC 제거, SDF probe 등은 의도된 변경 → 별도 목록으로 추적하고 DESIGN/INTERFACES를 그에 맞춰 갱신.
 
@@ -166,9 +166,9 @@
 AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.Update → CrowdRoot.SimTick`이다(사용자 Profiler 실측: Update ~30ms @2000, Ryzen 5600X 에디터). 라이브 프리팹은 `_useSdfSolver:1`(SDF ON, `CC.Move`는 폴백 전용)이고 `gpuSkinning` ON이라 **데스크톱 병목은 렌더가 아니라 sim(script)**이다. 유력 주범(코드 근거 가설, **미실측**): combat/recruit의 `SpatialGrid` 이웃 쿼리가 밀도에 초선형 + victim 정렬 O(v²). 목표 = SimTick CPU 비용 대폭↓, 수만까지 확장 가능한 sim 구조, 거동·결정성 보존. **렌더/애니/GameObject 스택은 이 작업 대상 아님**(모바일 만단위 렌더 재설계는 별도 트랙).
 
 ## 1. 먼저 읽을 것 (순서대로)
-1. [`SIM_OPT_PLAN.md`](CrowdCity/SIM_OPT_PLAN.md) — **설계 of record**. Decision Log, end-state SoA 구조, 마일스톤 M-sim-0~3, 결정성 계획, 밀도 캡핑 알고리즘, 검증 방법론, 리스크/rebase 노트. 이 문서와 충돌하면 PLAN이 우선.
+1. **이 문서 §9(미착수 설계 사양)** — 밀도 캡핑 알고리즘, canonical order, `DeterministicRng`, T2/T3a/T3b, 모바일 하한 조건. 아래 §5 Step 2~4가 이 사양을 참조한다.
 2. `CLAUDE.md`(repo root) — 필수 안전 규칙 + **메인/서브에이전트 운영 모델**(아래 §3).
-3. `Docs/CrowdCity/DESIGN.md`, `INTERFACES.md`, `STATUS.md` — crowd 계약 **참고용**. ⚠️ 이들은 **Phase C 이전**이라 뒤처져 있다(STATUS.md는 브랜치명·"MVP 완료"까지 stale). 현재 상태 근거로 삼지 말 것 — 위 시작 게이트 §2대로 **코드가 정본**.
+3. `Docs/PROJECT_MAP.md` — 구조 색인("어디에 있는가"). 커널 타입·진입점·프리팹 로딩·이벤트 버스 좌표가 여기 있다.
 4. 메모리(있으면): `crowd-scaleup-architecture.md`(이 작업의 상위 결정), `phasec-ccmove-bottleneck.md`(SDF/WallSolver 배경), `agents-verify-as-unity-senior.md`, `codex-cross-verify-command.md`.
 
 ## 2. 대상 코드 (리팩토링으로 이동/개명됐을 수 있음 — 현재 트리에서 재확인)
@@ -204,7 +204,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 3. **`SpatialGrid.QueryCircle` 경계**(누가 호출하는지: combat per non-neutral+per leader, recruit per neutral, separation per follower)를 명확히 — 밀도 캡핑이 이 지점을 대체한다. 시그니처가 바뀌면 기록.
 4. **`CrowdSimProfiler`의 Seg 열거** 유지(하네스가 의존). 이름/의미 바뀌면 기록.
 5. **오라클 스냅샷 계약**(CrowdOracleHarness가 읽는 위치/team/event) 유지 — 재기준선 비교의 기준.
-6. `AgentBuffer`가 여전히 SoA인지 / 이미 NativeArray로 갔는지 결과 상태를 STATUS.md에 한 줄 기록(M-sim-2 스코프가 달라짐).
+6. `AgentBuffer`가 여전히 SoA인지 / 이미 NativeArray로 갔는지 결과 상태를 이 문서에 한 줄 기록(M-sim-2 스코프가 달라짐). — **해소됨**: `Docs/PROJECT_MAP.md` §4가 `AgentBuffer`를 "SoA, NativeArray"로 기록하고 있다.
 7. 모든 `System.Random`, `Physics.Raycast`, `Physics.CheckSphere`, `CharacterController` **최종 위치**를 기록 — M-sim-3 대상.
 
 ## 5. 실행 세션에게 (리팩토링 후 — 바로 이 순서로)
@@ -215,8 +215,8 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 서브에이전트에 위임하여 현재 트리에서 산출:
 - **책임 매핑표**: (tick driver / sim owner·권위 상태 / buffer·grid·query / profiler·harness / config source / SDF·CC / prefab·setup·validator / asmdef·package) 각각 `기존 책임 → 현재 owner·file·type·API·lifecycle`. 기존 이름(`CrowdRoot`,`_useSdfSolver`,`OracleAgentCount`,`RunFromBatch`,`QueryCircle`,`SpatialGrid`,`SimTuning`)이 유지/개명/이동됐는지 확정. **리팩토링이 프리팹 직렬화+Init 주입으로 갔다면 M-sim-0의 `AddComponent<CrowdRoot>` 하네스 방식 자체가 무효일 수 있으니 반드시 확인.**
 - **milestone coverage**: M-sim-0~3 각각을 `미구현/부분/완료/설계충돌`로 판정 — 리팩토링이 일부를 이미 흡수했으면 **실제 delta만** 구현.
-- §4 핸드셰이크 항목이 STATUS.md에 기록돼 있지 않으면(현재 미기록 상태) 코드에서 전수 도출. PLAN §7 rebase 체크리스트와 대조.
-- PLAN 설계가 현재 코드와 어긋나면 그 부분만 교차검증(Claude+Codex)으로 재합의 후 진행.
+- §4 핸드셰이크 항목이 이 문서·`PROJECT_MAP.md`에 기록돼 있지 않으면 코드에서 전수 도출.
+- §9 사양이 현재 코드와 어긋나면 그 부분만 교차검증(Claude+Codex)으로 재합의 후 진행.
 
 ### Step 1 — M-sim-0: 실측 (첫 관문, 코드변경 최소)
 **이게 나머지 전부의 판단 기준점이다. 반드시 먼저.**
@@ -229,7 +229,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - **게이트/산출**: median/p95 + work counter가 **주범 sub-stage(grid/recruit/combat/steering)를 일관 지목**. 가설("combat/recruit 밀도 초선형")을 실측으로 확정/반증. 순위가 실행마다 뒤집히면 marker 세분화 후 재측정(M-sim-1 진행 금지). **여기서 나온 실측으로 이후 성능 게이트 목표치를 확정**.
 
 ### Step 2 — M-sim-1: 밀도 캡핑 (초선형 항 근본 제거)
-- PLAN §5 알고리즘대로: grid는 **전 agent 저장(cap 없음) + query 방문량만 lane별 budget cap**. victim O(v²) 정렬 제거. 캡 선택은 `(distSq, AgentId)` 총순서 top-k. 캡 파라미터는 `SimTuning` SO(불변 소비), 값은 M-sim-0 histogram 후 확정.
+- **§9.1 알고리즘대로**: grid는 **전 agent 저장(cap 없음) + query 방문량만 lane별 budget cap**. victim O(v²) 정렬 제거. 캡 선택은 `(distSq, AgentId)` 총순서 top-k. 캡 파라미터는 `SimTuning` SO(불변 소비), 값은 M-sim-0 histogram 후 확정.
 - **밀도 캡 = 게임플레이 변경이므로 성능 리팩토링과 분리 커밋** + 거동 A/B("no perceptible difference": recruit 지연/claimant/strength/conversion·elimination/separation). cap 미발동 fixture는 legacy byte-identical, cap 발동 fixture만 A/B 승인 후 오라클 갱신.
 - 성공조건 = **초선형 work term 제거**(상수배 아님). Burst 미적용.
 
@@ -250,7 +250,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 
 ## 7. 금기 / 주의
 - 성능 목표 수치 지어내기 금지(M-sim-0 후 확정).
-- **가설 반증 시 정지**: M-sim-0가 combat/recruit를 일관된 주범으로 확정하지 못하면 M-sim-1 시작 금지 → PLAN 재검토·재승인.
+- **가설 반증 시 정지**: M-sim-0가 combat/recruit를 일관된 주범으로 확정하지 못하면 M-sim-1 시작 금지 → §9.1 재검토·재승인.
 - **용어 구분**: M-sim-0의 "CC.Move 0" = **호출 횟수 0**, M-sim-3의 "CC 0" = **prefab/scene/runtime 컴포넌트 수 0**.
 - **"렌더 스택 불변"의 정확한 범위**: 메시/Animator/스키닝/머티리얼 등 **시각 표현은 불변**. 단 M2의 Transform mirror 제거·M3의 baked CC 제거는 예외(위치 권위가 Native로 이동, CC는 이동에 미사용) — 시각 결과는 동일해야 함.
 - M-sim-2를 한 커밋에 몰아서 하지 말 것(3분할 — divergence 원인 분리 불가).
@@ -260,13 +260,38 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - 새 asmdef·새 Bus·새 전역 registry 만들지 말 것(CLAUDE.md §11, §13).
 
 ## 8. 파일 인덱스
-- 이 문서: `Docs/WORK_STATE.md`(설계 사양 본문은 §9)
-- 구조 지도("어디에 있는가" — 영문, 포인터 전용): `Docs/PROJECT_MAP.md`
-- CrowdCity 사람용 가이드("왜 이렇게 만들었는가" — 한국어, 사람 전용): `Docs/CrowdCity/CROWD_GUIDE.md`
-- 상세 설계: `Docs/CrowdCity/SIM_OPT_PLAN.md`
-- 규칙: `CLAUDE.md`(root)
-- crowd 계약: `Docs/CrowdCity/{DESIGN,INTERFACES,STATUS}.md`
-- 설계 라운드 산출물(감사): `codex_burst_prompt{,2..7}.txt` / `codex_burst_out{,2..7}.txt` + `codex_{ccmove,design,explain}_*.txt` — **워킹트리에서 제거됨**(결론은 이 문서·`SIM_OPT_PLAN.md`·`SIM_OPT_10K_PLAN.md` §5로 이관 완료). 원본은 히스토리에 남아 `git show fb14a41:<파일>`로 언제든 복구.
+
+**추적 중인 문서는 이게 전부다.** 아래에 없는 `Docs/` 하위 문서를 인용하는 서술을 만나면 그 서술이 낡은 것이다.
+
+| 문서 | 답하는 질문 / 성격 | 독자 |
+|---|---|---|
+| `CLAUDE.md` · `AGENTS.md` (repo root) | 작업 규칙. **같은 커밋에 둘 다** 갱신하는 미러 쌍 | AI |
+| `Docs/PROJECT_MAP.md` | **어디에 있는가** — 포인터 전용(영문), 설명·측정값 없음 | AI |
+| **`Docs/WORK_STATE.md`(이 문서)** | **무엇이 진행 중이고 무엇을 깨면 안 되는가** — 불변식·게이트·함정의 정본, 그리고 **§9 미착수 설계 사양의 정본** | AI |
+| `Docs/CrowdCity/CROWD_GUIDE.md` | **왜 이렇게 만들었는가**(한국어) — **사람 전용.** AI가 유지보수는 하되 작업 중 사실 근거로 읽지 않는다 | 사람 |
+| `Docs/CrowdCity/Perf/MANIFEST.md` | 측정 증거 — 환경·verbatim 커맨드라인·부하 통제·판정 규칙·판독 주의 | AI · 사람 |
+| `Docs/CrowdCity/Perf/*.txt` · `*.csv` | 원시 측정 출력 | — |
+| `Docs/Photo/` | 프로파일러 캡처 | 사람 |
+| `Assets/@Project/City/README.md` | City 에셋 파이프라인 로컬 노트 | AI · 사람 |
+| `UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md` | 일반 참고 자료 — **프로젝트 권위 아님** | 사람 |
+
+**삭제된 문서(히스토리에서 복구 가능 — `git log --diff-filter=D -- <경로>`):**
+
+| 삭제된 문서 | 살릴 내용이 간 곳 |
+|---|---|
+| `Docs/CrowdCity/SIM_OPT_PLAN.md` | 밀도 캡 9단계 사양·canonical order 표·`DeterministicRng` → 이 문서 **§9.1~§9.3** |
+| `Docs/CrowdCity/SIM_OPT_10K_PLAN.md` | T2 정책 수정·T3a/T3b·모바일 1만 하한 → 이 문서 **§9.4~§9.6** |
+| `Docs/CrowdCity/CHANGELOG.md` | 이력은 git. 측정 유도는 `Perf/MANIFEST.md` §7.7·§8.7, 서술은 `CROWD_GUIDE.md` |
+| `Docs/CrowdCity/DESIGN.md` | 근거 4건 → `CROWD_GUIDE.md` §11·§17(이미 존재). 나머지는 대부분 거짓이라 폐기 |
+| `Docs/CrowdCity/INTERFACES.md` | 고유 내용 없음(모든 시그니처가 드리프트). 현행 좌표는 `PROJECT_MAP.md` |
+| `Docs/CrowdCity/STATUS.md` | 소유권 체인·커널 목록·버스 계약 → `PROJECT_MAP.md` §2·§4·§10 + 이 문서 불변식 표. §5 MINOR triage → 이 문서 §"의도적으로 보류한 MINOR" |
+| `Docs/CrowdCity/PREFAB_CONSTRUCTION_PLAN.md` | §6 CC 3항목 → `CROWD_GUIDE.md` §4(정정 포함, 이미 존재) |
+| `Docs/CrowdCity/GameLogicExplainer.html` | 가이드에 없던 5건 → `CROWD_GUIDE.md` §1·§2·§5·§7. 알려진 오류 4건은 폐기 |
+| `Docs/CrowdCity/Sessions/2026-07-15_first.md` | MVP 세션 노트. 승계할 사실 없음 |
+| `UnityArchitectureGuide/AI_WORKING_RULES.md` | `CLAUDE.md`의 진부분집합이었고, 자기를 root `AGENTS.md`로 복사하라는 지시(line 5)가 미러 계약을 깨는 위험이었다 |
+| `phaseC_stage1_validator.txt` (root) | `WallFieldValidator`가 매 실행 재생성하고 읽는 곳이 없다. 해시 정본은 `City/Generated/WallSdf.asset`. `.gitignore`에 추가 |
+
+- 설계 라운드 산출물(감사): `codex_burst_prompt{,2..7}.txt` / `codex_burst_out{,2..7}.txt` + `codex_{ccmove,design,explain}_*.txt` — **워킹트리에서 제거됨**(결론은 이 문서 §9로 이관 완료). 원본은 히스토리에 남아 `git show fb14a41:<파일>`로 언제든 복구.
 
 ---
 

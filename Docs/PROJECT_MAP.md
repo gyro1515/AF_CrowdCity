@@ -301,12 +301,10 @@ Arguments, environment and reading caveats: `Docs/CrowdCity/Perf/MANIFEST.md`. G
 | `Docs/PROJECT_MAP.md` | **where is it** (this file, AI-facing) |
 | `Docs/WORK_STATE.md` | **what is in flight, what must not be broken** (AI-facing; authority for invariants, gates, traps) |
 | `Docs/CrowdCity/CROWD_GUIDE.md` | **why is it built this way** (human only; agents maintain it, never read it as a fact source) |
-| `Docs/CrowdCity/CHANGELOG.md` | change history (what changed, why, which alternatives were rejected) |
 | `Docs/CrowdCity/Perf/MANIFEST.md` | measurement evidence (environment, command lines, reading caveats) |
 | `Docs/CrowdCity/Perf/*.txt`, `*.csv` | raw measurement output |
-| `Docs/CrowdCity/SIM_OPT_PLAN.md` · `SIM_OPT_10K_PLAN.md` | sim-optimization design and plan |
-| `Docs/CrowdCity/{DESIGN,INTERFACES,STATUS}.md` | pre-Phase-C snapshots — **do not use as evidence for current state** |
-| `Docs/CrowdCity/PREFAB_CONSTRUCTION_PLAN.md` | prefab refactor plan (applied) |
-| `Docs/CrowdCity/GameLogicExplainer.html` | logic explainer HTML (some values stale) |
-| `Docs/CrowdCity/Sessions/` · `Docs/Photo/` | session notes · profiler captures |
-| `UnityArchitectureGuide/` | general reference (not a project authority) |
+| `Docs/Photo/` | profiler captures |
+| `Assets/@Project/City/README.md` | City asset-pipeline local note |
+| `UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md` | general reference (not a project authority) |
+
+That table is exhaustive — those files are the only tracked documents. Unimplemented sim-optimization specs (density cap, canonical order, `DeterministicRng`, T2/T3a/T3b, the mobile 10k floor) live in `Docs/WORK_STATE.md` §9; change history lives in git. The retired `CHANGELOG.md` · `SIM_OPT_PLAN.md` · `SIM_OPT_10K_PLAN.md` · `DESIGN.md` · `INTERFACES.md` · `STATUS.md` · `PREFAB_CONSTRUCTION_PLAN.md` · `GameLogicExplainer.html` · `Sessions/` are recoverable from history; `Docs/WORK_STATE.md` §8 records where each one's surviving content went.

@@ -9,7 +9,7 @@ using UnityEngine;
 /// </summary>
 public sealed class RivalAiDriver
 {
-    // 좌우 probe의 중심 대비 각도(도). 계약(INTERFACES.md C2)에 ±35°로 고정되어 있다.
+    // 좌우 probe의 중심 대비 각도(도). 3방향 벽 회피는 중심 ±35°로 고정된 계약이며 튜닝 노브가 아니다(아래 ApplyWallAvoidance가 desired∓이 값으로 항상 대칭 probe). 바꾸면 라이벌 heading 열이 달라져 오라클 바이트 동일 게이트(Docs/WORK_STATE.md 검증 게이트 절)가 깨진다.
     private const float SideProbeAngleDeg = 35f;
 
     // Raycast 원점을 leader 위치에서 몸통 중심 높이로 올린다.
