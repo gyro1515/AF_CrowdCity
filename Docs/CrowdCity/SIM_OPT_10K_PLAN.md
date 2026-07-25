@@ -2,7 +2,7 @@
 
 - 작성: 2026-07-20
 - 상태: **계획만(미구현).** 나중에 작업 예정.
-- 전제: P3(네이티브 위치 권위)까지 완료된 코드 기준. 관련 로드맵은 [`SIM_OPT_PLAN.md`](SIM_OPT_PLAN.md) §2 / M-sim-1·2, 현황은 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md).
+- 전제: P3(네이티브 위치 권위)까지 완료된 코드 기준. 관련 로드맵은 [`SIM_OPT_PLAN.md`](SIM_OPT_PLAN.md) §2 / M-sim-1·2, 현황은 [`WORK_STATE.md`](../WORK_STATE.md).
 
 ---
 
@@ -51,7 +51,7 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 
 ## 2. 측정 완료 — 직렬 vs 잡 분리 → **T1b 확정** (2026-07-26, 측정 트리 `fdf909d` · 증거 커밋 `ff60d39`)
 
-> ⚠️ **이 절의 "T1b 확정" 판정은 현재 재결정 중이다** — 아래 본문은 측정 당시 기록 그대로다. 이 측정이 헤드리스(SMR 경로)라 `*Present`가 T1a로 제거된 쓰기를 포함하는 문제이며, 선행 조건과 유보 사항은 [§4 항목 3](#4-권장-순서)과 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md) "운영 계약" 절에 있다. **재측정 전까지 이 절의 판정을 근거로 T1b에 착수하지 말 것.**
+> ⚠️ **이 절의 "T1b 확정" 판정은 현재 재결정 중이다** — 아래 본문은 측정 당시 기록 그대로다. 이 측정이 헤드리스(SMR 경로)라 `*Present`가 T1a로 제거된 쓰기를 포함하는 문제이며, 선행 조건과 유보 사항은 [§4 항목 3](#4-권장-순서)과 [`WORK_STATE.md`](../WORK_STATE.md) "운영 계약" 절에 있다. **재측정 전까지 이 절의 판정을 근거로 T1b에 착수하지 말 것.**
 
 **정정.** 이 절의 초판이 제안했던 `FollowerSteer − CCMove − .Complete대기` 산식은 **성립하지 않는다.** `Seg.CCMove`는 다섯 지점(리더 `ApplyHorizontalMove`, 팔로워 SDF 이동 잡 대기, 팔로워 CC 폴백, 중립 SDF 이동 잡 대기, 중립 CC 폴백)을 합산하는 단일 버킷이라 10k의 `CCMove` 2.78ms에는 팔로워·중립 대기가 섞여 있고, `*JobWait`은 `CCMove`와 inclusive 중첩이라 이중 차감이 된다. 대신 `1485848`에서 분기별 Seg 7개(`Follower/Neutral × Prepass/JobWait/Present` + `FollowerGridSnapshot`)를 추가해 직접 계측했다.
 
@@ -116,13 +116,13 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 ## 4. 권장 순서
 1. **[완료] §2 분리-측정** — `1485848`에서 Seg 7개 추가 → `ff60d39`에서 3런 측정 기록(측정 트리는 `fdf909d`) → **T1b 확정**(§2).
 2. **[완료] T1a** (죽은 rotation 쓰기 제거, `fdf909d`). **GPU 경로 실측 완료(`e0f81e4`)** — play-mode `CrowdPerfHarnessP95`, 10k, A/B/B/A, `gpuActive=T`: SimTick 틱당 **−12.83ms(−55.5%)**, 동일-arm spread의 8.0배 → 개선 확정. 단 그 CSV 열은 `RenderInterpolate` 1회를 포함하므로 **순수 SimTick 이득은 [−20.76, −12.83]ms/틱 범위로만 묶인다**(헤드라인은 보수적 끝을 쓴다). 증거·판독 주의: [`Perf/MANIFEST.md`](Perf/MANIFEST.md) §7.
-3. **[잠정 다음 — 판정 재결정 중, 재측정 대기] T1b** (팔로워/뉴트럴 직렬 prepass + presentation 잡화). 잠정 최우선 타깃은 두 `*Present` 루프(10k SimTick의 66%). **단 §2의 "T1b 확정"은 더 이상 확정이 아니다** — §2는 헤드리스(SMR 경로) 측정이라 `*Present`가 T1a(`fdf909d`)로 제거된 쓰기를 포함하고, T1a 실측치가 §2에 기록된 손익분기(`Present` 비용의 86.1%)를 넘는다. **착수 전 선행 조건: `CrowdProfileHarness`를 `-nographics` 없이 돌려 `_gpuRenderActive == true` 상태로 세그먼트를 재측정할 것.** 근거·수치·유보 조건(서로 다른 하네스/모드 비교라 반증이 아니라 해소할 긴장이라는 점)은 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md) "운영 계약" 절과 [`CHANGELOG.md`](CHANGELOG.md) §2.2에 있다 — 여기서 반복하지 않는다.
+3. **[잠정 다음 — 판정 재결정 중, 재측정 대기] T1b** (팔로워/뉴트럴 직렬 prepass + presentation 잡화). 잠정 최우선 타깃은 두 `*Present` 루프(10k SimTick의 66%). **단 §2의 "T1b 확정"은 더 이상 확정이 아니다** — §2는 헤드리스(SMR 경로) 측정이라 `*Present`가 T1a(`fdf909d`)로 제거된 쓰기를 포함하고, T1a 실측치가 §2에 기록된 손익분기(`Present` 비용의 86.1%)를 넘는다. **착수 전 선행 조건: `CrowdProfileHarness`를 `-nographics` 없이 돌려 `_gpuRenderActive == true` 상태로 세그먼트를 재측정할 것.** 근거·수치·유보 조건(서로 다른 하네스/모드 비교라 반증이 아니라 해소할 긴장이라는 점)은 [`WORK_STATE.md`](../WORK_STATE.md) "운영 계약" 절과 [`CHANGELOG.md`](CHANGELOG.md) §2.2에 있다 — 여기서 반복하지 않는다.
 4. 그다음 **T3a → T3b** (50k 목표 시). **T2는 후순위** — §2 판정상 상한이 10k 13.5%다.
 5. 각 단계: 계획 교차검증 → 구현/검증 분리 → 오라클 byte-identical + shot → 커밋.
 
 ## 5. 모바일 최약기기 1만 "하한" 조건 (Codex R5 판단 — 외삽, 미측정)
 
-> 출처: `git show fb14a41:codex_burst_out5.txt`. 5년 window(2021~2026) 최약 AOS/iOS 기준 1만 floor 판정 = **(B) 조건부 현실적**. 실기 측정이 아니라 코드·ProjectSettings 근거 + 기기 스펙 외삽이므로 아래 수치를 성능 목표로 못박지 말 것(`SIM_OPT_HANDOFF.md` §7 "성능 목표 수치 지어내기 금지").
+> 출처: `git show fb14a41:codex_burst_out5.txt`. 5년 window(2021~2026) 최약 AOS/iOS 기준 1만 floor 판정 = **(B) 조건부 현실적**. 실기 측정이 아니라 코드·ProjectSettings 근거 + 기기 스펙 외삽이므로 아래 수치를 성능 목표로 못박지 말 것(`WORK_STATE.md` §7 "성능 목표 수치 지어내기 금지").
 
 - **렌더 경로 이중화 필수**: `Graphics.RenderMeshIndirect`는 compute/SSBO를 요구해 **GLES3.1+**에서만 성립한다. 본 프로젝트는 MinSdk 25 · Vulkan 우선 + GLES3 폴백이고 **GLES3.1을 강제하지 않아** GLES3.0-only 기기가 window에 들어온다 → `DrawMeshInstanced` + `MaterialPropertyBlock` **2차 인스턴싱 경로**가 필요하다. 현재 `CrowdRenderer.cs:105`(`graphicsShaderLevel < 45 || !supportsComputeShaders`)와 `:114`는 **SMR 경로로 내려가는 게이트일 뿐** 이 폴백을 제공하지 않는다.
 - **하나라도 빼면 1만 하한이 깨지는 항목**: ①동시 가시 hard cap ②frustum/거리 컬링 ③고정 50Hz 심(`GameplayRoot`)에서 **분리된** multi-rate behavior LOD ④밀도 캡(§3 분리 이웃 스캔 캡) ⑤per-agent RNG ⑥최약기기 장시간 thermal soak 수용 게이트.

@@ -1,11 +1,14 @@
-# Crowd Sim CPU 최적화 — 실행 핸드오프 (콜드스타트용)
+# WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
+
+> **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 다음 패스에 작성 예정).
+> **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고, 이번 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 다음 패스 몫이다.
 
 ---
 
 ## 🔴 운영 계약 (2026-07-26) — **이 영역 작업 전 반드시 읽을 것**
 
 > 이 절이 **현재 상태·불변식·게이트·함정의 정본**이다. 상태가 바뀌면 커밋이 없더라도 이 절을 갱신한다.
-> 변경 **이력**(무엇을 왜 바꿨는지, 기각한 대안)은 [`CHANGELOG.md`](CHANGELOG.md)에 있다. 사실은 한 곳에만 둔다 — 이력은 CHANGELOG, 계약은 이 절.
+> 변경 **이력**(무엇을 왜 바꿨는지, 기각한 대안)은 [`CHANGELOG.md`](CrowdCity/CHANGELOG.md)에 있다. 사실은 한 곳에만 둔다 — 이력은 CHANGELOG, 계약은 이 절.
 
 브랜치: **`feat/crowd-sim-10k`** (다른 PC에서 `git fetch && git checkout feat/crowd-sim-10k && git pull`로 재개)
 
@@ -53,7 +56,7 @@
 - **GPU 경로에서 팔로워/뉴트럴의 `transform.rotation`은 영구히 stale**이다(이미 stale이던 위치에 회전이 합류 — 기존 주석 `CrowdRoot.cs:740`). 앞으로 팔로워·뉴트럴의 `transform.rotation`이나 `.forward`를 읽는 기능을 추가하면 조용히 스폰 시점 값을 받는다.
 - **`fdf909d`(T1a)는 `dcb3bfb`와 결합되어 있다.** 되돌릴 때는 함께 되돌려야 한다 — `dcb3bfb` 이전이면 살아남은 edit-mode 유령의 facing이 얼어붙는 실제 시각 회귀가 된다.
 - **Unity는 에디트 모드에서 지연 `Object.Destroy`를 거부한다.** 모든 에디트 모드 하네스(`CrowdShotHarness`, `CrowdProfileHarness`, `CrowdOracleHarness`)가 런타임 코드는 파괴했다고 믿는 객체를 계속 본다. `GetComponentsInChildren<SkinnedMeshRenderer>(true)`는 비활성 객체까지 세므로 에디트 모드에서 `smr == 0` 단언은 여전히 실패한다. 플레이 모드 성능 하네스는 프레임마다 yield하므로 무관하다.
-- **`CrowdPerfHarnessP95`의 CSV 열 `simtick_median_ms`는 중앙값도 아니고 `SimTick` 전용도 아니다.** ①`CrowdPerfHarnessP95.cs:413`이 `totalSimMs / totalSteps`(0.02초 스텝당 산술 평균)를 계산한다 — 같은 행의 `full_median`·`render_median`은 실제 `Percentile(…, 0.50)`(`:409`, `:412`). ②계측 구간(`:364-367`)이 `StepSim()` 전체를 감싸고 `StepSim`이 `RenderInterpolate(alpha)`를 프레임당 1회 호출한다(`:472`) → `simtick = SimTick + RenderInterpolate / 프레임당 스텝수`. 상환 제수가 arm마다 달라 **순수 `SimTick`으로 arm 간 비교가 안 된다**. `RenderInterpolate`는 별도 계측이 없어 순수 `SimTick`은 **범위만 잡히고 측정되지 않는다**(T1a: `ΔSimTick ∈ [−20.76, −12.83]` ms/틱). 유도는 [`CHANGELOG.md`](CHANGELOG.md) §6.9.1.
+- **`CrowdPerfHarnessP95`의 CSV 열 `simtick_median_ms`는 중앙값도 아니고 `SimTick` 전용도 아니다.** ①`CrowdPerfHarnessP95.cs:413`이 `totalSimMs / totalSteps`(0.02초 스텝당 산술 평균)를 계산한다 — 같은 행의 `full_median`·`render_median`은 실제 `Percentile(…, 0.50)`(`:409`, `:412`). ②계측 구간(`:364-367`)이 `StepSim()` 전체를 감싸고 `StepSim`이 `RenderInterpolate(alpha)`를 프레임당 1회 호출한다(`:472`) → `simtick = SimTick + RenderInterpolate / 프레임당 스텝수`. 상환 제수가 arm마다 달라 **순수 `SimTick`으로 arm 간 비교가 안 된다**. `RenderInterpolate`는 별도 계측이 없어 순수 `SimTick`은 **범위만 잡히고 측정되지 않는다**(T1a: `ΔSimTick ∈ [−20.76, −12.83]` ms/틱). 유도는 [`CHANGELOG.md`](CrowdCity/CHANGELOG.md) §6.9.1.
 
 ---
 
@@ -105,14 +108,14 @@
 - **원인:** `MaxStepsPerFrame=4`(GameplayRoot.cs:13)로 SimTick이 프레임당 ~3회 실행 × 매 틱 [4개 `SpatialGrid.QueryCircle` 이웃질의(separation=`CrowdRoot.cs:929` / recruit=`RecruitResolver.cs:74` / combat=`CombatResolver.cs:271,461`) + 에이전트별 SDF `WallSolver.Resolve`(`CrowdRoot.cs:1125`)]. 커스텀 `CrowdSimProfiler`가 Unity ProfilerMarker를 안 써서 하위 단계가 전부 `GameplayRoot.Update` self로 뭉쳐 보임. → **M-sim-1(쿼리 밀도 캡핑)·M-sim-2(Burst)가 노리는 지점.** 기존 M-sim-0 베이스라인("dominant = SDF move-solve")과 일치.
 - **별개 correctness 버그 — 이번 세션 수정 완료:** 벽 감지 레이 2곳(`CrowdRoot.RepickWanderHeading` @~1099, `RivalAiDriver.ProbeClearance` @~199)이 layermask 없이 `Physics.DefaultRaycastLayers`로 쏴 Unit(crowd) 콜라이더를 벽으로 오판. `Physics.IgnoreLayerCollision(Unit,Unit)`은 raycast에 무효라 유닛 물리충돌을 꺼도 레이는 crowd를 맞음. → mask에서 Unit 레이어 제외(`Physics.DefaultRaycastLayers & ~(1<<unitLayer)`, 신규 직렬화 필드 없이 코드로 계산)로 수정. **오판 제거일 뿐 14.86ms와는 무관** (프레임 시간은 위 쿼리·SDF가 원인).
 
-> **이 문서의 용도**: 별도 세션(대화 컨텍스트 없음)이 이 문서 하나로 crowd sim CPU 최적화 작업을 **바로 시작**할 수 있게 하는 진입점이다. 상세 설계는 [`SIM_OPT_PLAN.md`](SIM_OPT_PLAN.md)에 있다. 이 문서는 "어떻게 부팅하고 무엇부터 하는가"만 담는다.
+> **이 문서의 용도**: 별도 세션(대화 컨텍스트 없음)이 이 문서의 CrowdCity 절 하나로 crowd sim CPU 최적화 작업을 **바로 시작**할 수 있게 하는 진입점이다. 상세 설계는 [`SIM_OPT_PLAN.md`](CrowdCity/SIM_OPT_PLAN.md)에 있다. 이 문서는 "어떻게 부팅하고 무엇부터 하는가"만 담는다.
 > **선행 조건**: 사용자의 별도 구조 리팩토링이 **완료된 뒤** 시작한다. 리팩토링은 `Crowd/Core` + `CrowdRoot`를 전부 건드리므로, 이 계획은 라인이 아니라 **책임 단위로 rebase**한다.
 
 ---
 
 ## ⚠️ 시작 전 게이트 (P0 — 통과 못 하면 착수 금지)
 1. **리팩토링 완료 확인**: 이 계획은 사용자의 `Crowd/Core` + `CrowdRoot` 리팩토링 **완료 후** 시작한다. 완료 여부는 **문서로 판별 불가 → 사용자에게 명시 확인**받거나 사용자가 지정한 "완료 커밋/브랜치"로 판정한다. 착수 시 baseline 고정 기록: `git branch --show-current`, `git rev-parse HEAD`. (이 계획 작성 시점엔 리팩토링이 진행 중이었다.)
-2. **정본 우선순위**: **코드 > 이 HANDOFF/PLAN > DESIGN/INTERFACES/STATUS.** `DESIGN.md`/`INTERFACES.md`/`STATUS.md`는 **Phase C 이전 스냅샷**이라 SDF/`UseSdfSolver`/`WallField`/`OracleAgentCount`가 누락돼 현재 상태를 오도할 수 있다 — 현 상태 근거로 쓰지 말 것. 계약 확인은 **현재 코드가 유일 진실**.
+2. **정본 우선순위**: **코드 > 이 WORK_STATE/PLAN > DESIGN/INTERFACES/STATUS.** `DESIGN.md`/`INTERFACES.md`/`STATUS.md`는 **Phase C 이전 스냅샷**이라 SDF/`UseSdfSolver`/`WallField`/`OracleAgentCount`가 누락돼 현재 상태를 오도할 수 있다 — 현 상태 근거로 쓰지 말 것. 계약 확인은 **현재 코드가 유일 진실**.
 3. **산출물은 tracked 커밋**: 설계 라운드 트랜스크립트(`codex_*.txt`)가 untracked로 방치된 전례가 있다(이후 `fb14a41`에 커밋 → 결론 이관 후 워킹트리에서 제거, 원본은 `git show fb14a41:<파일>`로 복구). M-sim-0 CSV·오라클 baseline·측정 manifest는 반드시 기준 브랜치에 커밋(clean/clone 시 소멸 방지).
 4. **의도적 계약 변경 목록 유지**: 밀도 캡(거동), RNG 스트림(시드 재현), baked CC 제거, SDF probe 등은 의도된 변경 → 별도 목록으로 추적하고 DESIGN/INTERFACES를 그에 맞춰 갱신.
 
@@ -122,7 +125,7 @@
 AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.Update → CrowdRoot.SimTick`이다(사용자 Profiler 실측: Update ~30ms @2000, Ryzen 5600X 에디터). 라이브 프리팹은 `_useSdfSolver:1`(SDF ON, `CC.Move`는 폴백 전용)이고 `gpuSkinning` ON이라 **데스크톱 병목은 렌더가 아니라 sim(script)**이다. 유력 주범(코드 근거 가설, **미실측**): combat/recruit의 `SpatialGrid` 이웃 쿼리가 밀도에 초선형 + victim 정렬 O(v²). 목표 = SimTick CPU 비용 대폭↓, 수만까지 확장 가능한 sim 구조, 거동·결정성 보존. **렌더/애니/GameObject 스택은 이 작업 대상 아님**(모바일 만단위 렌더 재설계는 별도 트랙).
 
 ## 1. 먼저 읽을 것 (순서대로)
-1. [`SIM_OPT_PLAN.md`](SIM_OPT_PLAN.md) — **설계 of record**. Decision Log, end-state SoA 구조, 마일스톤 M-sim-0~3, 결정성 계획, 밀도 캡핑 알고리즘, 검증 방법론, 리스크/rebase 노트. 이 핸드오프와 충돌하면 PLAN이 우선.
+1. [`SIM_OPT_PLAN.md`](CrowdCity/SIM_OPT_PLAN.md) — **설계 of record**. Decision Log, end-state SoA 구조, 마일스톤 M-sim-0~3, 결정성 계획, 밀도 캡핑 알고리즘, 검증 방법론, 리스크/rebase 노트. 이 문서와 충돌하면 PLAN이 우선.
 2. `CLAUDE.md`(repo root) — 필수 안전 규칙 + **메인/서브에이전트 운영 모델**(아래 §3).
 3. `Docs/CrowdCity/DESIGN.md`, `INTERFACES.md`, `STATUS.md` — crowd 계약 **참고용**. ⚠️ 이들은 **Phase C 이전**이라 뒤처져 있다(STATUS.md는 브랜치명·"MVP 완료"까지 stale). 현재 상태 근거로 삼지 말 것 — 위 시작 게이트 §2대로 **코드가 정본**.
 4. 메모리(있으면): `crowd-scaleup-architecture.md`(이 작업의 상위 결정), `phasec-ccmove-bottleneck.md`(SDF/WallSolver 배경), `agents-verify-as-unity-senior.md`, `codex-cross-verify-command.md`.
@@ -216,7 +219,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - 새 asmdef·새 Bus·새 전역 registry 만들지 말 것(CLAUDE.md §11, §13).
 
 ## 8. 파일 인덱스
-- 이 핸드오프: `Docs/CrowdCity/SIM_OPT_HANDOFF.md`
+- 이 문서: `Docs/WORK_STATE.md`
 - 상세 설계: `Docs/CrowdCity/SIM_OPT_PLAN.md`
 - 규칙: `CLAUDE.md`(root)
 - crowd 계약: `Docs/CrowdCity/{DESIGN,INTERFACES,STATUS}.md`
