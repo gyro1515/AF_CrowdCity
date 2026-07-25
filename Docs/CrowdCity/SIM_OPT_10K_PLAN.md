@@ -49,7 +49,7 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 
 ---
 
-## 2. 측정 완료 — 직렬 vs 잡 분리 → **T1b 확정** (2026-07-26, `fdf909d`)
+## 2. 측정 완료 — 직렬 vs 잡 분리 → **T1b 확정** (2026-07-26, 측정 트리 `fdf909d` · 증거 커밋 `ff60d39`)
 
 **정정.** 이 절의 초판이 제안했던 `FollowerSteer − CCMove − .Complete대기` 산식은 **성립하지 않는다.** `Seg.CCMove`는 다섯 지점(리더 `ApplyHorizontalMove`, 팔로워 SDF 이동 잡 대기, 팔로워 CC 폴백, 중립 SDF 이동 잡 대기, 중립 CC 폴백)을 합산하는 단일 버킷이라 10k의 `CCMove` 2.78ms에는 팔로워·중립 대기가 섞여 있고, `*JobWait`은 `CCMove`와 inclusive 중첩이라 이중 차감이 된다. 대신 `1485848`에서 분기별 Seg 7개(`Follower/Neutral × Prepass/JobWait/Present` + `FollowerGridSnapshot`)를 추가해 직접 계측했다.
 
@@ -112,7 +112,7 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 ---
 
 ## 4. 권장 순서
-1. **[완료] §2 분리-측정** — `1485848`에서 Seg 7개 추가 → `fdf909d`에서 3런 측정 → **T1b 확정**(§2).
+1. **[완료] §2 분리-측정** — `1485848`에서 Seg 7개 추가 → `ff60d39`에서 3런 측정 기록(측정 트리는 `fdf909d`) → **T1b 확정**(§2).
 2. **[완료] T1a** (죽은 rotation 쓰기 제거, `fdf909d`). 단 GPU 빌드 실측 이득은 아직 미검증.
 3. **[다음] T1b** (팔로워/뉴트럴 직렬 prepass + presentation 잡화). 최우선 타깃은 두 `*Present` 루프(10k SimTick의 66%).
 4. 그다음 **T3a → T3b** (50k 목표 시). **T2는 후순위** — §2 판정상 상한이 10k 13.5%다.

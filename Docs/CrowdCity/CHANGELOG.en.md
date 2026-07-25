@@ -15,6 +15,7 @@ Branch `feat/crowd-sim-10k`. Newest entry first.
 | Edit-mode rig ghost fix (`SetActive(false)` before deferred `Destroy`) | `dcb3bfb` | landed, shot-verified |
 | T1a — dead `transform.rotation` write removed on the GPU path | `fdf909d` | landed, correctness + perf measured |
 | §2 measurement evidence + plan correction | `ff60d39` | landed (docs only) |
+| T1a GPU-path A/B measurement evidence | `e0f81e4` | landed (docs only) |
 
 Measured so far: the §2 serial-vs-job split (headless, `CrowdProfileHarness`), and T1a's GPU-path gain (play mode, `CrowdPerfHarnessP95`).
 
@@ -40,7 +41,10 @@ Caveat to state in any writeup: the two numbers come from **different harnesses 
 - **Follower/neutral `transform.rotation` is now permanently stale on the GPU path**, joining the already-stale positions (existing comment at `CrowdRoot.cs:740`). Any future feature reading a follower's/neutral's `transform.rotation` or `.forward` silently gets spawn-time values.
 - `fdf909d` (T1a) is **only safe together with `dcb3bfb`**. Revert them together — see the T1a entry.
 - Unity **refuses deferred `Object.Destroy` in edit mode**. Every edit-mode harness (`CrowdShotHarness`, `CrowdProfileHarness`, `CrowdOracleHarness`) observes objects runtime code believes it destroyed. `GetComponentsInChildren<SkinnedMeshRenderer>(true)` counts inactive objects, so `smr == 0` assertions still fail in edit mode. Play-mode perf harnesses are unaffected (they yield per frame).
-- `CrowdPerfHarnessP95` CSV column `simtick_median_ms` is **not a median** — `CrowdPerfHarnessP95.cs:413` computes `totalSimMs / totalSteps`, an arithmetic mean per 0.02 s step. `full_*`, `render_median` and `mainthread_*` **are** genuine percentiles/max.
+- `CrowdPerfHarnessP95` CSV column `simtick_median_ms` is **neither a median nor `SimTick`-only** — two separate defects in one column name:
+  1. **Not a median.** `CrowdPerfHarnessP95.cs:413` computes `totalSimMs / totalSteps`, an arithmetic mean per 0.02 s step. (`full_median` / `render_median` in the same row *are* real `Percentile(…, 0.50)` — `:409`, `:412`.)
+  2. **Not `SimTick`-only.** The timed region (`CrowdPerfHarnessP95.cs:364-367`) wraps the whole `StepSim()` call, and `StepSim` calls `RenderInterpolate(alpha)` **once per frame** after the fixed-step `SimTick` loop (`:472`); the harness's own comment at `:363` names the region "fixed-step accumulator + RenderInterpolate". So `simtick = SimTick + RenderInterpolate / steps_per_frame`. `render_median` is a **separate** segment (`RenderSceneAndSync`, `:371-374`), so there is no double-count between the two.
+  - Consequence: the amortization divisor differs per arm, so this column is **not** arm-comparable as pure `SimTick`. See the T1a entry for the resulting bound. `RenderInterpolate` is **not separately instrumented**, so pure `SimTick` is only ever **bounded, never measured**, by this harness.
 
 ---
 
@@ -51,6 +55,18 @@ Caveat to state in any writeup: the two numbers come from **different harnesses 
 - **TMP asset side effect.** Every headless Unity harness run dirties `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset` (~10 insertions / 911 deletions). Revert it before committing. **Never `git add -A`** — always name the paths.
 - **Quiet machine for timing runs.** Read host-wide CPU before each run; defer above **~30%** ambient. A foreground game holding a full core inflated parallel segments **+66%** while serial segments moved only **+8–13%**.
 - **No invented performance targets** (`SIM_OPT_HANDOFF.md` §7). Gates are phrased as "improvement beyond the run-to-run spread"; a delta inside the spread is reported **inconclusive**, not resolved.
+
+---
+
+## `e0f81e4` — [Docs] T1a GPU-path A/B measurement evidence
+
+Committed `Docs/CrowdCity/Perf/t1a_p95_{before,after}_r{1,2}.csv` + `Perf/MANIFEST.md` §7 (`+178 / −2` on MANIFEST). No code/runtime surface change.
+
+Closes the third known gap left by `ff60d39` ("no GPU-path measurement"). The numbers, the A/B/B/A rationale, the validity gate, the amplification model, the `RenderInterpolate` folding and the scope caveats are all recorded in the [`fdf909d` entry](#fdf909d--perf-t1a-remove-the-dead-transformrotation-write-on-the-gpu-path) — **not repeated here**. `Perf/MANIFEST.md` §7 is the primary evidence document; read §7.7 (a)–(g) before quoting any T1a figure.
+
+Two facts recorded there that are only visible in the evidence, not in the CSVs:
+- **Arm construction was proven per run.** BEFORE arm = `git checkout dcb3bfb -- Assets/@Project/Crowd/Scripts/CrowdRoot.cs` (the parent of `fdf909d`; the diff between them is that one file only). Each run's tree version was proven by exact-match gate count: `git grep -c -F 'if (!_gpuRenderActive)' <rev> -- '*CrowdRoot.cs'` → `ff60d39` = **7**, `dcb3bfb` = **1**.
+- **`-nographics` and `-quit` were both deliberately withheld** — the harness must really render and GPU-sync, and it enters play mode then exits itself via `EditorApplication.Exit`; `-quit` would kill the editor before play mode. Verified: 0 occurrences of either flag in all 4 logs, `graphicsDeviceType=Direct3D11` printed.
 
 ---
 
@@ -77,7 +93,7 @@ Committed `Docs/CrowdCity/Perf/simopt10k_step1_r{1,2,3}.txt` + `Docs/CrowdCity/P
 
 **Known gaps (both recorded in `Perf/MANIFEST.md` §6).**
 1. The harness tracks follower/neutral populations internally but does not emit them, so the follower-vs-neutral scaling asymmetry is **inferred** as a population-mix shift, not measured.
-2. `RenderInterpolate`'s per-agent transform writes (`CrowdRoot.cs:747`, `:755`) are **outside this measurement entirely** — the harness never calls `RenderInterpolate`.
+2. `RenderInterpolate`'s per-agent transform writes (`CrowdRoot.cs:747`, `:755`) are **outside the §2 headless profile entirely** — `CrowdProfileHarness` runs `SimTick` only and never calls `RenderInterpolate`. **Scope this claim carefully:** it is true *only* of the §2 headless measurement. It is **false** of the T1a play-mode measurement (`fdf909d` / `e0f81e4`), where `RenderInterpolate` runs every frame and is **folded into the `simtick_*` column** (`CrowdPerfHarnessP95.cs:364-367` times all of `StepSim`, and `StepSim` calls it at `:472`). Neither measurement instruments `RenderInterpolate` separately, so pure `SimTick` is **bounded, never measured**.
 
 ---
 
@@ -120,10 +136,24 @@ Two vestigial `Human human = _humanByAgent[index];` locals deleted; array access
 | `full_max` | 460.0 ms | 402.9 ms | −57 ms | 134 ms | 0.43× | **inconclusive** |
 | `render_median` | 21.46 ms | 6.58 ms | −14.9 ms | 11.44 ms | 1.30× | **inconclusive** |
 
-- **The honest headline is −12.83 ms/tick, NOT "7× faster frames."** The ~97 ms frame gap is amplified because BEFORE's 115 ms frame period exceeds `MaxStepsPerFrame × FixedStep` (4 × 20 ms = 80 ms — `CrowdPerfHarnessP95.cs:164`, `:165`), so the catch-up accumulator saturates at the 4-tick cap: `ticksPerFrame` 3.994 (BEFORE) vs 0.912 (AFTER). Arithmetic check: `3.994 × 23.113 − 0.912 × 10.287 = 82.9 ms` of sim, plus 14.9 ms render = **97.8 ms ≈ the measured 97.4 ms**.
+- **The honest headline is −12.83 ms/tick, NOT "7× faster frames."** The ~97 ms frame gap is amplified because BEFORE's 115 ms frame period exceeds `MaxStepsPerFrame × FixedStep` (4 × 20 ms = 80 ms — `CrowdPerfHarnessP95.cs:164`, `:165`), so the catch-up accumulator saturates at the 4-tick cap: `ticksPerFrame` 3.994 (BEFORE) vs 0.912 (AFTER). Arithmetic check: `3.9935 × 23.113 − 0.912 × 10.287 = 92.302 − 9.382 = 82.9 ms` of sim segment, plus 14.9 ms render = **97.8 ms ≈ the measured 97.4 ms** (residual −0.37 ms = 0.4% of the gap). `ticksPerFrame × simtick` is exactly the per-frame `StepSim` cost **including `RenderInterpolate` once** (see below), and `render_median` is a separate segment — so this model does not double-count. Treat it as an **explanation, not evidence**: one of its terms (`render_median`) is an inconclusive metric.
+- **`simtick_*` folds in `RenderInterpolate`, and the fold is arm-dependent — which makes the headline CONSERVATIVE.** The timed region is all of `StepSim` (`CrowdPerfHarnessP95.cs:364-367`), which calls `RenderInterpolate(alpha)` once per frame at `:472`, so `simtick = SimTick + RI / steps_per_frame`. The divisor differs sharply per arm: BEFORE ÷3.9935 (×0.250), AFTER ÷0.912 (×1.096). `RenderInterpolate` is untouched by T1a, so holding its per-frame cost `RI` equal across arms:
+
+  ```
+  ΔSimTick = −12.826 − 0.846 · RI          (RI ≥ 0)
+  ```
+
+  So the measured figure **understates** the true `SimTick` improvement — the verdict's **sign is safe** and −12.83 is the conservative end. `SimTick_AFTER ≥ 0` plus AFTER's per-frame `StepSim` cost of `0.912 × 10.287 = 9.382 ms` forces `RI ≤ 9.382 ms`, hence:
+
+  ```
+  ΔSimTick ∈ [−20.76, −12.83] ms/tick
+  ```
+
+  **Keep −12.83 as the stated headline.** Narrowing the interval requires instrumenting `RenderInterpolate` as its own segment — an open gap. Load-bearing assumption: `RI_BEFORE == RI_AFTER`, justified because T1a only edited `SteerFollowersAndNeutrals`, not `RenderInterpolate`.
+- **Ambient-load asymmetry (caveat, unquantified).** Per-run ambient CPU was `after_r1` 8.9% / `before_r1` 19.14% / `before_r2` 9.36% / `after_r2` 13.08%, so arm means were **BEFORE 14.25% vs AFTER 10.99%** — the *higher* load sat on BEFORE. That direction **can inflate the measured effect size**. It does not threaten the sign (the removed work is provably dead), and the magnitude was **not quantified**. (`after_r2`'s first ambient read was 25.26% and was re-sampled to 13.08% before proceeding.)
 - **Mechanism** (why 1.28 µs per removed call is far more than a bare transform write): `Human.SetHeadingAndSpeed` (`Human.cs:87`) also runs `if (_animator != null)` (`Human.cs:91`), and on the GPU path `_animator` references a **destroyed** `UnityEngine.Object`, so that comparison routes through the native alive-check ICall — the same cost this project already recorded as a top offender in an earlier editor profiler capture (`Loading.IsObjectAvailable`, 6008 calls/frame at 3004 agents) — roughly 10k times per tick at 10k agents.
 - **Scope honesty.** Editor/Mono on Ryzen 5 5600X + RTX 4080, D3D11. **Not** a player-build or mobile number. The **sign** holds unconditionally (the work is provably dead), but the per-call constant should shrink under IL2CPP/AOT; conversely the 4-tick accumulator cap that BEFORE pins against is **likelier** to be hit on mobile, so the value there may be higher — must be **confirmed on device, not extrapolated**.
-- **Harness gotcha.** CSV `simtick_median_ms` is not a median (`CrowdPerfHarnessP95.cs:413`, `totalSimMs / totalSteps`).
+- **Harness gotcha.** CSV `simtick_median_ms` is neither a median nor `SimTick`-only — see Traps above. Full evidence and reading notes: `Docs/CrowdCity/Perf/MANIFEST.md` §7.7 (a)–(g) (`e0f81e4`).
 
 ---
 
