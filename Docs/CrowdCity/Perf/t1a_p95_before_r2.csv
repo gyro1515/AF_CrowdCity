@@ -1,0 +1,8 @@
+# CrowdPerfHarnessP95 FULL play-mode frame time (GPU crowd ON + SeparationVisitBudget=48)
+# generated: 2026-07-26 02:51:45
+# scene: Assets/@Project/Scenes/GameScene.unity
+# frames/count=300, warmupSeconds=2, uncapped(vSync=0,targetFPS=-1)
+# render: 1920x1080, camera framed on crowd, GPU-sync via 1x1 readback each measured frame
+# full_ms=wall-clock frame period(realtime delta, whole frame); mainthread_ms=ProfilerRecorder 'Main Thread' (unavailable in some batchmode)
+neutralCount,agents,gpuActive,smr,anim,full_median_ms,full_p95_ms,full_max_ms,render_median_ms,simtick_median_ms,ticksPerFrame,mainthread_median_ms,mainthread_p95_ms,mainthread_max_ms
+10000,10004,T,0,0,117.456,144.579,393.134,27.183,22.31,3.99,117.566,145.353,216.559
