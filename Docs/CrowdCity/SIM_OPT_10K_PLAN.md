@@ -104,7 +104,18 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 4. 그다음 **T3a → T3b** (50k 목표 시).
 5. 각 단계: 계획 교차검증 → 구현/검증 분리 → 오라클 byte-identical + shot → 커밋.
 
-## 5. 참고
+## 5. 모바일 최약기기 1만 "하한" 조건 (Codex R5 판단 — 외삽, 미측정)
+
+> 출처: `git show fb14a41:codex_burst_out5.txt`. 5년 window(2021~2026) 최약 AOS/iOS 기준 1만 floor 판정 = **(B) 조건부 현실적**. 실기 측정이 아니라 코드·ProjectSettings 근거 + 기기 스펙 외삽이므로 아래 수치를 성능 목표로 못박지 말 것(`SIM_OPT_HANDOFF.md` §7 "성능 목표 수치 지어내기 금지").
+
+- **렌더 경로 이중화 필수**: `Graphics.RenderMeshIndirect`는 compute/SSBO를 요구해 **GLES3.1+**에서만 성립한다. 본 프로젝트는 MinSdk 25 · Vulkan 우선 + GLES3 폴백이고 **GLES3.1을 강제하지 않아** GLES3.0-only 기기가 window에 들어온다 → `DrawMeshInstanced` + `MaterialPropertyBlock` **2차 인스턴싱 경로**가 필요하다. 현재 `CrowdRenderer.cs:105`(`graphicsShaderLevel < 45 || !supportsComputeShaders`)와 `:114`는 **SMR 경로로 내려가는 게이트일 뿐** 이 폴백을 제공하지 않는다.
+- **하나라도 빼면 1만 하한이 깨지는 항목**: ①동시 가시 hard cap ②frustum/거리 컬링 ③고정 50Hz 심(`GameplayRoot`)에서 **분리된** multi-rate behavior LOD ④밀도 캡(§3 분리 이웃 스캔 캡) ⑤per-agent RNG ⑥최약기기 장시간 thermal soak 수용 게이트.
+- **"1만"의 정의**: 논리적 **활성** population + 동시 가시 hard cap. 1만 전원 동시 가시로 해석하면 최약기기에서 판정이 **(C) 비현실적**으로 뒤집힌다.
+- **메모리는 제약 아님**: SoA 1만 ≈ 1MB(5만 ≈ 5MB). binding은 렌더 제출·GPU fill·지속 발열.
+- 렌더-스택 티어별 상한(R4 — **§3의 T1a/T2/T3a와 다른 축**, 전부 외삽·미측정): T0 300~700 / T1(sim만) 300~900 = 자릿수 불변 / T2 3천~8천 / T3(GO 제거+indirect) 1만~2만 = **1만 첫 도달** / T4(+VAT·LOD) 총 활성 2만~4만 · 동시 가시 1만~2만.
+- VAT/BRG/multi-LOD는 품질·헤드룸(선택)이지 하한 필수는 아니다. "보장" 선언은 Mali-G52/Adreno 610급 포함 device matrix의 실기 thermal soak 통과 후에만.
+
+## 6. 참고
 - 세그먼트 계측: `CrowdSimProfiler.Seg.*` (Enabled=false 기본, 결정성 중립). DERIVED_KernelResolvers = Grid+Recruit+Combat.
 - CC 잔여 정리(정지된 agent CharacterController 제거)는 M-sim-3. 현재 SDF+GPU에서 무해(Unit 레이어 쿼리 없음)라 수용 중 — 50k에서 PhysX broadphase 비용이면 그때 제거.
 - `float2/Mathf→math` 전환, `DeterministicRng(uint4)`는 M-sim-2b (아직 미완).
