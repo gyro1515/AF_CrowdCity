@@ -51,6 +51,8 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 
 ## 2. 측정 완료 — 직렬 vs 잡 분리 → **T1b 확정** (2026-07-26, 측정 트리 `fdf909d` · 증거 커밋 `ff60d39`)
 
+> ⚠️ **이 절의 "T1b 확정" 판정은 현재 재결정 중이다** — 아래 본문은 측정 당시 기록 그대로다. 이 측정이 헤드리스(SMR 경로)라 `*Present`가 T1a로 제거된 쓰기를 포함하는 문제이며, 선행 조건과 유보 사항은 [§4 항목 3](#4-권장-순서)과 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md) "운영 계약" 절에 있다. **재측정 전까지 이 절의 판정을 근거로 T1b에 착수하지 말 것.**
+
 **정정.** 이 절의 초판이 제안했던 `FollowerSteer − CCMove − .Complete대기` 산식은 **성립하지 않는다.** `Seg.CCMove`는 다섯 지점(리더 `ApplyHorizontalMove`, 팔로워 SDF 이동 잡 대기, 팔로워 CC 폴백, 중립 SDF 이동 잡 대기, 중립 CC 폴백)을 합산하는 단일 버킷이라 10k의 `CCMove` 2.78ms에는 팔로워·중립 대기가 섞여 있고, `*JobWait`은 `CCMove`와 inclusive 중첩이라 이중 차감이 된다. 대신 `1485848`에서 분기별 Seg 7개(`Follower/Neutral × Prepass/JobWait/Present` + `FollowerGridSnapshot`)를 추가해 직접 계측했다.
 
 **측정:** headless SDF ON, 5000/10000, 동일 인자 3런. 환경·verbatim 커맨드라인·부하 통제·판정 규칙·판독 주의는 [`Perf/MANIFEST.md`](Perf/MANIFEST.md), 원시 출력은 [`Perf/simopt10k_step1_r{1,2,3}.txt`](Perf/).
@@ -114,7 +116,7 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 ## 4. 권장 순서
 1. **[완료] §2 분리-측정** — `1485848`에서 Seg 7개 추가 → `ff60d39`에서 3런 측정 기록(측정 트리는 `fdf909d`) → **T1b 확정**(§2).
 2. **[완료] T1a** (죽은 rotation 쓰기 제거, `fdf909d`). **GPU 경로 실측 완료(`e0f81e4`)** — play-mode `CrowdPerfHarnessP95`, 10k, A/B/B/A, `gpuActive=T`: SimTick 틱당 **−12.83ms(−55.5%)**, 동일-arm spread의 8.0배 → 개선 확정. 단 그 CSV 열은 `RenderInterpolate` 1회를 포함하므로 **순수 SimTick 이득은 [−20.76, −12.83]ms/틱 범위로만 묶인다**(헤드라인은 보수적 끝을 쓴다). 증거·판독 주의: [`Perf/MANIFEST.md`](Perf/MANIFEST.md) §7.
-3. **[잠정 다음 — 판정 재결정 중, 재측정 대기] T1b** (팔로워/뉴트럴 직렬 prepass + presentation 잡화). 잠정 최우선 타깃은 두 `*Present` 루프(10k SimTick의 66%). **단 §2의 "T1b 확정"은 더 이상 확정이 아니다** — §2는 헤드리스(SMR 경로) 측정이라 `*Present`가 T1a(`fdf909d`)로 제거된 쓰기를 포함하고, T1a 실측치가 §2에 기록된 손익분기(`Present` 비용의 86.1%)를 넘는다. **착수 전 선행 조건: `CrowdProfileHarness`를 `-nographics` 없이 돌려 `_gpuRenderActive == true` 상태로 세그먼트를 재측정할 것.** 근거·수치·유보 조건(서로 다른 하네스/모드 비교라 반증이 아니라 해소할 긴장이라는 점)은 [`CHANGELOG.ko.md`](CHANGELOG.ko.md) §2.2 및 [`CHANGELOG.en.md`](CHANGELOG.en.md) `Current state / next step`에 있다 — 여기서 반복하지 않는다.
+3. **[잠정 다음 — 판정 재결정 중, 재측정 대기] T1b** (팔로워/뉴트럴 직렬 prepass + presentation 잡화). 잠정 최우선 타깃은 두 `*Present` 루프(10k SimTick의 66%). **단 §2의 "T1b 확정"은 더 이상 확정이 아니다** — §2는 헤드리스(SMR 경로) 측정이라 `*Present`가 T1a(`fdf909d`)로 제거된 쓰기를 포함하고, T1a 실측치가 §2에 기록된 손익분기(`Present` 비용의 86.1%)를 넘는다. **착수 전 선행 조건: `CrowdProfileHarness`를 `-nographics` 없이 돌려 `_gpuRenderActive == true` 상태로 세그먼트를 재측정할 것.** 근거·수치·유보 조건(서로 다른 하네스/모드 비교라 반증이 아니라 해소할 긴장이라는 점)은 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md) "운영 계약" 절과 [`CHANGELOG.md`](CHANGELOG.md) §2.2에 있다 — 여기서 반복하지 않는다.
 4. 그다음 **T3a → T3b** (50k 목표 시). **T2는 후순위** — §2 판정상 상한이 10k 13.5%다.
 5. 각 단계: 계획 교차검증 → 구현/검증 분리 → 오라클 byte-identical + shot → 커밋.
 

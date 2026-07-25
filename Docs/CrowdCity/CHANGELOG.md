@@ -1,4 +1,4 @@
-# CrowdCity 변경 이력 (한국어 상세판)
+# CrowdCity 변경 이력
 
 브랜치 `feat/crowd-sim-10k` · 최신 항목이 위
 
@@ -7,7 +7,7 @@
 > 1. 페이지 맨 위에 Notion의 **`/목차`(Table of contents) 블록**을 추가하세요. 아래 [목차](#목차)는 GitHub 뷰어용이며, Notion은 임포트 시 마크다운 앵커 링크를 항상 보존하지 않습니다. `/목차` 블록은 `##`/`###` 구조를 자동으로 따라갑니다.
 > 2. 길게 늘어지는 `###` 소제목은 블록 좌측 핸들 → **전환 → 토글 제목(Toggle heading)** 으로 바꾸면 페이지가 접힙니다. 원시 수치·기각된 대안처럼 특히 긴 부분은 이미 접기 블록(`<details>`)으로 넣어 두었습니다.
 
-이 문서는 **사람이 읽는 상세본**입니다. 에이전트가 바로 작업에 들어갈 때 쓰는 조밀한 정본은 [`CHANGELOG.en.md`](CHANGELOG.en.md)이며, 두 파일이 어긋나면 **영문판이 정본**입니다. 다만 "왜 그렇게 결정했는지"와 "무엇을 기각했는지"는 이 문서에만 있습니다.
+이 문서는 **변경 이력**입니다 — 무엇을 왜 바꿨고, 어떤 대안을 왜 기각했는지. **현재 상태·불변식·게이트·함정(= 운영 계약)은 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md)** 에 있고 **작업 전에 읽어야 하는 것은 그쪽**입니다. 사실은 한 곳에만 둡니다 — 이력은 이 문서, 계약은 핸드오프.
 
 ---
 
@@ -15,7 +15,7 @@
 
 계측·에디트 모드 rig 수정·T1a가 **완료되고 실측까지 끝났습니다.** 다음 단계는 새 작업이 아니라 **재결정**입니다 — 이전 측정이 헤드리스라 T1a가 제거한 쓰기를 포함하고 있었으므로, **GPU 경로를 켠 상태로 세그먼트를 다시 재야** T1b를 확정할 수 있습니다.
 
-> 상세 상태·불변식·검증 게이트·함정은 [`CHANGELOG.en.md`](CHANGELOG.en.md)에 있고 **그쪽이 정본**입니다. 두 문서가 어긋나면 영문판을 따르세요. 이 블록은 의도적으로 거칠게 유지합니다(기능 커밋 단위로만 갱신).
+> 이 블록은 어디쯤 와 있는지 감을 주는 **오리엔테이션**입니다. 상세 상태·불변식·검증 게이트·함정의 **정본은 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md)의 "운영 계약" 절**이며, 사실이 어긋나면 그쪽을 따르세요. 이 블록은 의도적으로 거칠게 유지합니다(기능 커밋 단위로만 갱신).
 
 ---
 
@@ -34,23 +34,26 @@
 
 ## 1. 이 문서의 규칙
 
-기능 영역별로 **변경 이력 한 쌍**(`CHANGELOG.en.md` + `CHANGELOG.ko.md`)을 둡니다.
+기능 영역별로 **변경 이력 한 개**(`Docs/<Area>/CHANGELOG.md`)를 둡니다.
 
 | 항목 | 규칙 |
 |---|---|
-| 기록 시점 | **기능을 추가하거나 변경한 모든 커밋.** 성능(perf)·수정(fix)·툴링(tooling) 커밋 포함 |
+| 기록 시점 | **기능을 추가하거나 변경한 모든 커밋** — 같은 커밋 안에서. 성능(perf)·수정(fix)·툴링(tooling) 커밋 포함 |
 | 기록하지 않음 | 순수 문서/잡무 커밋 — 오타, 에이전트 모델 핀 갱신, 트랜스크립트 정리 등 |
 | 정렬 | 최신 항목이 맨 위 |
-| 영문판 성격 | **정본이며 에이전트용.** 콜드 스타트한 에이전트가 곧바로 손을 댈 수 있게 조밀하게, 수식어 없이, `파일:줄` 인용을 붙여서 |
-| 한국어판 성격 | **사람용이며 더 자세하게.** 요약본이 아니라, 로직·구조·결정 이유·기각한 대안까지 설명 |
+| 성격 | **사람용이며 자세하게.** 요약본이 아니라 로직·구조·결정 이유·기각한 대안까지. Notion 구조(목차·`##`/`###`·`<details>`) |
+| 항목마다 | 실행 가능한 **`직접 확인하는 법`** 한 줄 — 독자가 헤드라인 주장을 직접 검증할 수 있게 |
+| 여기 두지 않는 것 | 현재 상태·불변식·게이트·함정 → [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md)의 "운영 계약" 절 |
 
 성능 수치를 인용할 때는 **어떤 하네스로 무엇을 측정한 값인지** 반드시 함께 적습니다. 목표 수치는 지어내지 않습니다(프로젝트 규칙, `SIM_OPT_HANDOFF.md` §7).
+
+> **이력**: 2026-07-26까지 이 영역은 `CHANGELOG.en.md`(에이전트용 정본) + `CHANGELOG.ko.md`(사람용) 두 파일로 운영했습니다. 언어로 나눈 축이 잘못이었습니다 — 실제 구분은 **목적**(변경 이력 vs 운영 계약)이었고, Codex가 이 프로젝트의 한국어 문서를 정확히 읽어 왔으므로 한쪽을 영어로 둘 이유가 없었습니다. `en`은 폐기하고 계약은 핸드오프로 이관했습니다.
 
 ---
 
 ## 2. 현재 상태와 다음 단계
 
-> 맨 위 [현재 상태](#현재-상태) 블록의 **상세 설명**입니다. 이 절은 **"왜 그런가"(추론)** 를 담고, 불변식·게이트·함정의 **열거된 목록은 [`CHANGELOG.en.md`](CHANGELOG.en.md)가 정본**입니다([2.3절](#23-불변식검증-게이트함정--목록의-정본은-영문판) 참조). 사실이 어긋나면 영문판을 따르세요.
+> 맨 위 [현재 상태](#현재-상태) 블록의 **상세 설명**입니다. 이 절은 **"왜 그런가"(추론)** 를 담고, 불변식·게이트·함정의 **열거된 목록은 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md)의 "운영 계약" 절이 정본**입니다([2.3절](#23-불변식검증-게이트함정--목록의-정본은-핸드오프) 참조). 사실이 어긋나면 핸드오프를 따르세요.
 
 ### 2.1 완료된 것
 
@@ -79,11 +82,11 @@
 
 > **반드시 함께 적을 유보 조건.** 두 수치는 **서로 다른 하네스, 서로 다른 모드**에서 나왔습니다 — 헤드리스 에디트 모드 `CrowdProfileHarness` vs 플레이 모드 `CrowdPerfHarnessP95`. 그래서 이것은 **해소해야 할 긴장(tension)** 이지, T1b가 틀렸다는 **증명이 아닙니다.** 같은 조건으로 다시 재기 전에는 어느 쪽도 결론이 아닙니다.
 
-### 2.3 불변식·검증 게이트·함정 — 목록의 정본은 영문판
+### 2.3 불변식·검증 게이트·함정 — 목록의 정본은 핸드오프
 
-**깨면 안 되는 불변식 목록, 검증 게이트 목록, 함정 목록은 [`CHANGELOG.en.md`](CHANGELOG.en.md)의 `Current state / next step` → `Standing invariants` / `Traps`와 `Conventions / gates`에 있습니다. 이 문서는 그 목록을 복제하지 않습니다.**
+**깨면 안 되는 불변식 목록, 검증 게이트 목록, 함정 목록은 [`SIM_OPT_HANDOFF.md`](SIM_OPT_HANDOFF.md)의 "🔴 운영 계약" 절에 있습니다. 이 문서는 그 목록을 복제하지 않습니다.**
 
-의도적인 분업입니다. 그 항목들은 **휘발성 사실**(코드 줄 번호, 게이트 임계, 해시)이라 코드가 움직일 때마다 갱신돼야 합니다. 두 문서에 같은 목록을 두면 한쪽만 갱신돼 조용히 어긋납니다. 그래서 **열거된 사실은 영문판 한 곳**에만 두고, 이 문서는 **"왜 그런가"** 를 담습니다.
+의도적인 분업입니다. 그 항목들은 **휘발성 사실**(코드 줄 번호, 게이트 임계, 해시)이라 코드가 움직일 때마다, 커밋이 없더라도 갱신돼야 합니다. 두 문서에 같은 목록을 두면 한쪽만 갱신돼 조용히 어긋납니다. 그래서 **열거된 사실은 핸드오프 한 곳**에만 두고, 이 문서는 **"왜 그런가"** 를 담습니다. 이 문서는 append-only 이력이고 핸드오프는 갱신되는 계약이라는, 수명이 다른 두 성격을 섞지 않기 위한 분리이기도 합니다.
 
 각 불변식·함정이 *왜* 그런지는 해당 항목 절에 있습니다.
 
@@ -146,7 +149,12 @@
 
 `[Docs]` · `Docs/CrowdCity/Perf/t1a_p95_{before,after}_r{1,2}.csv` 4개 + `Perf/MANIFEST.md` §7(`+178 / −2`) · **코드·런타임 표면 변경 없음**
 
-> **직접 확인하는 법.** 두 arm이 정말 다른 코드였는지: `git grep -c -F 'if (!_gpuRenderActive)' ff60d39 -- '*CrowdRoot.cs'` → `7`, 같은 명령의 `dcb3bfb` → `1`. 증거 본문은 `git show e0f81e4 -- Docs/CrowdCity/Perf/MANIFEST.md`의 §7.3~§7.7.
+> **직접 확인하는 법** (PowerShell). 두 arm이 정말 다른 코드였는지 — 게이트 문자열 개수를 세면 됩니다.
+> ```powershell
+> git grep -c -F 'if (!_gpuRenderActive)' ff60d39 -- '*CrowdRoot.cs'   # → …:7
+> git grep -c -F 'if (!_gpuRenderActive)' dcb3bfb -- '*CrowdRoot.cs'   # → …:1
+> ```
+> 증거 본문은 `git show e0f81e4 -- Docs/CrowdCity/Perf/MANIFEST.md`의 §7.3~§7.7.
 
 `ff60d39`가 남긴 세 번째 공백("GPU 경로 실측 없음")을 닫는 증거 커밋입니다. 수치·A/B/B/A 근거·유효성 게이트·증폭 모델·`RenderInterpolate` 접힘·범위 한계는 모두 [6장 `fdf909d` 항목](#6-fdf909d-t1a-죽은-회전-쓰기-제거)에 있고 **여기서 반복하지 않습니다.** T1a 수치를 인용할 일이 있으면 `Perf/MANIFEST.md` §7.7 (a)~(g)를 먼저 읽으세요.
 
@@ -177,9 +185,13 @@ A/B 측정에서 "정말 다른 코드를 쟀는가"는 가장 조용하게 실�
 
 `[Docs]` · `Docs/CrowdCity/Perf/simopt10k_step1_r{1,2,3}.txt` + `Docs/CrowdCity/Perf/MANIFEST.md` 신설, `SIM_OPT_10K_PLAN.md` §2·§4 재작성. **코드·빌드·런타임 표면 변경 없음.**
 
-> **직접 확인하는 법.** 판정의 근거 수치 7행을 한 번에 보려면:
-> `grep -E '^10000,(Follower|Neutral)(Prepass|GridSnapshot|Present|JobWait)' Docs/CrowdCity/Perf/simopt10k_step1_r1.txt`
-> 직렬 5행(`*Prepass`·`FollowerGridSnapshot`·`*Present`)을 더하면 14.47, 잡 대기 2행(`*JobWait`)을 더하면 2.78이 나옵니다. `r2`/`r3`로 바꿔 런 간 흔들림도 직접 보세요.
+> **직접 확인하는 법** (PowerShell). 판정의 근거 수치 7행을 한 번에:
+> ```powershell
+> Select-String -Path 'Docs\CrowdCity\Perf\simopt10k_step1_r1.txt' `
+>   -Pattern '^10000,(Follower|Neutral)(Prepass|GridSnapshot|Present|JobWait),' |
+>   ForEach-Object { $_.Line }
+> ```
+> 직렬 5행(`*Prepass`·`FollowerGridSnapshot`·`*Present`)을 더하면 14.47, 잡 대기 2행(`*JobWait`)을 더하면 2.78이 나옵니다. 파일명을 `r2`/`r3`로 바꿔 런 간 흔들림도 직접 보세요.
 
 ### 5.1 이 측정이 답하려 한 질문
 
@@ -308,8 +320,16 @@ A/B 측정에서 "정말 다른 코드를 쟀는가"는 가장 조용하게 실�
 
 `[Perf]` · `Assets/@Project/Crowd/Scripts/CrowdRoot.cs` `+26 / −10`
 
-> **직접 확인하는 법 (코드).** `git show fdf909d -- Assets/@Project/Crowd/Scripts/CrowdRoot.cs` — 추가된 `if (!_gpuRenderActive)` 6개와 삭제된 로컬 2개가 전부입니다.
-> **직접 확인하는 법 (수치).** `awk -F, '/^10000,/{print FILENAME": "$10}' Docs/CrowdCity/Perf/t1a_p95_*.csv` → AFTER 10.416 / 10.158, BEFORE 23.916 / 22.310. arm별 평균차가 헤드라인 −12.83입니다(10번째 필드 = `simtick_median_ms`, 읽는 법은 [6.9.1절](#691-simtick-열에-renderinterpolate가-접혀-있고-그-접힘이-헤드라인을-과소평가한다) 주의).
+> **직접 확인하는 법 — 코드** (PowerShell). `git show fdf909d -- Assets/@Project/Crowd/Scripts/CrowdRoot.cs` — 추가된 `if (!_gpuRenderActive)` 6개와 삭제된 로컬 2개가 전부입니다.
+>
+> **직접 확인하는 법 — 수치** (PowerShell). CSV는 헤더 앞에 `#` 주석이 있으므로 걸러낸 뒤 읽습니다.
+> ```powershell
+> Get-ChildItem 'Docs\CrowdCity\Perf\t1a_p95_*.csv' | ForEach-Object {
+>   $r = Get-Content $_.FullName | Where-Object { $_ -notmatch '^#' } | ConvertFrom-Csv
+>   "$($_.Name): $($r.simtick_median_ms)"
+> }
+> ```
+> → AFTER 10.416 / 10.158, BEFORE 23.916 / 22.31. arm별 평균차가 헤드라인 −12.83입니다(이 열을 읽을 때의 주의는 [6.9.1절](#691-simtick-열에-renderinterpolate가-접혀-있고-그-접힘이-헤드라인을-과소평가한다)).
 
 ### 6.1 무엇을 바꿨나
 
@@ -541,7 +561,7 @@ arm 평균은 **BEFORE 14.25% vs AFTER 10.99%** 로, **부하가 높은 쪽이 B
 
 `[Fix]` · `Assets/@Project/Human/Scripts/Human.cs` `+2`줄(주석 포함)
 
-> **직접 확인하는 법.** 변경 자체는 `git show dcb3bfb --stat` → `Human.cs | 2 ++` 한 줄로 끝납니다. 유령을 **재현**하려면 그 2줄을 되돌린 트리에서 `CrowdShotHarness`를 돌리고(`-executeMethod CrowdShotHarness.RunFromBatch -shotOut <dir> -shotNeutral 700 -shotTicks 150`, `-nographics` 금지) `gpu_on.png`에서 빨간 리더 그룹이 두 번 찍히는지 보면 됩니다. 단 "704회" 로그 카운트는 세션 scratchpad 로그에서 나온 값이라 저장소만으로는 재현되지 않습니다 — 검증 신호는 [7.7절](#7-dcb3bfb-에디트-모드-rig-유령-수정)대로 **픽셀/육안**입니다.
+> **직접 확인하는 법** (PowerShell). 변경 자체는 `git show dcb3bfb --stat` → `Human.cs | 2 ++` 한 줄로 끝납니다. 유령을 **재현**하려면 그 2줄을 되돌린 트리에서 `CrowdShotHarness`를 돌리고(`-executeMethod CrowdShotHarness.RunFromBatch -shotOut <dir> -shotNeutral 700 -shotTicks 150`, **`-nographics` 금지**) `gpu_on.png`에서 빨간 리더 그룹이 두 번 찍히는지 보면 됩니다. 단 "704회" 로그 카운트는 세션 scratchpad 로그에서 나온 값이라 **저장소만으로는 재현되지 않습니다** — 검증 신호는 [7.7절](#7-dcb3bfb-에디트-모드-rig-유령-수정)대로 **픽셀/육안**입니다.
 
 ### 7.1 무엇을 바꿨나
 
@@ -639,7 +659,16 @@ arm 평균은 **BEFORE 14.25% vs AFTER 10.99%** 로, **부하가 높은 쪽이 B
 
 `[Tooling]` · `CrowdSimProfiler.cs` `+18 / −3`, `CrowdRoot.cs` `+14 / −0`
 
-> **직접 확인하는 법.** "로직이 안 바뀌었다"는 핵심 주장은 `git show 1485848 --stat`으로 즉시 보입니다 — `CrowdRoot.cs | 14 ++++++++++++++`, **`-` 기호가 하나도 없습니다**(삭제 0줄). 계측 커버리지는 `grep -E '^10000,(FollowerSteer|FollowerPrepass|FollowerGridSnapshot|FollowerJobWait|FollowerPresent),' Docs/CrowdCity/Perf/simopt10k_step1_r1.txt` → 하위 4개 합 11.7414 ÷ 부모 11.7482 = **99.94%** 입니다.
+> **직접 확인하는 법** (PowerShell). "로직이 안 바뀌었다"는 핵심 주장은 `git show 1485848 --stat`으로 즉시 보입니다 — `CrowdRoot.cs | 14 ++++++++++++++`, **`-` 기호가 하나도 없습니다**(삭제 0줄). 계측 커버리지는 직접 계산할 수 있습니다.
+> ```powershell
+> $h = @{}
+> Select-String -Path 'Docs\CrowdCity\Perf\simopt10k_step1_r1.txt' `
+>   -Pattern '^10000,(FollowerSteer|FollowerPrepass|FollowerGridSnapshot|FollowerJobWait|FollowerPresent),' |
+>   ForEach-Object { $p = $_.Line -split ','; $h[$p[1]] = [double]$p[2] }
+> $sub = $h['FollowerPrepass'] + $h['FollowerGridSnapshot'] + $h['FollowerJobWait'] + $h['FollowerPresent']
+> "sub=$sub  parent=$($h['FollowerSteer'])  ratio=$([math]::Round(100*$sub/$h['FollowerSteer'],2))%"
+> ```
+> → `sub=11.7414  parent=11.7482  ratio=99.94%`.
 
 ### 8.1 왜 세그먼트를 쪼개야 했나
 

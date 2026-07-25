@@ -2,11 +2,64 @@
 
 ---
 
-## 🔄 최신 상태 업데이트 (2026-07-19) — 크라우드 성능 세션 결과 + 남은 작업
+## 🔴 운영 계약 (2026-07-26) — **이 영역 작업 전 반드시 읽을 것**
 
-> 이 절이 현재 상태의 정본이다(2026-07-19 성능 세션 이후). 아래 2026-07-17 마커/게이트/계획은 배경·상세 참조용으로 남겨둔다.
+> 이 절이 **현재 상태·불변식·게이트·함정의 정본**이다. 상태가 바뀌면 커밋이 없더라도 이 절을 갱신한다.
+> 변경 **이력**(무엇을 왜 바꿨는지, 기각한 대안)은 [`CHANGELOG.md`](CHANGELOG.md)에 있다. 사실은 한 곳에만 둔다 — 이력은 CHANGELOG, 계약은 이 절.
 
-브랜치: `feat/crowd-sdf-perf` (다른 PC에서 `git fetch && git checkout feat/crowd-sdf-perf && git pull`로 재개)
+브랜치: **`feat/crowd-sim-10k`** (다른 PC에서 `git fetch && git checkout feat/crowd-sim-10k && git pull`로 재개)
+
+### 현재 상태 / 다음 단계
+
+계측·에디트 모드 rig 수정·T1a가 완료되고 실측까지 끝났다. 실측이 끝난 것은 둘 — ①§2 "직렬 vs 잡 대기" 분리(헤드리스 `CrowdProfileHarness`), ②T1a의 GPU 경로 이득(플레이 모드 `CrowdPerfHarnessP95`).
+
+| 항목 | 커밋 | 상태 |
+|---|---|---|
+| 분리 계측 — 프로파일러 Seg 7개 | `1485848` | 완료, 오라클 바이트 동일 |
+| 에디트 모드 rig 유령 수정 | `dcb3bfb` | 완료, 스크린샷 검증 |
+| T1a — GPU 경로 죽은 `transform.rotation` 쓰기 제거 | `fdf909d` | 완료, 정확성 + 성능 실측 |
+| §2 측정 증거 + 계획 정정 | `ff60d39` | 완료(문서만) |
+| T1a GPU 경로 A/B 실측 증거 | `e0f81e4` | 완료(문서만) |
+
+**다음 단계는 새 작업이 아니라 재결정이다. T1b를 시작하기 전에 먼저 정리할 것.**
+
+`SIM_OPT_10K_PLAN.md` §2가 "T1b 확정"으로 판정했고 §4가 그것을 다음으로 올렸으나, 그 판정이 흔들렸다. §2는 **헤드리스** 측정이라 SMR 경로였고(`CrowdRenderer.Init`이 null graphics device에서 `false` 반환 — `CrowdRenderer.cs:98`~`:102`), 따라서 모든 `*Present` 수치가 **T1a가 제거한 바로 그 쓰기를 포함**한다. 계획이 기록한 손익분기는 10k에서 `Present` 비용의 **86.1% 초과**가 SMR 전용이어야 판정이 뒤집힌다는 것인데, T1a 실측 **−12.83 ms/tick**은 10k `Present` 합계 13.58 ms(`FollowerPresent` 8.87 + `NeutralPresent` 4.71)의 **약 94%**다.
+
+- **착수 전 선행 조건:** `CrowdProfileHarness`를 **`-nographics` 없이** 돌려 `CrowdRenderer.Init`(`CrowdRenderer.cs:64`)이 성공하고 `_gpuRenderActive`(`CrowdRoot.cs:119`, 설정 지점 `:888`)가 true인 상태로 세그먼트를 **재측정**할 것.
+- **유보 조건(반드시 함께 적을 것):** 두 수치는 서로 다른 하네스·모드(헤드리스 에디트 모드 vs 플레이 모드)에서 나왔다. 이것은 **해소할 긴장**이지 T1b가 틀렸다는 증명이 아니다.
+- `SIM_OPT_10K_PLAN.md` §4 항목 3은 이 상태를 반영해 "잠정 다음 — 재측정 대기"로 고쳐 뒀다. **§2 본문의 "T1b 확정" 문구는 아직 그대로**이며, 재측정이 정할 몫이다.
+
+### 깨면 안 되는 불변식
+
+| 불변식 | 위치 | 이유 |
+|---|---|---|
+| `_visualYaw[…] =` 쓰기 **7곳 전부 무조건** | `CrowdRoot.cs:1205, 1430, 1440, 1526, 1536, 1631, 1673` | GPU 경로의 yaw 입력. 게이팅하면 크라우드 방향이 스폰 값에 얼어붙는다 |
+| `_visualSpeed01[…] =` 쓰기 **5곳 전부 무조건** | `CrowdRoot.cs:1204, 1427, 1523, 1630, 1672` | GPU 애니메이션 위상(`_phase01`) 적분 입력 |
+| 리더 `SetHeadingAndSpeed` **게이팅 금지** | `CrowdRoot.cs:1206` | S4b2 계약이 리더 트랜스폼을 라이브로 유지. 리더 ≤4명(SimTick의 0.09%)이라 이득도 없다 |
+| 정지 시 yaw 유지 읽기 2곳 유지 | `CrowdRoot.cs:1439`, `:1535` | `float headingDeg = _visualYaw[index];` |
+| `*JobWait`은 `CCMove`의 **inclusive 중첩** | `CrowdRoot.cs:1390`~`:1394`, `:1608`~`:1612` | 합산 금지, 이중 차감 금지 |
+| 렌더 경로 게이트는 **픽셀 허용오차**, PNG MD5 아님 | 아래 게이트 절 | 스크린샷 하네스 출력이 바이트 재현되지 않는다 |
+
+### 검증 게이트
+
+- **오라클 바이트 동일 게이트(시뮬 변경).** `CrowdOracleHarness`, n=2000 seed=12345 1000틱, 스냅샷 md5 **`4F79282EB20A79023B45F2EB2DE5271B`**. 시뮬 결과가 불변이어야 하는 변경은 이 값이 바이트 동일해야 통과다(events/summary CSV도 함께 비교).
+- **렌더 게이트(렌더 경로 변경).** **차이 ≤100 픽셀 AND 최대 채널 델타 ≤8** + 육안 확인. **PNG MD5 금지** — `CrowdShotHarness` 출력은 바이트 재현되지 않는다(동일 인자 재실행에서 이미지당 921,600픽셀 중 3~16픽셀 차이, 최대 델타 ≤4, 손대지 않은 `smr_off.png` 포함). 실제 변경과의 분리도: 35,587~123,161픽셀 / 최대 델타 171~184(픽셀 수 약 2,200배, 델타 약 43배).
+- **TMP 에셋 부수 효과.** 헤드리스 하네스를 돌릴 때마다 `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset`이 더럽혀진다(약 10 insertions / 911 deletions). 커밋 전 되돌릴 것. **`git add -A` 금지** — 항상 경로를 명시한다.
+- **타이밍 측정은 조용한 머신에서.** 런 직전 호스트 전체 CPU를 읽고 **약 30% 초과면 미룬다.** 포그라운드 게임이 코어 하나를 점유했을 때 **병렬 구간 +66%** vs **직렬 구간 +8~13%** 로 갈렸다 — 배경 부하는 병렬 구간에 집중된다.
+- **성능 목표 수치 지어내기 금지**(아래 §7). 게이트는 "런 간 spread를 넘는 개선"으로 서술하고, spread 안의 델타는 **판정 불가(inconclusive)** 로 보고한다.
+
+### 함정
+
+- **GPU 경로에서 팔로워/뉴트럴의 `transform.rotation`은 영구히 stale**이다(이미 stale이던 위치에 회전이 합류 — 기존 주석 `CrowdRoot.cs:740`). 앞으로 팔로워·뉴트럴의 `transform.rotation`이나 `.forward`를 읽는 기능을 추가하면 조용히 스폰 시점 값을 받는다.
+- **`fdf909d`(T1a)는 `dcb3bfb`와 결합되어 있다.** 되돌릴 때는 함께 되돌려야 한다 — `dcb3bfb` 이전이면 살아남은 edit-mode 유령의 facing이 얼어붙는 실제 시각 회귀가 된다.
+- **Unity는 에디트 모드에서 지연 `Object.Destroy`를 거부한다.** 모든 에디트 모드 하네스(`CrowdShotHarness`, `CrowdProfileHarness`, `CrowdOracleHarness`)가 런타임 코드는 파괴했다고 믿는 객체를 계속 본다. `GetComponentsInChildren<SkinnedMeshRenderer>(true)`는 비활성 객체까지 세므로 에디트 모드에서 `smr == 0` 단언은 여전히 실패한다. 플레이 모드 성능 하네스는 프레임마다 yield하므로 무관하다.
+- **`CrowdPerfHarnessP95`의 CSV 열 `simtick_median_ms`는 중앙값도 아니고 `SimTick` 전용도 아니다.** ①`CrowdPerfHarnessP95.cs:413`이 `totalSimMs / totalSteps`(0.02초 스텝당 산술 평균)를 계산한다 — 같은 행의 `full_median`·`render_median`은 실제 `Percentile(…, 0.50)`(`:409`, `:412`). ②계측 구간(`:364-367`)이 `StepSim()` 전체를 감싸고 `StepSim`이 `RenderInterpolate(alpha)`를 프레임당 1회 호출한다(`:472`) → `simtick = SimTick + RenderInterpolate / 프레임당 스텝수`. 상환 제수가 arm마다 달라 **순수 `SimTick`으로 arm 간 비교가 안 된다**. `RenderInterpolate`는 별도 계측이 없어 순수 `SimTick`은 **범위만 잡히고 측정되지 않는다**(T1a: `ΔSimTick ∈ [−20.76, −12.83]` ms/틱). 유도는 [`CHANGELOG.md`](CHANGELOG.md) §6.9.1.
+
+---
+
+## 🔄 이전 상태 업데이트 (2026-07-19) — 크라우드 성능 세션 결과 + 남은 작업
+
+> 위 운영 계약 절이 현재 상태의 정본이다. 이 절과 아래 2026-07-17 마커/게이트/계획은 배경·상세 참조용으로 남겨둔다.
 
 ### 완료 (커밋·푸시됨)
 - Burst 핫잡 활성(FloatMode.Strict): 10k SimTick 22.95→14.04ms (−38.8%)
@@ -22,13 +75,13 @@
 - 10k CPU 시뮬 해결: 14.86ms/tick, 20ms(50Hz) 예산 아래.
 - 에디터 60fps 인원 상한 ≈ 3400 = 렌더-바운드(디메이션 안 된 2964버텍스 메시 × N), 시뮬 아님. 측정 하네스는 GPU 강제동기라 보수적 → 실제 빌드는 더 높을 가능성.
 - 인원 상향 핵심 레버 = 디메이션 렌더 메시(아트).
-- separation 결정성 기준선: OFF/Pairwise 오라클 n=2000 s12345 md5 = 2b3aad7f786004f1185a067bc1b31f4a.
+- ~~separation 결정성 기준선: OFF/Pairwise 오라클 n=2000 s12345 md5 = 2b3aad7f786004f1185a067bc1b31f4a.~~ **[stale — Burst 이전 값]** 현재 유효한 기준선은 **`4F79282EB20A79023B45F2EB2DE5271B`**(같은 n=2000 s12345 1000틱). Burst 산출은 Mono 오라클과 bit-identical하지 않아 Stage A에서 재기준선을 잡았다(§7 "Burst 산출은 … 기존 baseline 직접 비교 금지"). 위 게이트 절 참조.
 
 ### 남은 작업 (우선순위)
 1. [사용자] Development 빌드 + DevHudRoot FPS로 인원별 실 프레임 측정 → 진짜 파이프라인 60fps 인원 + 시뮬/렌더 병목 판정.
 2. [아트] 디메이션 렌더 메시(~200~500 vert) — 높은 온스크린 인원의 핵심 경로, GPU 렌더러 모바일 출하 게이트.
 3. [시뮬-병목 될 때까지 연기] 리더-방사형 폴리시: (a) 버킷→정확한 셀 점유수 수정(Codex: 해시충돌이 occ 부풀려 오탐 → 줄무늬), (b) T/gain/tangential 튜닝.
-4. [빌드 실측 후] 네이티브 위치 권위 — 틱마다 10k 트랜스폼 왕복(Restore+Mirror) 제거 = 남은 최대 직렬 시뮬 이득(결정성 재기준선 필요).
+4. ~~[빌드 실측 후] 네이티브 위치 권위 — 틱마다 10k 트랜스폼 왕복(Restore+Mirror) 제거 = 남은 최대 직렬 시뮬 이득(결정성 재기준선 필요).~~ **[완료 — P3]** `ff27407`(S3: 팔로워/뉴트럴이 `buffer.Pos` 직접 저작) → `d124de3`(S4a: `Restore`를 `if (!sdfActive || IsLeader[i])`로 게이팅, 프리패스·wander raycast를 `PrevPos`로) → `b564fb6`(S4b1: 네이티브 `_visualYaw`) → `20cab38`(S4b2: GPU 경로 팔로워/뉴트럴 transform 쓰기 중단). SDF 경로에서 `MirrorPositionsToBuffer`는 이제 **live 리더(≤4)만** 미러링한다(`CrowdRoot.cs:1741`). 재기준선 불필요했다 — 전 단계가 오라클 `4F79282E…`에 바이트 동일(메커니즘만 변경, 시뮬 결과 불변).
 5. Scope B: §4 밀스톤 Burst 골든 baseline(확장 스냅샷 필드, 수치 허용오차, 플레이어 AOT 빌드).
 6. 수동 확인: DevHudRoot 버튼/FPS 동작, 청크 스폰 후 튐 없음, GPU 경로 스폰중 pop-in 허용 여부(점진표시로 수정 가능).
 7. 하네스 정리(Shutdown 후 DestroyImmediate — 경미).
@@ -79,7 +132,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - 오케스트레이션: `Assets/@Project/Crowd/Scripts/` — `CrowdRoot`(SimTick), `CrowdModel`, `RivalAiDriver`, `CrowdSimProfiler`.
 - 하네스(Editor): `Assets/@Project/Game/Editor/` — `CrowdProfileHarness`(성능), `CrowdOracleHarness`(결정성 오라클).
 - 루프: `Assets/@Project/Game/Scripts/GameplayRoot.cs`(FixedStep 0.02s=50Hz, 프레임당 최대 4스텝).
-- 브랜치: `feat/crowd-sdf-perf`. 감사 추적: 설계 라운드 산출물(`codex_burst_*.txt`)은 워킹트리에 없다 — `git show fb14a41:<파일>`로 히스토리에서 복구(§8 참조).
+- 브랜치: **`feat/crowd-sim-10k`**(이전 `feat/crowd-sdf-perf`에서 이어짐 — 그 브랜치도 여전히 존재하나 현재 작업 대상이 아니다). 감사 추적: 설계 라운드 산출물(`codex_burst_*.txt`)은 워킹트리에 없다 — `git show fb14a41:<파일>`로 히스토리에서 복구(§8 참조).
 
 ## 3. 운영 모델 (CLAUDE.md 준수 — 반드시 지킬 것)
 - **메인 에이전트 = 매니저만**. 조사/파일읽기/분석/구현/편집/테스트/diff 리뷰는 **전부 서브에이전트에 위임**. 메인은 목표·범위·성공기준 정의, 위임, 판정, 최종보고만.
