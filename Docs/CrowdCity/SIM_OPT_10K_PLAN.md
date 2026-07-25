@@ -47,30 +47,52 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 
 주의: 이 프로파일은 **headless(SMR 경로, gpuActive=false)**라 GPU 빌드가 건너뛰는 transform 위치 쓰기까지 포함 → GPU 빌드의 presentation은 더 쌈. 상대 순위(이동 ≫ 리졸버)는 유효.
 
+> **GPU 경로 실측 후(§2):** 순위는 유효하지만 **격차가 크게 좁혀졌다** — 10k에서 이동(`FollowerSteer`+`NeutralMove`) 84% → **64.5%**, 리졸버(`Recruit`+`Combat`) 15% → **32.3%**. 위 표의 백분율은 **SMR 경로 값**이므로 인용할 때 모드를 함께 적을 것.
+
 ---
 
-## 2. 측정 완료 — 직렬 vs 잡 분리 → **T1b 확정** (2026-07-26, 측정 트리 `fdf909d` · 증거 커밋 `ff60d39`)
+## 2. 측정 완료 — 직렬 vs 잡 분리 → **10k 판정 불가 / 5k T1b** (2026-07-26, 측정 트리 `fdf909d`·`f9c1cdc` · 증거 커밋 `ff60d39`·`e0f81e4`·본 커밋)
 
-> ⚠️ **이 절의 "T1b 확정" 판정은 현재 재결정 중이다** — 아래 본문은 측정 당시 기록 그대로다. 이 측정이 헤드리스(SMR 경로)라 `*Present`가 T1a로 제거된 쓰기를 포함하는 문제이며, 선행 조건과 유보 사항은 [§4 항목 3](#4-권장-순서)과 [`WORK_STATE.md`](../WORK_STATE.md) "운영 계약" 절에 있다. **재측정 전까지 이 절의 판정을 근거로 T1b에 착수하지 말 것.**
+**결론부터.** 이 질문은 **닫혔다.** 두 번 쟀고 답이 스케일에 따라 갈린다.
 
-**정정.** 이 절의 초판이 제안했던 `FollowerSteer − CCMove − .Complete대기` 산식은 **성립하지 않는다.** `Seg.CCMove`는 다섯 지점(리더 `ApplyHorizontalMove`, 팔로워 SDF 이동 잡 대기, 팔로워 CC 폴백, 중립 SDF 이동 잡 대기, 중립 CC 폴백)을 합산하는 단일 버킷이라 10k의 `CCMove` 2.78ms에는 팔로워·중립 대기가 섞여 있고, `*JobWait`은 `CCMove`와 inclusive 중첩이라 이중 차감이 된다. 대신 `1485848`에서 분기별 Seg 7개(`Follower/Neutral × Prepass/JobWait/Present` + `FollowerGridSnapshot`)를 추가해 직접 계측했다.
+- **5k: T1b가 이긴다** — GPU 경로에서도 직렬 1.74 vs 잡 대기 0.54, 차이가 런 간 노이즈 대역의 3.17배.
+- **10k: 판정 불가(inconclusive)** — GPU 경로에서 직렬 3.15 vs 잡 대기 3.01, 두 합이 사실상 **동률**이다(차이/spread = 0.12배). 런을 6개로 늘려도 유의하지 않다.
+- **"그러면 T2를 해라"도 따라 나오지 않는다.** 판정 불가는 "T2가 이겼다"가 아니라 "이 지표로는 우열을 못 가린다"다. 오히려 이 데이터의 변동은 병렬 구간에 편중돼 **T2를 크게 보이게 하는 방향**인데도 T2가 앞서지 못했다.
 
-**측정:** headless SDF ON, 5000/10000, 동일 인자 3런. 환경·verbatim 커맨드라인·부하 통제·판정 규칙·판독 주의는 [`Perf/MANIFEST.md`](Perf/MANIFEST.md), 원시 출력은 [`Perf/simopt10k_step1_r{1,2,3}.txt`](Perf/).
+**왜 판정이 바뀌었나.** 첫 측정(`ff60d39`)은 **헤드리스 = SMR 경로**였고, 그래서 `*Present` 수치가 **T1a(`fdf909d`)가 제거한 바로 그 `transform.rotation`·`Animator.speed` 쓰기를 포함**하고 있었다. 그 데이터 위에서 "T1b" 판정은 **옳았다** — 계산도, 규칙도, 적용도 틀리지 않았다. 다만 그 판정이 근거로 삼은 비용의 대부분이 **T1a가 이미 지운 것**이었다. T1a가 들어간 GPU 경로에서 같은 세그먼트를 다시 재면 그 몫이 빠지고, 남은 직렬과 잡 대기가 동률이 된다. 즉 **첫 판정을 뒤집은 것이 아니라, 그 판정이 서 있던 바닥이 T1a로 사라졌다.**
+
+**정정(유효).** 이 절의 초판이 제안했던 `FollowerSteer − CCMove − .Complete대기` 산식은 **성립하지 않는다.** `Seg.CCMove`는 다섯 지점(리더 `ApplyHorizontalMove`, 팔로워 SDF 이동 잡 대기, 팔로워 CC 폴백, 중립 SDF 이동 잡 대기, 중립 CC 폴백)을 합산하는 단일 버킷이라 10k의 `CCMove`에는 팔로워·중립 대기가 섞여 있고, `*JobWait`은 `CCMove`와 inclusive 중첩이라 이중 차감이 된다. 대신 `1485848`에서 분기별 Seg 7개(`Follower/Neutral × Prepass/JobWait/Present` + `FollowerGridSnapshot`)를 추가해 직접 계측했다.
+
+**판정 규칙(두 측정 공통, 측정 전 고정).**
 
 - **T1b 대상(직렬)** = `FollowerPrepass`+`FollowerGridSnapshot`+`FollowerPresent`+`NeutralPrepass`+`NeutralPresent`
 - **T2 대상(잡 벽시계)** = `FollowerJobWait`+`NeutralJobWait`
 - **spread** = 두 합 각각의 (max−min)을 더한 노이즈 대역. 차이가 spread를 못 넘으면 판정 불가.
 
-| 스케일 | T1b 대상 | T2 대상 | Total | 차이 / spread |
-|---|---|---|---|---|
-| 5000 | **4.39 (68.3%)** | 0.52 (8.1%) | 6.43 | 3.87 / 0.079 = **49배** |
-| 10000 | **14.47 (70.4%)** | 2.78 (13.5%) | 20.56 | 11.69 / 0.197 = **59배** |
+**측정 2건.** 둘 다 `CrowdProfileHarness`, SDF ON, seed=12345, 5000/10000, 동일 인자 3런. 차이는 `-nographics` 하나뿐이다. 환경·verbatim 커맨드라인·GPU 활성 증명·부하 통제·판독 주의는 [`Perf/MANIFEST.md`](Perf/MANIFEST.md) §1~§6(SMR)·§8(GPU).
 
-**판정: T1b.** 차이가 런 간 노이즈 대역의 49~59배 → 결정적. 10k 직렬 내역은 `FollowerPresent` 8.87(43.1%) > `NeutralPresent` 4.71(22.9%) ≫ `NeutralPrepass` 0.70 > `FollowerPrepass` 0.18 > `FollowerGridSnapshot` 0.02 — **두 Present 루프만으로 SimTick의 66%**다. 반면 **T2의 상한**은 두 잡 대기를 0으로 만들어도 10k 13.5% / 5k 8.1%다. (5k→10k Total 3.20배 = 에이전트 2배 대비 초선형이고, 그 증가분도 팔로워 계열 6~10배가 끌고 간다.)
+| 스케일 | 모드 | T1b 대상(직렬) | T2 대상(잡 대기) | Total | 차이 / spread | 판정 |
+|---|---|---|---|---|---|---|
+| 5000 | SMR (헤드리스) | 4.39 (68.3%) | 0.52 (8.1%) | 6.43 | 3.87 / 0.079 = **49배** | T1b |
+| 10000 | SMR (헤드리스) | 14.47 (70.4%) | 2.78 (13.5%) | 20.56 | 11.69 / 0.197 = **59배** | T1b |
+| 5000 | **GPU** | **1.74 (45.4%)** | 0.54 (14.2%) | 3.84 | 1.197 / 0.377 = **3.17배** | **T1b** |
+| 10000 | **GPU** | 3.15 (32.9%) | 3.01 (31.5%) | **9.56** | 0.137 / 1.129 = **0.12배** | **판정 불가** |
 
-**상한 주의 + 손익분기.** 헤드리스는 SMR 경로라 `*Present`가 GPU 빌드에서는 게이팅되는 `transform.rotation`·`Animator.speed` 쓰기(T1a)까지 포함한다 → **`*Present`는 상한**이다. 그래도 판정은 뒤집히지 않는다: 5k는 `*Present`가 공짜여도 prepass만으로 0.70 > T2 0.52고, 10k는 `*Present` 비용의 **86.1% 초과**가 SMR 전용이어야 뒤집힌다. 두 루프 모두 `Quaternion.Euler(0f, X, 0f).eulerAngles.y`(`CrowdRoot.cs:1430`, `:1440`, `:1631`)를 게이트 **밖에서 무조건** 실행하고 이는 에이전트·틱당 managed→native→managed 왕복이라 GPU 빌드에서도 남으므로, 86.1%는 비현실적이다.
+원시 출력: [`Perf/simopt10k_step1_r{1,2,3}.txt`](Perf/) (SMR) · [`Perf/simopt10k_gpupath_r{1,2,3}.txt`](Perf/) (GPU). **후자의 파일 헤더는 자기를 `edit-mode headless 측정`이라고 잘못 소개한다** — 하네스가 하드코딩한 문구다(MANIFEST §8 상단 경고).
 
-**측정 공백(2건).** ①하네스가 팔로워/중립 모집단 수를 출력하지 않아 위 스케일링 비대칭의 원인(모집단 구성 이동)은 추론이며 미측정. ②`RenderInterpolate`의 per-agent transform 쓰기(`CrowdRoot.cs:747`, `:755`)는 하네스가 호출하지 않아 이 측정 범위 밖이다.
+**T1a가 지운 몫(10k 중앙값).** `*Present` 합 13.58 → **2.22 ms(−83.6%)**, Total 20.56 → **9.56 ms(−53.5%)**. 반면 `FollowerJobWait`·`CCMove`는 GPU 경로에서 오히려 8% 높다 — 게이트가 두 Present 루프에만 들어갔다는 사실과 정확히 일치한다. 계획이 측정 전에 못 박아 둔 손익분기(10k에서 `*Present` 비용의 **86.1% 초과**가 SMR 전용이어야 판정이 뒤집힌다)와 대조하면 실측 감소는 **83.6%** — 손익분기보다 2.5%p 낮아 "뒤집히지는 않지만 동률"이라는 결과와 정합한다. 당시 "86.1%는 비현실적"이라고 본 근거(`Quaternion.Euler(...).eulerAngles.y`가 게이트 밖에 남는다 — `CrowdRoot.cs:1430`, `:1440`, `:1631`)는 여전히 옳고, 그 잔여가 GPU 경로 `*Present` 2.22 ms의 일부다.
+
+### 2.1 전제가 바뀌었다 — 다음 타깃은 10k 세그먼트 점유율에서 나오지 않는다
+
+**이 계획서 전체가 "10k가 문제다"라는 전제로 쓰였다.** 그 전제는 이제 성립하지 않는다.
+
+T1a **하나만으로** GPU 경로 10k가 **9.56 ms/tick**(mean, edit-mode `CrowdProfileHarness`)이 됐다. 50Hz 고정 스텝(`GameplayRoot` `FixedStep = 0.02`)의 틱 주기가 20 ms이므로 이는 주기의 **약 48%**이고, p95(11.16 ms)로도 **약 56%**다. — 이 20 ms는 **루프 케이던스라는 구조적 사실**이며 성능 목표치나 수용 임계가 아니다(§7 "성능 목표 수치 지어내기 금지"). 그러나 "10k 틱이 주기를 넘긴다"는 이 계획의 출발점은 데스크톱 에디터 기준으로 **더 이상 관측되지 않는다**(SMR 경로 20.56 ms는 넘겼다).
+
+**따라서 다음 타깃은 20k~50k에서 무엇이 먼저 깨지는가로부터 다시 도출해야 한다.** 10k 세그먼트 점유율로 고르면 안 된다 — 10k에서 두 후보가 동률이고, 동률인 두 값의 순위는 노이즈가 정한다.
+
+**다음 타깃은 여기서 고르지 않는다. 열려 있다.** 필요한 것은 더 정밀한 10k 측정이 아니라 **다른 판별자**다. 후보 축(어느 것도 아직 측정되지 않았다): 스케일 지수(어느 세그먼트가 초선형인가 — §1의 `Combat` `candidate_visits` 0.89M→76.8M, `FollowerPresent` 10.04배가 그 축의 단서다), 워커 코어 수가 적은 실기기에서의 병렬 구간 거동, §5의 렌더 티어 상한. 이 축들은 §3의 Tier 순서와 다른 답을 낼 수 있다.
+
+**측정 공백(3건).** ①하네스가 팔로워/중립 모집단 수를 출력하지 않아 스케일링 비대칭의 원인(모집단 구성 이동)은 추론이며 미측정. ②`RenderInterpolate`의 per-agent transform 쓰기(`CrowdRoot.cs:747`, `:755`)는 하네스가 호출하지 않아 두 측정 모두의 범위 밖이다. ③GPU 경로 측정도 **edit mode**라 지연 `Destroy`가 거부돼 rig가 비활성 상태로 살아 있다 — 즉 재어진 것은 T1a의 6개 게이트뿐이고, 출하 빌드가 "본 계층 부재"로 추가로 얻는 절감은 미측정이다. 그래서 위 −83.6%는 출하 빌드 절감의 **상한**이다(MANIFEST §8.8-a).
 
 ---
 
@@ -116,8 +138,12 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 ## 4. 권장 순서
 1. **[완료] §2 분리-측정** — `1485848`에서 Seg 7개 추가 → `ff60d39`에서 3런 측정 기록(측정 트리는 `fdf909d`) → **T1b 확정**(§2).
 2. **[완료] T1a** (죽은 rotation 쓰기 제거, `fdf909d`). **GPU 경로 실측 완료(`e0f81e4`)** — play-mode `CrowdPerfHarnessP95`, 10k, A/B/B/A, `gpuActive=T`: SimTick 틱당 **−12.83ms(−55.5%)**, 동일-arm spread의 8.0배 → 개선 확정. 단 그 CSV 열은 `RenderInterpolate` 1회를 포함하므로 **순수 SimTick 이득은 [−20.76, −12.83]ms/틱 범위로만 묶인다**(헤드라인은 보수적 끝을 쓴다). 증거·판독 주의: [`Perf/MANIFEST.md`](Perf/MANIFEST.md) §7.
-3. **[잠정 다음 — 판정 재결정 중, 재측정 대기] T1b** (팔로워/뉴트럴 직렬 prepass + presentation 잡화). 잠정 최우선 타깃은 두 `*Present` 루프(10k SimTick의 66%). **단 §2의 "T1b 확정"은 더 이상 확정이 아니다** — §2는 헤드리스(SMR 경로) 측정이라 `*Present`가 T1a(`fdf909d`)로 제거된 쓰기를 포함하고, T1a 실측치가 §2에 기록된 손익분기(`Present` 비용의 86.1%)를 넘는다. **착수 전 선행 조건: `CrowdProfileHarness`를 `-nographics` 없이 돌려 `_gpuRenderActive == true` 상태로 세그먼트를 재측정할 것.** 근거·수치·유보 조건(서로 다른 하네스/모드 비교라 반증이 아니라 해소할 긴장이라는 점)은 [`WORK_STATE.md`](../WORK_STATE.md) "운영 계약" 절과 [`CHANGELOG.md`](CHANGELOG.md) §2.2에 있다 — 여기서 반복하지 않는다.
-4. 그다음 **T3a → T3b** (50k 목표 시). **T2는 후순위** — §2 판정상 상한이 10k 13.5%다.
+3. **[완료] GPU 경로 재측정** — `CrowdProfileHarness`를 `-nographics` 없이 3런(측정 트리 `f9c1cdc`). 결과: **10k 판정 불가 / 5k T1b**(§2). 증거: [`Perf/MANIFEST.md`](Perf/MANIFEST.md) §8.
+4. **[열려 있음 — 다음 타깃 미확정]** §2.1이 정본이다. 정리하면:
+   - **T1b**(팔로워/뉴트럴 직렬 prepass + presentation 잡화)는 **5k에서는 여전히 유효한 후보**(3.17배)이지만, **10k에서는 "직렬 점유율이 크다"가 더 이상 착수 근거가 못 된다** — T2와 동률이다. GPU 경로 10k 직렬 3.15 ms 중 두 `*Present`가 2.22 ms로 여전히 최대 항목이라는 사실 자체는 유지된다(SimTick의 23.2%).
+   - **T2**(분리 이웃 스캔 밀도 캡)도 승자가 아니다. 단 **"상한이 10k 13.5%"라는 이전 후순위 근거는 무효다** — 그건 SMR 경로 수치이고, GPU 경로에서는 잡 대기가 Total의 **31.5%**다. T2의 상한은 이전 서술보다 **두 배 이상 크다.** 그래도 §2 규칙으로는 T1b를 이기지 못했고, [§3의 revert 이력](#tier-2--스티어링-잡-wall-clock-축소)(밀집 클러스터 지터)이 그대로 남아 있다.
+   - **T3a → T3b**는 50k를 목표로 할 때의 경로이며 이번 측정으로 순위가 바뀌지 않았다(§1의 `Combat` 초선형 근거는 10k 세그먼트 점유율이 아니라 스케일 지수에서 온다).
+   - **착수 전 필요한 것은 더 정밀한 10k 측정이 아니라 다른 판별자다**(§2.1). 세그먼트 점유율로 고르지 말 것.
 5. 각 단계: 계획 교차검증 → 구현/검증 분리 → 오라클 byte-identical + shot → 커밋.
 
 ## 5. 모바일 최약기기 1만 "하한" 조건 (Codex R5 판단 — 외삽, 미측정)
