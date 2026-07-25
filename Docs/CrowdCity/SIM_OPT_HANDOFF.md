@@ -85,7 +85,7 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - **메인 에이전트 = 매니저만**. 조사/파일읽기/분석/구현/편집/테스트/diff 리뷰는 **전부 서브에이전트에 위임**. 메인은 목표·범위·성공기준 정의, 위임, 판정, 최종보고만.
 - **한 파일 = 한 오너**. 두 서브에이전트가 같은 파일 동시 편집 금지. 비자명 작업은 구현자와 검증자를 다른 서브에이전트로.
 - **교차검증**: 설계·검증은 **Claude 서브에이전트 + Codex**로 독립 수행 후 **합의점 도달까지** 반복(사용자 표준 방식).
-  - Claude 서브에이전트: opus 4.8, xhigh, "유니티 시니어 게임 프로그래머" 관점.
+  - Claude 서브에이전트: Opus 5, xhigh, "유니티 시니어 게임 프로그래머" 관점.
   - Codex(읽기전용) 호출 템플릿:
     ```
     codex exec -m gpt-5.6-sol -c model_reasoning_effort=ultra -c service_tier=fast --skip-git-repo-check --sandbox read-only "<PROMPT>" < /dev/null

@@ -30,7 +30,7 @@ When a decision would otherwise require the user but the user is unavailable (e.
 Agent settings:
 
 - **Codex** — model `gpt-5.6-sol`, effort `ultra`, speed `fast` (invoke: `codex exec -m gpt-5.6-sol -c model_reasoning_effort=ultra -c service_tier=fast … < /dev/null`; requires codex-cli ≥ 0.144.5). **Always redirect stdin `< /dev/null`** — otherwise `codex exec` blocks waiting on stdin and emits no output until the command times out. Run it **synchronously in the foreground** (a single blocking call); never background it or wrap it in a poll/Monitor loop (that reintroduces the stdin hang and stalls the agent).
-- **Claude** — model `Opus 4.8`, effort `xhigh`.
+- **Claude** — model `Opus 5`, effort `xhigh`.
 
 ## Working Language
 
