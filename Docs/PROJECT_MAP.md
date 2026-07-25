@@ -206,8 +206,10 @@ The three Burst jobs are in §6.
 | `ClearAll` / auto-clear at play-session start | `:119` / `:127-128` |
 | per-subscriber exception isolation (**Editor only**) | `:189-207` (Editor-only null-callback log in `Subscribe` `:166`) |
 | the 2 event payloads | `Crowd/Contracts/Events/CrowdEvents.cs:6`, `:34` |
-| publish sites (the only ones) | `CrowdRoot.cs:1953`, `:1964`, `:1976` (all inside `PublishTickEvents` `:1945`) |
-| subscribers | `GameSession.cs:54` · `HudRoot.cs:119` · `CameraRoot.cs:125` |
+| publisher acquisition (the only one) | `CrowdRoot.cs:333-334` |
+| publish sites (the only ones) | `CrowdRoot.cs:1953`, `:1964`, `:1976` (all inside `PublishTickEvents` `:1945`; called from `FinalizeSpawn` `:640` and `SimTick` ⑩ `:717`) |
+| subscribers (runtime, all boundary objects) | `GameSession.cs:61-62` (unsub `:157-158`) · `HudRoot.cs:168-169` (unsub `:253`, `:259`) · `CameraRoot.cs:184-185` (unsub `:214-215`) |
+| subscriber (editor harness) | `Game/Editor/CrowdOracleHarness.cs:231-232` (unsub `:358-359`) |
 | read-only runtime interface | `Game/Contracts/Runtime/IGameSessionReadOnly.cs:29` |
 | QueryBus track | unused (`EventManager.cs:100`, `:109` — definitions only) |
 

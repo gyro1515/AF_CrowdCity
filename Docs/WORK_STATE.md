@@ -53,6 +53,8 @@
 | 정지 시 yaw 유지 읽기 2곳 유지 | `CrowdRoot.cs:1439`, `:1535` | `float headingDeg = _visualYaw[index];` |
 | `*JobWait`은 `CCMove`의 **inclusive 중첩** | `CrowdRoot.cs:1390`~`:1394`, `:1608`~`:1612` | 합산 금지, 이중 차감 금지 |
 | 렌더 경로 게이트는 **픽셀 허용오차**, PNG MD5 아님 | 아래 게이트 절 | 스크린샷 하네스 출력이 바이트 재현되지 않는다 |
+| EventBus는 **이벤트 타입 2개**(`CrowdCountChangedEvent`, `CrowdEliminatedEvent`)뿐 | 페이로드 `Crowd/Contracts/Events/CrowdEvents.cs:6`, `:34` | static `EventManager` 사용의 정식 예외가 "정확히 2개 · 경계 객체만"을 영향 범위로 걸고 승인됐다. 타입을 늘리면 그 예외 근거가 무효가 된다(근거 서술은 `CrowdCity/CROWD_GUIDE.md` §11) |
+| 발행자는 **`CrowdRoot` 하나**, 구독자는 **경계 객체만** | 발행 `CrowdRoot.cs:333-334` 취득 → `PublishTickEvents` 내부에서만 발행 · 구독 `GameSession.cs:61-62`, `HudRoot.cs:168-169`, `CameraRoot.cs:184-185`(+ 에디터 하네스 `CrowdOracleHarness.cs:231-232`) | 리프(`Human`·라벨·마커)를 버스에 붙이면 CLAUDE.md §13 금지 패턴. 모든 `Subscribe`는 같은 lifecycle에 `Unsubscribe` 짝이 있어야 한다 |
 
 ### 검증 게이트
 
@@ -111,6 +113,22 @@
 5. Scope B: §4 밀스톤 Burst 골든 baseline(확장 스냅샷 필드, 수치 허용오차, 플레이어 AOT 빌드).
 6. 수동 확인: DevHudRoot 버튼/FPS 동작, 청크 스폰 후 튐 없음, GPU 경로 스폰중 pop-in 허용 여부(점진표시로 수정 가능).
 7. 하네스 정리(Shutdown 후 DestroyImmediate — 경미).
+
+### 의도적으로 보류한 MINOR (MVP 교차검증에서 제기 → 수용·보류, `c9e61a4`에서 코드 재확인)
+
+아래는 MVP 시절 CODEX/Claude 리뷰가 제기했으나 **의도적으로 보류**한 항목이며, 전부 **현재 코드에 그대로 남아 있다**. 보류 사유가 아직 유효하므로 "미완 작업"이 아니라 "받아들인 상태"로 읽는다. 필요해지면 후속 태스크로 처리한다.
+
+| 항목 | 현재 위치(재확인) | 보류 사유 |
+|---|---|---|
+| `CrowdModel` 병렬 리스트 캡슐화(read-only view 미제공) | `CrowdModel.cs:56`, `:59` — `public List<Human> Followers` / `public List<int> FollowerAgentIndices`가 여전히 가변 `List<>` | 유일 mutator가 소유자(`CrowdRoot`), 외부 참조 없음. 이론적 위험 |
+| `CombatResolver` 팀ID / `MatchRules` 배열 길이 방어 검증 | `CombatResolver.cs:258-262`(하한만 검사) · `MatchRules.cs:54-56`(길이 정합성 미검사) | 내부 호출자만 존재 — **도달 불가 시나리오**(CLAUDE.md "No error handling for impossible scenarios") |
+| `SpatialGrid` 극단 반경 / Ground 최소 크기 가드 | `SpatialGrid.cs:190`(`radius < 0f`만 early-out, 상한 clamp 없음) · `CrowdRoot.cs:989-992`(2m shrink 후 영역 반전 미검사) | 고정 config·고정 도시라 실사용 도달 불가 |
+| 에디터 위생 3건 | collider 정리 비재귀 `GameSceneSetup.cs:1012-1026` · Validator 카메라 동일성 미검사 `GameSceneValidator.cs:123` · 프리팹 자산에 `activeSelf` 검사 `GameSceneValidator.cs:417` | 에디터 전용 도구 |
+| `RivalAiDriver` 경계 인지 없음 | `RivalAiDriver.cs` 전체에 region/맵 경계 항이 없다(도주/추격/중립 밀도 + 벽 raycast만) | 중립 밀도 벡터로 자기보정, 플레이상 문제 미관측 |
+| `HudRoot` per-event `ToString()` 할당 | `HudRoot.cs:780`(`SetCrowdCount`) ← 버스 핸들러 `:339` | 프레젠테이션 경로, 양측 MVP 허용 |
+| `EventManager` `GetInvocationList()` 에디터 경로 할당 | `EventManager.cs:196` (`#if UNITY_EDITOR` 분기) | **off-limits 정본 인프라, 편집 금지** |
+
+**해소된 것 1건:** "불필요한 prefab 재기록"은 닫혔다 — 모든 저작 경로가 load-or-create / 변경 시에만 저장 가드를 갖는다(`GameSceneSetup.cs:1141-1144`, `:1438-1446`, `:1486-1491`, `:1567-1572`, `:1664-1669`).
 
 ### 워크플로우
 - 반복: 최적화 → neutralCount 상향 → 반복. 목표 = 에디터 안정 60fps. ConvertPerSecond=100은 의도된 튜닝.
@@ -242,10 +260,126 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 - 새 asmdef·새 Bus·새 전역 registry 만들지 말 것(CLAUDE.md §11, §13).
 
 ## 8. 파일 인덱스
-- 이 문서: `Docs/WORK_STATE.md`
+- 이 문서: `Docs/WORK_STATE.md`(설계 사양 본문은 §9)
 - 구조 지도("어디에 있는가" — 영문, 포인터 전용): `Docs/PROJECT_MAP.md`
 - CrowdCity 사람용 가이드("왜 이렇게 만들었는가" — 한국어, 사람 전용): `Docs/CrowdCity/CROWD_GUIDE.md`
 - 상세 설계: `Docs/CrowdCity/SIM_OPT_PLAN.md`
 - 규칙: `CLAUDE.md`(root)
 - crowd 계약: `Docs/CrowdCity/{DESIGN,INTERFACES,STATUS}.md`
 - 설계 라운드 산출물(감사): `codex_burst_prompt{,2..7}.txt` / `codex_burst_out{,2..7}.txt` + `codex_{ccmove,design,explain}_*.txt` — **워킹트리에서 제거됨**(결론은 이 문서·`SIM_OPT_PLAN.md`·`SIM_OPT_10K_PLAN.md` §5로 이관 완료). 원본은 히스토리에 남아 `git show fb14a41:<파일>`로 언제든 복구.
+
+---
+
+## 9. 미착수 설계 사양 (정본)
+
+> **이 절이 아직 구현되지 않은 설계 사양의 정본이다.** 각 항목은 착수 시점에 코드와 대조하고 시작한다 — 사양이 코드보다 뒤처졌으면 사양이 아니라 코드가 옳다(§P0 게이트 2 "정본 우선순위").
+> 각 항목 머리에 **현재 트리 상태**를 적어 뒀다. "미구현"은 `c9e61a4` 시점에 확인된 값이다.
+
+### 9.1 밀도 캡 — full storage + bounded lane query (9단계 사양)
+
+**현재 트리 상태: 부분 구현.** `SpatialGrid.QueryCircleCapped`(`SpatialGrid.cs:274`)가 존재하지만 **단순 방문수 절단**만 한다 — budget번째 매칭 후보까지 처리하고 그다음을 방문하지 않는다. 아래 사양의 lane 분리·라운드로빈·해시 회전·max-heap은 없다. 출하 `GameConfig.asset`의 `SeparationVisitBudget`은 **0(비활성)** 이다(`79db659`가 0→48, `4adb502`가 조밀 군집 떨림 때문에 48→0으로 되돌림).
+
+**저장 상한은 두지 않는다.** 셀에 담기는 agent를 자르면 exact leader/AI 질의와 오라클이 깨지고 **영구 누락**이 생긴다. 자르는 것은 **저장이 아니라 질의 방문량**이다.
+
+각 bounded query는 다음 9단계를 순서대로 밟는다.
+
+1. broad radius의 cell offset stencil을 **초기화 시** 계산해 둔다.
+2. cell AABB 최소거리 + cell key로 **canonical cell 순서**를 정한다.
+3. 필요한 team/neutral **lane만** 방문한다(`0=neutral`, `1+teamId=team`).
+4. lane별 **독립 visit budget `B`**.
+5. active cell range를 **round-robin**으로 돈다(한 dense cell이 예산을 독점하지 못하게).
+6. cell range 시작점을 `(queryId, cell, lane, tick)` **해시로 회전**시킨다(기아 완화).
+7. self/team/radius 필터 **이전에** budget을 소비한다(strict bound — 필터 후 소비하면 상한이 성립하지 않는다).
+8. radius를 통과한 것만 고정 크기 **max-heap `(distSq, AgentId)`** 에 적재한다.
+9. canonical key로 정렬해 반환한다.
+
+**의미 훼손이 작다고 본 근거**(캡이 결과를 바꾸는 정도의 상한):
+- recruit는 "최근접 1명"만 쓰므로, k가 최근접을 포함하면 사실상 무손실.
+- combat의 touchCount는 `clamp01(touch / PairNormalizer)`로 **포화**한다 → 고밀도에서 대부분 1.0이라 캡 영향이 작다.
+- leader는 `ownLocal <= 1`(홀로인가)이 핵심이라 소수 카운트로 정확하고, enemy 최다팀 tie는 낮은 팀 id.
+
+**게이트:** `CandidatesVisited ≤ QueryCount × LaneCount × B` counter 증명 + dense에서 work/N이 밀도에 무증가 + cap 미발동 fixture는 legacy 바이트 동일 + **cap 발동 fixture는 바이트 동일 불요 → 거동 A/B("no perceptible difference": recruit 지연/claimant/strength deficit/conversion·elimination/separation 편차) 승인 후에만 오라클 갱신.** 성공조건은 **초선형 work term 제거**(상수배 아님). 밀도 캡은 **게임플레이 변경**이므로 순수 성능 리팩터와 **분리 커밋**한다.
+
+### 9.2 canonical order 표 (결정성 계약)
+
+| 대상 | 순서 |
+|---|---|
+| agent | `AgentId` |
+| grid | `cellKey` → `lane` → `AgentId` |
+| query tie | `distSq` → `AgentId` |
+| recruit | neutral `AgentId` 오름차순 |
+| combat edge | `(min, max AgentId)`로 canonicalize → sort → unique |
+| team-pair | `(winner, loser TeamId)` |
+| victim | `(assignedDistSq, victimAgentId)` |
+| leader | leader / team Id 순 |
+| commit · presentation sync · event | 위와 **같은 순서** |
+
+- float 합은 stable `AgentId`/team-pair 순 **직렬 reduction**으로 만든다. **atomic float 금지, worker 완료 순서 reduction 금지.**
+- `[BurstCompile(FloatMode = FloatMode.Strict, FloatPrecision = FloatPrecision.Standard)]`, **FastMath 금지**. cross-ISA 계약이 없어(싱글플레이) `Deterministic` 강제는 하지 않는다.
+- worker/batch permutation 테스트: worker ∈ {0, 1, default, max}, batch ∈ {1, 16, 64, 127, >N}, 반복·순서 변경. 각 tick `Complete` 후 canonical 스냅샷 바이트 비교. `JobWorkerCount`는 `try/finally`로 원복.
+- **현재 트리 상태:** victim 순서는 이미 이 계약대로 구현돼 있다(`CombatResolver.SortVictimsByDistanceThenId` — `(assignedDistSq, AgentId)` 삽입정렬). 사양은 유지하고 **구현 방식만** §9.5의 T3b에서 교체한다.
+
+### 9.3 `DeterministicRng` (uint4) 사양 — 미구현 (M-sim-2b)
+
+**현재 트리 상태: 미구현.** `git grep DeterministicRng -- Assets/` 무결과. 현행은 `CrowdRoot._rng`와 `RivalAiDriver`의 `System.Random` 두 스트림이다.
+
+- 공유 `System.Random`을 **잡에 넘기지 않는다.**
+- `DeterministicRng` = `uint4` xoshiro 계열 상태 + **고정 bit→float 변환**(상위 24bit × 2⁻²⁴).
+- 초기화 = `mix(globalSeed, stableAgentId | teamId, streamTag)`. 0 상태는 고정 non-zero로 치환.
+- 스트림 분리: spawn = 직렬 `SpawnRng`, wander = per-agent, rival/team tie-break = per-team.
+- 밀도 캡(§9.1 ⑥)의 rotating cursor는 **RNG를 소모하지 않는다** — `(queryAgentId, cell, lane, tick)` 순수 해시로 만든다.
+- RNG 교체는 기존 시드 재현을 깬다 → **의도된 재기준선**이며, 오라클 md5를 새로 잡아야 한다.
+
+### 9.4 T2(분리 이웃 스캔 밀도 캡) 재도입 시 필수 정책 수정
+
+되돌린 이력이 있다(§9.1의 `4adb502`). 재도입하려면 아래를 함께 고쳐야 한다.
+
+- **판정 기준을 버킷 해시 충돌 점유수가 아니라 정확한 셀 점유수로 바꾼다.** 해시 충돌이 occupancy를 부풀려 오탐을 만들고, 그 오탐이 조밀 클러스터의 줄무늬·지터로 나타났다.
+- `T`/gain/tangential 튜닝을 동반한다.
+- 결정성: `(distSq, AgentId)` 전순서 top-k, 안티-스타베이션은 `(queryAgentId, cell, lane, tick)` 순수 해시(RNG 미소모).
+- 리스크 중(시각·거동 변화) → shot 하네스 + 육안 검증 필수. 렌더 게이트는 픽셀 허용오차(위 게이트 절).
+
+### 9.5 T3a / T3b — 리졸버 잡화 사양 (미구현)
+
+**T3a. 그리드 카운팅-소트 전환.** 현재는 full-rebuild LIFO 링크드리스트 해시(managed)다. 전환 형태:
+① IJobParallelFor로 cell/lane key 산출 → ② **단일 Burst IJob**으로 count → prefix → scatter(canonical) → ③ 전향 후 O(N) re-lane. 안정 `cellKey → lane → AgentId` 배치.
+- **`NativeParallelMultiHashMap` 금지.** 열거 순서가 비결정이라 §9.2 canonical order를 깬다. (현재 트리에 사용처 없음 — `c9e61a4`에서 확인.)
+- 자체 이득은 1% 수준이지만 **리졸버·분리 병렬 쿼리의 전제**다.
+- 게이트: 오라클 바이트 동일(쿼리 소비자는 이미 `(distSq, AgentId)` 순서에 무관).
+
+**T3b. Recruit/Combat 잡화.** 병렬 후보 발견(per-agent) + **직렬 Burst canonical reduction**(팀-쌍, victim 선택, 리더 소거, commit).
+- **victim O(v²) 삽입정렬 제거**: instant 경로 = 결정적 radix 또는 order-free, rate-limited = bounded max-heap prefix. **현재 트리 상태: 미착수** — `CombatResolver.SortVictimsByDistanceThenId`가 여전히 삽입정렬이고, 계측상 `victim_comparisons_per_victim ≈ 31`이다.
+- 결정성 계약은 §9.2 표 그대로. RNG는 §9.3의 per-agent/team `uint4` 해시 스트림(공유 `System.Random` 잡 반입 금지).
+- Combat은 초선형이라(`candidate_visits` 5k 0.89M → 10k 76.8M/tick, SMR 경로 카운터 run) **50k에서 관건**이 된다.
+
+### 9.6 모바일 최약기기 1만 "하한" 조건 (외삽 — 실측 아님)
+
+> 출처: Codex R5 판단, `git show fb14a41:codex_burst_out5.txt`. 5년 window(2021~2026) 최약 AOS/iOS 기준 1만 floor 판정 = **(B) 조건부 현실적**. 실기 측정이 아니라 코드·ProjectSettings 근거 + 기기 스펙 외삽이므로 **아래 수치를 성능 목표로 못박지 말 것**(§7 "성능 목표 수치 지어내기 금지").
+
+**렌더 경로 이중화가 필수다.** VAT 인스턴싱 경로는 vertex 스테이지의 StructuredBuffer(= compute/SSBO)를 요구하므로 **GLES3.1+ 에서만 성립**한다. 이 프로젝트의 설정은:
+
+- `ProjectSettings/ProjectSettings.asset:179` — `AndroidMinSdkVersion: 25`
+- 같은 파일 `:536` — Android graphics API = `150000000b000000` = **Vulkan 우선 + GLES3 폴백**
+- 같은 파일 `:541` — `openGLRequireES31: 0` → **GLES3.1을 강제하지 않는다**
+
+⇒ **GLES3.0-only 기기가 window 안에 들어온다.** 그런데 `CrowdRenderer.cs:105`(`graphicsShaderLevel < 45 || !supportsComputeShaders`)와 `:114`(`!supportsInstancing || maxComputeBufferInputsVertex <= 0`)는 **SMR 경로로 내려가는 게이트일 뿐**, 2차 인스턴싱 경로를 제공하지 않는다. 1만 하한을 주장하려면 `DrawMeshInstanced` + `MaterialPropertyBlock` **2차 경로**가 필요하다.
+
+> **원문 정정.** Codex R5는 이 요구를 `Graphics.RenderMeshIndirect`에 걸었으나, 실제 호출은 `Graphics.RenderMeshPrimitives`다(`CrowdRenderer.cs:188`, 리더 그림자 `:212`). **API 이름만 다르고 compute/SSBO를 요구한다는 제약은 동일**하므로 위 결론은 그대로 유효하다.
+
+**하나라도 빼면 1만 하한이 깨지는 6개 항목:** ①동시 가시 hard cap ②frustum/거리 컬링 ③고정 50Hz 심(`GameplayRoot`)에서 **분리된** multi-rate behavior LOD ④밀도 캡(§9.1) ⑤per-agent RNG(§9.3) ⑥최약기기 장시간 thermal soak 수용 게이트.
+
+**"1만"의 정의:** 논리적 **활성** population + 동시 가시 hard cap. 1만 전원 동시 가시로 해석하면 판정이 **(C) 비현실적**으로 뒤집힌다.
+
+**메모리는 제약이 아니다:** SoA 1만 ≈ 1MB(5만 ≈ 5MB). binding은 렌더 제출·GPU fill·지속 발열이다.
+
+**렌더-스택 티어별 상한**(R4 — §9.5의 T3a 등 sim 축과 **다른 축**이고, 전부 외삽·미측정):
+
+| 티어 | 내용 | 동시 가시 상한 |
+|---|---|---|
+| T0 | 현행 | 300~700 |
+| T1 | sim만 최적화 | 300~900 (자릿수 불변) |
+| T2 | — | 3천~8천 |
+| T3 | GameObject 제거 + indirect | **1만~2만 (1만 첫 도달)** |
+| T4 | + VAT · LOD | 총 활성 2만~4만 · 동시 가시 1만~2만 |
+
+VAT/BRG/multi-LOD는 품질·헤드룸(선택)이지 하한 필수는 아니다. **"보장" 선언은 Mali-G52 / Adreno 610급을 포함한 device matrix에서 실기 thermal soak를 통과한 뒤에만** 한다.
