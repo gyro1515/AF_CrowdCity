@@ -1,9 +1,9 @@
 # WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
 
-> **검증 기준 커밋: `2421d12`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
+> **검증 기준 커밋: `03b57a9`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
 
 > **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 작성됐다 — `4cd9260`이 `PROJECT_MAP.md`를, `a28aee3`이 CrowdCity 가이드 [`CROWD_GUIDE.md`](CrowdCity/CROWD_GUIDE.md)를 신설했다).
-> **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고, 이번 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 다음 패스 몫이다.
+> **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고(`ce53e44`), 그 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 다음 패스 몫이다.
 
 ---
 
@@ -119,7 +119,7 @@
 ---
 
 ## 🔄 다른 PC 재개 마커 (2026-07-17 업데이트)
-- **기준 커밋(baseline HEAD) = 이 브랜치(`feat/crowd-sdf-perf`)의 최신 push된 커밋** — `origin/feat/crowd-sdf-perf` 에 push 완료(이전 마커의 `fb14a41`에서 진행됨). 다른 PC에서는 `git pull` (branch `feat/crowd-sdf-perf`)로 전부 수신됨. 로컬 미커밋/stash 없음 → 유실 없음.
+- **기준 커밋(baseline HEAD) = `5caae09`**(브랜치 `feat/crowd-sdf-perf`) — `origin/feat/crowd-sdf-perf` 에 push 완료(이전 마커의 `fb14a41`에서 진행됨). 다른 PC에서는 `git pull` (branch `feat/crowd-sdf-perf`)로 전부 수신됨. 로컬 미커밋/stash 없음 → 유실 없음.
 - **레이(`Physics.Raycast`) = 벽 판정 용도지만 layermask 버그가 있었고, 이번 세션에 수정 완료.** 두 곳뿐: `Assets/@Project/Crowd/Scripts/RivalAiDriver.cs`(`ApplyWallAvoidance`/`ProbeClearance`, 벽 회피)와 `Assets/@Project/Crowd/Scripts/CrowdRoot.cs:1099`(`RepickWanderHeading`, wander 방향 벽 판정). 용도는 둘 다 벽 판정이지만 **layermask 없이(`Physics.DefaultRaycastLayers`) 쏘고 있어 Unit(crowd) 콜라이더를 벽으로 오판하던 실제 버그였음** — 이전 마커는 레이의 *용도*만 확인하고 layermask를 보지 않아 "이미 정리됨"으로 잘못 판단했다. mask에서 Unit 레이어 제외로 이번 세션에 **FIXED**.
 - **크라우드-크라우드(에이전트 간) 판정은 레이가 아니라 `SpatialGrid.QueryCircle` 경로** (separation=`CrowdRoot.cs:929`, recruit=`RecruitResolver.cs:74`, combat=`CombatResolver.cs:271/461`). → 다만 위 벽 레이 2곳은 layermask 누락으로 **crowd(Unit)를 실제로 맞고 있었음**(오판) — 이번 세션에 mask에서 Unit 제외로 **수정 완료**. 단 이 오판은 correctness 문제일 뿐 프레임 시간(Update self)의 주원인은 아래 진단대로 QueryCircle·SDF다.
 - **다음 작업(사용자 의도) = Burst 컴파일러 + Job 시스템 = 계획서 §3 `M-sim-2`(=M2).** 3분할: M2-a(Native SoA) → M2-b(Burst canonical) → M2-c(IJobParallelFor).
@@ -243,6 +243,8 @@ AF_CrowdCity의 crowd 시뮬레이션은 확정된 CPU 병목이 `GameplayRoot.U
 
 ## 8. 파일 인덱스
 - 이 문서: `Docs/WORK_STATE.md`
+- 구조 지도("어디에 있는가" — 영문, 포인터 전용): `Docs/PROJECT_MAP.md`
+- CrowdCity 사람용 가이드("왜 이렇게 만들었는가" — 한국어, 사람 전용): `Docs/CrowdCity/CROWD_GUIDE.md`
 - 상세 설계: `Docs/CrowdCity/SIM_OPT_PLAN.md`
 - 규칙: `CLAUDE.md`(root)
 - crowd 계약: `Docs/CrowdCity/{DESIGN,INTERFACES,STATUS}.md`

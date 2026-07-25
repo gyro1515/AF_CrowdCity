@@ -51,7 +51,7 @@ Unity -batchmode -nographics -quit -projectPath <proj> -executeMethod CrowdProfi
 
 ---
 
-## 2. 측정 완료 — 직렬 vs 잡 분리 → **10k 판정 불가 / 5k T1b** (2026-07-26, 측정 트리 `fdf909d`·`f9c1cdc` · 증거 커밋 `ff60d39`·`e0f81e4`·본 커밋)
+## 2. 측정 완료 — 직렬 vs 잡 분리 → **10k 판정 불가 / 5k T1b** (2026-07-26, 측정 트리 `fdf909d`·`f9c1cdc` · 증거 커밋 `ff60d39`·`e0f81e4`·`47cbb79`)
 
 **결론부터.** 이 질문은 **닫혔다.** 두 번 쟀고 답이 스케일에 따라 갈린다.
 
