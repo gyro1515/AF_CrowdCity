@@ -1,5 +1,7 @@
 # WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
 
+> **검증 기준 커밋: `47cbb79`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
+
 > **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 다음 패스에 작성 예정).
 > **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고, 이번 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 다음 패스 몫이다.
 
@@ -55,6 +57,7 @@
 ### 검증 게이트
 
 - **오라클 바이트 동일 게이트(시뮬 변경).** `CrowdOracleHarness`, n=2000 seed=12345 1000틱, 스냅샷 md5 **`4F79282EB20A79023B45F2EB2DE5271B`**. 시뮬 결과가 불변이어야 하는 변경은 이 값이 바이트 동일해야 통과다(events/summary CSV도 함께 비교).
+- **새 머신 사전 조건 — 오라클 md5가 이 머신에서 재현되는지 먼저 확인한다.** 이 머신에서 위 게이트를 한 번도 돌린 적이 없다면, **어떤 바이트 동일 결과에도 의지하기 전에** 게이트를 그대로 한 번 돌려 md5를 대조한다: `Unity.exe -batchmode -nographics -projectPath <proj> -quit -executeMethod CrowdOracleHarness.RunFromBatch -oracleOut <dir> -oracleTicks 1000 -oracleScales 2000 -oracleSeeds 12345` → 생성된 `phaseC_oracle_snapshot_n2000_s12345.bin`의 md5가 `4F79282EB20A79023B45F2EB2DE5271B`이어야 한다. 재현되지 않으면 하위의 바이트 동일 게이트 전부가 무효다 — "통과했지만 의미 없는" 점검 위에서 계속 진행하지 말고 **작업을 중단한다**.
 - **렌더 게이트(렌더 경로 변경).** **차이 ≤100 픽셀 AND 최대 채널 델타 ≤8** + 육안 확인. **PNG MD5 금지** — `CrowdShotHarness` 출력은 바이트 재현되지 않는다(동일 인자 재실행에서 이미지당 921,600픽셀 중 3~16픽셀 차이, 최대 델타 ≤4, 손대지 않은 `smr_off.png` 포함). 실제 변경과의 분리도: 35,587~123,161픽셀 / 최대 델타 171~184(픽셀 수 약 2,200배, 델타 약 43배).
 - **TMP 에셋 부수 효과.** 헤드리스 하네스를 돌릴 때마다 `Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset`이 더럽혀진다(약 10 insertions / 911 deletions). 커밋 전 되돌릴 것. **`git add -A` 금지** — 항상 경로를 명시한다.
 - **타이밍 측정은 조용한 머신에서.** 런 직전 호스트 전체 CPU를 읽고 **약 30% 초과면 미룬다.** 포그라운드 게임이 코어 하나를 점유했을 때 **병렬 구간 +66%** vs **직렬 구간 +8~13%** 로 갈렸다 — 배경 부하는 병렬 구간에 집중된다.
