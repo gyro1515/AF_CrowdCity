@@ -20,6 +20,7 @@ This `CLAUDE.md` applies to the repository root and everything below it. The sou
 - For non-trivial work, assign implementation and verification to different subagents. One subagent may execute and verify a trivial task, but the main agent still has no exception to implement or verify it directly.
 - Compare every subagent report against the success criteria. If evidence is insufficient, delegate corrective work within the same scope. Never report unverified work as complete.
 - While subagents are running (especially in the background), periodically verify they are still making progress — check roughly every 10 minutes. If a subagent has stalled or gone idle without completing, intervene (re-prompt, reassign, or restart); never passively wait on a subagent that has stopped progressing.
+- **Point, don't restate.** When handing work to a subagent or to Codex, pass a path, line offset, commit hash, or doc section and have the recipient read the primary source; never re-describe a diff, measurement, log, or tool output in prose. Prefer "read `Docs/<Area>/CHANGELOG.en.md`, then do X" over restating background in the prompt. Codex is stateless — every `codex exec` is a fresh process with no memory of prior rounds — so give it committed artifacts to read, not a hand-written brief. The reason is what makes this stick: summarizing is lossy compression performed by an interested party, and in this project it has already produced a false review blocker (a Decision Log dropped from a condensed plan, which Codex then reported as missing) plus two wrong figures relayed between agents — all caught only because the receiving agent recomputed from raw files.
 
 ## Cross-Verification: Codex ↔ Claude (Mandatory)
 
@@ -118,6 +119,15 @@ Before adding a new public API, state store, event/query/save key/asset key, asm
 The Decision Log is a pre-work decision note, not an actual commit message. Unless the user asks to keep it in code, include it in the final report; if the team has designated a location, store it in a feature README or `Docs/.../DECISIONS.md`.
 
 If the decision is ambiguous, do not begin implementation; ask.
+
+## 1.1 Per-Area Changelog Pair (en/ko)
+
+Every commit that adds or changes a feature — perf, fix, and tooling included — must add that area's changelog **entry** to BOTH files in the SAME commit: `Docs/<Area>/CHANGELOG.en.md` and `Docs/<Area>/CHANGELOG.ko.md`; an entry landing in only one language violates the rule. Pure docs/chore commits (typos, model-pin updates, transcript cleanup) are not logged. Live example: `Docs/CrowdCity/CHANGELOG.en.md`.
+
+- `CHANGELOG.en.md` is **canonical and agent-facing**: dense, factual, `file:line` everywhere, plus a mutable Current-State / Next-Step header carrying the area's standing invariants, gates, and traps. **Read it before starting work in that area.** On any disagreement between the two files, `en` is authoritative.
+- `CHANGELOG.ko.md` is **human-facing and more detailed, not a summary**: logic, structure, why each decision was made, rejected alternatives. Structure it for Notion (table of contents, `##`/`###` hierarchy, `<details>` folds). Its 현재 상태 block stays a coarse 2–3-line orientation note (where the work stands, what is next) that points at `en` for the detail.
+- **Entries pair; state blocks do not.** `en`'s state header may be updated alone — it changes whenever the working state changes, including when no commit is produced (e.g. a new measurement reopens a settled next-step verdict) — and is exempt from the pairing requirement. `ko`'s coarse block moves only at feature-commit boundaries and must never accumulate invariants, gates, commands, `file:line` citations, or numbers; those belong in `en`. Keeping `ko` coarse is deliberate: a detailed `ko` state block would re-double the sync burden this split exists to avoid.
+- Facts live in exactly ONE place — the changelog. Do not copy an area's gates/traps into `CLAUDE.md` or into a second runbook file; point at the changelog instead. Deliberate tradeoff: `en` mixes append-only entry history with a mutable state block to keep the pair at two files (entries and state hold different content, so this is not duplication); split the state block out only if header churn becomes a problem.
 
 ## 2. Ownership Rules
 
