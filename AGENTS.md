@@ -7,8 +7,9 @@ This file is a condensed, AI-focused subset of `TEAM_ARCHITECTURE_GUIDE.md`'s ma
 
 This `AGENTS.md` applies to the repository root and everything below it. The source of truth for detailed architecture is the in-project [`UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md`](UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md); follow that guide for details not covered here. If a more specific instruction file applies to a nested scope, merge it with this document, and surface any conflict instead of hiding it.
 
-- If a user request conflicts with this guide or leaves room for a materially different interpretation, state the difference before implementation or modification and ask the user which standard to follow.
-- Do not declare a guide exception or proceed with implementation until the user explicitly decides the priority.
+**Keep this file lean (self-maintenance).** `AGENTS.md` is the always-loaded layer — mandatory safety contracts, the operating model, decision triggers, and concise rules with pointers. Put implementation-level or situational detail in the team guide (read on demand), not here; when a rule here grows into such detail, relocate the detail to the guide and leave a short rule + pointer, and prefer editing an existing rule over appending a new one. But **never move a mandatory safety contract behind a pointer** — it must stay inline so it is always in context. Length itself is not the enemy: keep load-bearing contracts inline and relocate only genuine detail; slim only when a section has grown into detail, not for its own sake.
+
+- If a user request conflicts with this guide or leaves room for a materially different interpretation, state the difference before implementation or modification and ask the user which standard to follow. If the user is unavailable, do not block — resolve it via the Codex↔Claude cross-review below.
 
 ## Main/Subagent Operating Model and Context Isolation
 
@@ -20,64 +21,32 @@ This `AGENTS.md` applies to the repository root and everything below it. The sou
 - Never allow two or more subagents to edit the same file concurrently. Assign one owner per file before delegation, and confirm that earlier work has ended before transferring ownership.
 - For non-trivial work, assign implementation and verification to different subagents. One subagent may execute and verify a trivial task, but the main agent still has no exception to implement or verify it directly.
 - Compare every subagent report against the success criteria. If evidence is insufficient, delegate corrective work within the same scope. Never report unverified work as complete.
+- While subagents are running (especially in the background), periodically verify they are still making progress — check roughly every 10 minutes. If a subagent has stalled or gone idle without completing, intervene (re-prompt, reassign, or restart); never passively wait on a subagent that has stopped progressing.
 - **Point, don't restate.** When handing work to a subagent or to Codex, pass a path, line offset, commit hash, or doc section and have the recipient read the primary source; never re-describe a diff, measurement, log, or tool output in prose. Prefer "read `Docs/<Area>/CHANGELOG.en.md`, then do X" over restating background in the prompt. Codex is stateless — every `codex exec` is a fresh process with no memory of prior rounds — so give it committed artifacts to read, not a hand-written brief. The reason is what makes this stick: summarizing is lossy compression performed by an interested party, and in this project it has already produced a false review blocker (a Decision Log dropped from a condensed plan, which Codex then reported as missing) plus two wrong figures relayed between agents — all caught only because the receiving agent recomputed from raw files.
+
+## Cross-Verification: Codex ↔ Claude (Mandatory)
+
+For every non-trivial code task, both the **work plan** (before implementation) and the **post-work verification** (after implementation) must be cross-reviewed by two independent agents, each acting as a **Unity senior game programmer** — one Codex, one Claude. Each independently critiques the other's plan/result; iterate in rounds until they reach **explicit consensus**. Do not conclude a phase (plan or verification) while the two still disagree: record the open disagreement and run another round until it is resolved. The main agent orchestrates the exchange and judges convergence; a single agent's approval never substitutes for the cross-review. Trivial edits are exempt (use judgment).
+
+When a decision would otherwise require the user but the user is unavailable (e.g. autonomous or unattended runs), do not block: resolve it via the same Codex↔Claude cross-review, choose the best-supported option, proceed, and record the decision and its rationale for the user's later review.
+
+Agent settings:
+
+- **Codex** — model `gpt-5.6-sol`, effort `ultra`, speed `fast` (invoke: `codex exec -m gpt-5.6-sol -c model_reasoning_effort=ultra -c service_tier=fast … < /dev/null`; requires codex-cli ≥ 0.144.5). **Always redirect stdin `< /dev/null`** — otherwise `codex exec` blocks waiting on stdin and emits no output until the command times out. Run it **synchronously in the foreground** (a single blocking call); never background it or wrap it in a poll/Monitor loop (that reintroduces the stdin hang and stalls the agent).
+- **Claude** — model `Opus 5`, effort `xhigh`.
+
+## Working Language
+
+Do all work in **English** — tasks, plans, and agent-to-agent communication (subagent/`Agent`-tool prompts, workflow scripts, harnesses). Use **Korean only for communication with the user** (questions, reports, and chat). English harness prompts are marginally more reliable and more token-efficient; Korean keeps the user-facing exchange clear.
 
 ## Behavioral Guidelines to Reduce Common LLM Coding Mistakes
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+Merge with project-specific instructions. Tradeoff: these bias toward caution over speed; for trivial tasks, use judgment. They are working when diffs carry fewer unnecessary changes, there are fewer overcomplication rewrites, and clarifying questions come before implementation rather than after mistakes.
 
-Tradeoff: These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-1. Think Before Coding
-Don't assume. Don't hide confusion. Surface tradeoffs.
-
-Before implementing:
-
-State your assumptions explicitly. If uncertain, ask.
-If multiple interpretations exist, present them - don't pick silently.
-If a simpler approach exists, say so. Push back when warranted.
-If something is unclear, stop. Name what's confusing. Ask.
-2. Simplicity First
-Minimum code that solves the problem. Nothing speculative.
-
-No features beyond what was asked.
-No abstractions for single-use code.
-No "flexibility" or "configurability" that wasn't requested.
-No error handling for impossible scenarios.
-If you write 200 lines and it could be 50, rewrite it.
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-3. Surgical Changes
-Touch only what you must. Clean up only your own mess.
-
-When editing existing code:
-
-Don't "improve" adjacent code, comments, or formatting.
-Don't refactor things that aren't broken.
-Match existing style, even if you'd do it differently.
-If you notice unrelated dead code, mention it - don't delete it.
-When your changes create orphans:
-
-Remove imports/variables/functions that YOUR changes made unused.
-Don't remove pre-existing dead code unless asked.
-The test: Every changed line should trace directly to the user's request.
-
-4. Goal-Driven Execution
-Define success criteria. Loop until verified.
-
-Transform tasks into verifiable goals:
-
-"Add validation" → "Write tests for invalid inputs, then make them pass"
-"Fix the bug" → "Write a test that reproduces it, then make it pass"
-"Refactor X" → "Ensure tests pass before and after"
-For multi-step tasks, state a brief plan:
-
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
-These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+1. **Think before coding.** State assumptions explicitly; if uncertain, ask. If multiple interpretations exist, present them — don't pick silently. If a simpler approach exists, say so. If something is unclear, stop, name it, and ask.
+2. **Simplicity first — minimum code that solves the problem, nothing speculative.** No features beyond what was asked, no abstractions for single-use code, no unrequested "flexibility"/"configurability", **No error handling for impossible scenarios**. If 200 lines could be 50, rewrite it. If a senior engineer would call it overcomplicated, simplify.
+3. **Surgical changes — touch only what you must; clean up only your own mess.** Don't "improve" adjacent code/comments/formatting or refactor things that aren't broken; match existing style. Remove only the imports/variables/functions your changes made unused; mention pre-existing dead code, don't delete it. Every changed line should trace directly to the request.
+4. **Goal-driven execution — define success criteria, then loop until verified.** Turn tasks into verifiable goals ("add validation" → "write tests for invalid inputs, then make them pass"; "fix the bug" → "write a reproducing test, then make it pass"; "refactor X" → "tests pass before and after"). For multi-step tasks, state a brief plan with a verify check per step.
 
 ### Project-Specific Safety Precedence
 
@@ -149,7 +118,7 @@ Before adding a new public API, state store, event/query/save key/asset key, asm
 5. Affected files:
 ```
 
-The Decision Log is a pre-work decision note, not an actual commit message. Unless the user asks to keep it in code, include it in the final report; if the team has designated a location, store it in a feature README or `Docs/.../DECISIONS.md`.
+The Decision Log is a pre-work decision note, not an actual commit message. Unless the user asks to keep it in code, include it in the final report; if the team has designated a location, store it in a feature README or `Docs/.../DECISIONS.md`. Once the work lands, fold it into that area's changelog entry (§1.1) rather than maintaining it as a third parallel home.
 
 If the decision is ambiguous, do not begin implementation; ask.
 
@@ -322,6 +291,18 @@ OnSpawn    -> OnDespawn
 - Other features must not reference `Feature.Runtime`; when necessary, they may reference `Feature.Contracts` only.
 - Use `Shared.Contracts` only for ownerless common contracts.
 - Do not move arbitrary types into Shared to resolve circular references.
+
+## 11.5 Prefab Construction Rules
+
+These rules cover how runtime object trees are constructed and loaded. They add only the construction/loading perspective on top of §2 (Ownership), §4 (Communication), §8 (Subscription), and §10 (Resources); do not duplicate those rules.
+
+- **Minimize scene placement.** A scene holds only the bootstrap (`GameSceneController`) and designated environment objects (Main Camera, `GameArea/City`, and inactive authoring templates such as `GameArea/Human`). Every other feature/spawn-target tree is created at runtime from prefabs.
+- **Script-preattached prefabs.** Author features and spawn targets as prefabs with their scripts already attached. Do not `AddComponent<FeatureScript>` on a clone, and do not assemble a feature tree at runtime with `new GameObject() + AddComponent` — this includes uGUI (HUD Canvas, labels, markers).
+- **The ownership/assembly chain IS the (documentary) mediator.** Creation and assembly flow only along `SceneController → GameplayRoot → FeatureRoot → spawn target`. A parent Instantiates a child prefab, then injects dependencies synchronously exactly once via `Init(deps)`; siblings are bound at the parent root. This tree serves the mediator role — **do not add a separate Mediator/central-hub class.** A child never references its parent or `SceneController` directly (consistent with §2).
+- **Dynamic load via a central stateless loader (class name for prefabs).** Code-loaded prefabs whose root carries a single main-script component load **by that component's class name**: the prefab file name MUST equal its root component's `Type.Name`. A **single shared, stateless** central loader is the sanctioned tool (this is the guide's AssetProvider role, not a God Manager) — a `ResourceLoader` with **kind-scoped methods, one per `Resources/<kind>/` folder** (`LoadRoot<T>()` now; add `LoadPrefab<T>()` / `LoadAsset<T>(name)` later only when a real code-load need for that kind appears — §0.2). Name each method for its verb; do **not** name the type `ResourceManager` (that invites scope creep). Prefab kinds resolve **by class name** — `LoadRoot<T>()` does `Resources.Load<GameObject>("Roots/" + typeof(T).Name)` → `GetComponent<T>()` → return the component (do not rely on `Resources.Load<T>` returning a component — undocumented for prefab components). The class-name-derived key **is** the searchable key contract — do not hand-maintain a per-asset path-string constant for these roots. Prefab files stay under each feature's own `…/Resources/<kind>/` folder (ownership); only the post-`Resources/` segment forms Unity's load key, so files remain feature-local while the key is flat `<kind>/<ClassName>`. **The loader MUST stay a pure function:** no cached/held instances, no lifetime ownership (the caller Instantiates and Destroys/Releases per §10), no live-feature/service retrieval, no save/UI/game-rule work. That boundary is exactly what separates an acceptable load API from the forbidden **God Manager / Service Locator** (§6, §13) — kind-scoped load *methods that compute the key* are fine, but adding a `Get<TFeature>()`, an instance cache, or a hand-maintained **map that lists every asset's path** crosses it. Flat `<kind>/<ClassName>` is collision-safe **only with both Editor validators kept mandatory**: (i) the existing merged-Resources duplicate-key check — the real backstop across ALL `Resources/` assets (SOs, non-root prefabs, fonts, `.bytes`, case-only/extension dupes); and (ii) a per-root check: file name == root `Type.Name`, component on the **root** and the **only** one of its exact type, type concrete/non-nested/non-generic, and root simple-names globally unique. Only if the project later adopts namespaces and needs same-simple-name roots across features, promote the key to a feature-segmented form (`<Feature>/Roots/<ClassName>`) then (§0.2). **ScriptableObjects/shared assets do NOT use class-name resolution:** one class often backs many named assets and the file name usually differs from the class (e.g. a style SO; `WallSdf.asset` ↔ `WallSdfAsset`, `GameConfig.asset` ↔ `GameConfigSO`), so `LoadAsset<T>(assetName)` takes an **explicit name** with a feature-owned constant — and prefer serializing such assets on the consuming prefab (see Injection scope), so most SOs/UI templates never need a loader kind at all. Promote to Addressables only when large/remote/independently-releasable assets require it (§0.2).
+- **Injection scope (inject only what belongs in the chain).** The parent's `Init(deps)` passes down ONLY: (a) **scene-object references** (Camera, scene Transforms, scene-instance Materials) — a Resources prefab cannot serialize a scene reference (it deserializes null), so these MUST be parent-injected; (b) data **genuinely consumed by ≥2 sibling features at the same rank** (bind at the common parent — §4); (c) **runtime/session state** (GameSession, RuntimeModel handles). Everything else — editor-authored assets (SO/prefab/asset-Material/font) used by a **single** feature — must NOT be drilled through the tree: place it as a `[SerializeField]` on that feature's own prefab (or feature self-load via the typed loader above), chosen per the §3 state-location table. Never pass a dependency through a level that does not consume it — if an `Initialize` parameter is never read, delete it (no dead pass-through). Validate serialized authoring refs as non-null during `Init`; never add a silent `Resources.Load` fallback that hides an unwired field. Direct-construction tests/harnesses (`AddComponent`) bypass prefab serialization — they must instantiate the wired prefab or assign test-only fields explicitly.
+- **Init-only lifecycle & injection.** Author prefabs active. `Awake`/`OnEnable` must be dependency-free (no reading injected dependencies, no parent/sibling/other-feature references, no external publish, no manager/bus/tick registration); the first external publish is a separate owner-driven step after wiring completes. `Init` runs synchronously exactly once; on failure the owner destroys the clone it just created and cancels its registration.
+- **Baked physics & determinism exception.** Baked colliders/`CharacterController` are live the instant they are Instantiated, so place no physics step or overlap query between Instantiate and Init (all spawn-placement checks run before Instantiate). Bake determinism-pinned specs (e.g. CC radius/height/center/skinWidth) into the prefab, but verify the values only with an Editor validator (constant match) — never repair them at runtime. The pure-C# simulation kernel (`Crowd/Core`) is exempt from prefab rules.
 
 ## 12. Security / Live Operations Rules
 

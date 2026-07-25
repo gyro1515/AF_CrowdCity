@@ -9,6 +9,8 @@ This `CLAUDE.md` applies to the repository root and everything below it. The sou
 
 **Keep this file lean (self-maintenance).** `CLAUDE.md` is the always-loaded layer — mandatory safety contracts, the operating model, decision triggers, and concise rules with pointers. Put implementation-level or situational detail in the team guide (read on demand), not here; when a rule here grows into such detail, relocate the detail to the guide and leave a short rule + pointer, and prefer editing an existing rule over appending a new one. But **never move a mandatory safety contract behind a pointer** — it must stay inline so it is always in context. Length itself is not the enemy: keep load-bearing contracts inline and relocate only genuine detail; slim only when a section has grown into detail, not for its own sake.
 
+- If a user request conflicts with this guide or leaves room for a materially different interpretation, state the difference before implementation or modification and ask the user which standard to follow. If the user is unavailable, do not block — resolve it via the Codex↔Claude cross-review below.
+
 ## Main/Subagent Operating Model and Context Isolation
 
 - In sessions where subagents are available, the main agent must act only as manager and controller. There is no exception that allows the main agent to perform investigation, file reading, detailed analysis, implementation, editing, testing, or diff review directly, even for trivial tasks.
@@ -116,7 +118,7 @@ Before adding a new public API, state store, event/query/save key/asset key, asm
 5. Affected files:
 ```
 
-The Decision Log is a pre-work decision note, not an actual commit message. Unless the user asks to keep it in code, include it in the final report; if the team has designated a location, store it in a feature README or `Docs/.../DECISIONS.md`.
+The Decision Log is a pre-work decision note, not an actual commit message. Unless the user asks to keep it in code, include it in the final report; if the team has designated a location, store it in a feature README or `Docs/.../DECISIONS.md`. Once the work lands, fold it into that area's changelog entry (§1.1) rather than maintaining it as a third parallel home.
 
 If the decision is ambiguous, do not begin implementation; ask.
 
