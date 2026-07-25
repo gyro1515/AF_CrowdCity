@@ -12,8 +12,13 @@ public static class CrowdSimProfiler
 {
     /// <summary>
     /// SimTick 하위 구간 식별자다. Count는 배열 크기 산정용 sentinel이다.
-    /// CCMove는 리더/팔로워/중립 세 루프의 CharacterController.Move 벽시계를 합산한 격리 버킷이며,
-    /// 각 이동 구간(LeaderMove/FollowerSteer/NeutralMove) 안에 중첩되어 그 총합에도 포함된다.
+    /// 구간은 상호 배타가 아니다(중첩·중복 존재) — 백분율/ms를 단순 합산하지 말고 항목별로 읽어야 한다.
+    /// CCMove는 다섯 지점(리더 ApplyHorizontalMove, 팔로워 SDF 이동 job 대기, 팔로워 CC 폴백,
+    /// 중립 SDF 이동 job 대기, 중립 CC 폴백)을 합산하는 단일 격리 버킷이며 LeaderMove/FollowerSteer/NeutralMove
+    /// 안에 중첩되어 그 총합에도 포함된다. SDF ON 경로에서는 CharacterController.Move가 아니라
+    /// WallSolver.Resolve(SDF 이동 해소)의 병렬 벽시계다(실제 CC.Move 호출 수는 0).
+    /// Follower*/Neutral*는 FollowerSteer/NeutralMove의 하위 분해이며 SDF ON 경로만 계측한다(!sdfActive CC 폴백 미계측).
+    /// FollowerJobWait/NeutralJobWait는 CCMove의 같은 구간을 다시 재는 inclusive 중복이다 — CCMove와 이중 차감 금지.
     /// </summary>
     public enum Seg
     {
@@ -28,7 +33,14 @@ public static class CrowdSimProfiler
         Recruit,        // RecruitResolver.Resolve
         Combat,         // CombatResolver.Resolve
         CommitPublish,  // CommitOutcomes + PublishTickEvents
-        CCMove,         // CharacterController.Move 격리 합산(위 세 구간에 중첩)
+        CCMove,         // 이동 격리 합산(위 다섯 지점; SDF ON에서는 CC.Move가 아니라 SDF 이동 해소의 병렬 벽시계)
+        FollowerPrepass,        // 팔로워 직렬 프리패스(team arrive 중심/유효반경 + 작업리스트 평탄화 + MovePositionCurrent 캡처)
+        FollowerGridSnapshot,   // SpatialGrid.CopyNativeSnapshot(NativeArray.Copy 5회)
+        FollowerJobWait,        // 팔로워 이동 job .Complete() 대기(의존 force job의 잔여 실행 포함). CCMove와 inclusive 중복
+        FollowerPresent,        // 팔로워 직렬 제시 패스(SDF 경로 전용: buffer.Pos/_visual*/_followerVelocity + Human 호출)
+        NeutralPrepass,         // 중립 직렬 프리패스(타이머 감산 + RepickWanderHeading + Sin/Cos + 평탄화, SDF 경로 전용)
+        NeutralJobWait,         // NeutralSdfMoveJob .Complete() 대기. CCMove와 inclusive 중복
+        NeutralPresent,         // 중립 직렬 제시 패스(SDF 경로 전용)
         Count,
     }
 

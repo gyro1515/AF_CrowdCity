@@ -1212,6 +1212,7 @@ public sealed class CrowdRoot : MonoBehaviour
     private void SteerFollowersAndNeutrals(float dt, bool sdfActive)
     {
         CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.FollowerSteer);
+        CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.FollowerPrepass);
         float sepRadius = _config.SeparationRadius;
         float sepPush = _config.SeparationPush;
         float maxSpeed = _config.FollowerMaxSpeed;
@@ -1309,10 +1310,13 @@ public sealed class CrowdRoot : MonoBehaviour
                 _simState.CentroidPerTeam[t] = centroidSum / centroidCount;
             }
         }
+        CrowdSimProfiler.End(CrowdSimProfiler.Seg.FollowerPrepass);
 
         // 이번 tick 팔로워 루프가 보는 grid(== 직전 tick 끝에서 rebuild된 상태)를 native로 스냅샷한다. job이 QueryCircle/QueryCircleCapped 열거를 재현한다.
+        CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.FollowerGridSnapshot);
         _grid.CopyNativeSnapshot(
             _simState.GridBucketHead, _simState.GridNext, _simState.GridCellX, _simState.GridCellY, _simState.GridPos);
+        CrowdSimProfiler.End(CrowdSimProfiler.Seg.FollowerGridSnapshot);
 
         var forceJob = new SteeringForceJob
         {
@@ -1384,10 +1388,13 @@ public sealed class CrowdRoot : MonoBehaviour
                 VelocityOut = _simState.MoveVelocityOut,
             };
             CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove); // SDF ON: 이 구간은 WallSolver.Resolve(SDF 이동 해소)의 병렬 벽시계다.
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.FollowerJobWait);
             moveJob.Schedule(followerCount, SteeringForceBatch, forceHandle).Complete();
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.FollowerJobWait);
             CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
 
             // 직렬 제시 패스(프리패스와 동일 순서 team·f 오름차순): job 산출 위치/속도를 transform·시각 배열·애니메이션에 반영한다(managed, main-thread).
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.FollowerPresent);
             int followerSlot = 0;
             for (int t = 0; t < _teamCount; t++)
             {
@@ -1433,6 +1440,7 @@ public sealed class CrowdRoot : MonoBehaviour
                     }
                 }
             }
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.FollowerPresent);
         }
         else
         {
@@ -1536,6 +1544,7 @@ public sealed class CrowdRoot : MonoBehaviour
             // ── Stage A: SDF 경로 활성이면 순수 SDF 수학이라 NeutralSdfMoveJob으로 병렬화한다(read-only 조회, 자기 슬롯만 쓰기 → 직렬 등가; job은 Burst Strict라 near-Mono지만 bit-identical하지는 않다).
             //    (1) 직렬 프리패스: 원래 agent-index 오름차순 그대로 배회 타이머 감산·방향 재선택(shared _rng draw + Physics.Raycast는 반드시 직렬·순서 유지)과 Mathf.Sin/Cos 명령 변위 산출을 하고 작업 리스트를 평탄화한다.
             //    (2) 병렬 job: 중립별 SDF 해소+walkable clamp를 산출한다. (3) 직렬 제시: transform/시각 배열/애니메이션에 반영한다.
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.NeutralPrepass);
             int neutralCount = 0;
             for (int i = 0; i < agentCount; i++)
             {
@@ -1559,6 +1568,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 CrowdSimCounters.CountSdfResolve(); // 원본 SDF 분기와 동일: 직렬로 중립당 1회(무침습 계측; Enabled=false면 no-op).
                 neutralCount++;
             }
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.NeutralPrepass);
 
             if (neutralCount > 0)
             {
@@ -1586,11 +1596,14 @@ public sealed class CrowdRoot : MonoBehaviour
                     PositionNext = _simState.NeutralMovePositionNext,
                 };
                 CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.CCMove); // SDF ON: 이 구간은 WallSolver.Resolve(중립 SDF 이동 해소)의 병렬 벽시계다.
+                CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.NeutralJobWait);
                 moveJob.Schedule(neutralCount, SteeringForceBatch).Complete();
+                CrowdSimProfiler.End(CrowdSimProfiler.Seg.NeutralJobWait);
                 CrowdSimProfiler.End(CrowdSimProfiler.Seg.CCMove);
             }
 
             // 직렬 제시 패스(프리패스와 동일 순서 = agent-index 오름차순): job 산출 위치를 transform·시각 배열·애니메이션에 반영한다(managed, main-thread).
+            CrowdSimProfiler.Begin(CrowdSimProfiler.Seg.NeutralPresent);
             for (int k = 0; k < neutralCount; k++)
             {
                 int i = _simState.NeutralList[k];
@@ -1608,6 +1621,7 @@ public sealed class CrowdRoot : MonoBehaviour
                 _visualYaw[i] = Quaternion.Euler(0f, _wanderHeadingDeg[i], 0f).eulerAngles.y; // 렌더용 정규화 yaw(SetHeadingAndSpeed와 동일 값).
                 _humanByAgent[i].SetHeadingAndSpeed(_wanderHeadingDeg[i], _config.NeutralAnimationSpeed);
             }
+            CrowdSimProfiler.End(CrowdSimProfiler.Seg.NeutralPresent);
         }
         else
         {
