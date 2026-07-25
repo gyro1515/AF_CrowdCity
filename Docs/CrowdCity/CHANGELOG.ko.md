@@ -50,7 +50,7 @@
 
 ## 2. 현재 상태와 다음 단계
 
-> 맨 위 [현재 상태](#현재-상태) 블록의 **상세 설명**입니다. 불변식·게이트·함정의 **정본은 [`CHANGELOG.en.md`](CHANGELOG.en.md)** 이며, 이 절과 어긋나면 영문판을 따르세요. 이 절은 기능 커밋 단위로만 갱신합니다.
+> 맨 위 [현재 상태](#현재-상태) 블록의 **상세 설명**입니다. 이 절은 **"왜 그런가"(추론)** 를 담고, 불변식·게이트·함정의 **열거된 목록은 [`CHANGELOG.en.md`](CHANGELOG.en.md)가 정본**입니다([2.3절](#23-불변식검증-게이트함정--목록의-정본은-영문판) 참조). 사실이 어긋나면 영문판을 따르세요.
 
 ### 2.1 완료된 것
 
@@ -66,7 +66,7 @@
 
 ### 2.2 다음 작업 — 새 작업이 아니라 "재결정"이다
 
-`SIM_OPT_10K_PLAN.md` §4는 지금 "다음 = T1b"라고 적혀 있습니다. **그 판정이 흔들렸습니다. T1b를 시작하기 전에 먼저 정리해야 합니다.**
+`SIM_OPT_10K_PLAN.md` §2가 "T1b 확정"으로 판정했고 §4가 그것을 다음 단계로 올렸습니다. **그 판정이 흔들렸습니다. T1b를 시작하기 전에 먼저 정리해야 합니다.** (§4 항목 3은 이 사실을 반영해 "잠정 다음 — 재측정 대기"로 고쳐 두었습니다. §2 본문의 판정 문구는 재측정 결과가 나올 때 갱신할 몫으로 남아 있습니다.)
 
 이유를 순서대로 보면:
 
@@ -79,26 +79,23 @@
 
 > **반드시 함께 적을 유보 조건.** 두 수치는 **서로 다른 하네스, 서로 다른 모드**에서 나왔습니다 — 헤드리스 에디트 모드 `CrowdProfileHarness` vs 플레이 모드 `CrowdPerfHarnessP95`. 그래서 이것은 **해소해야 할 긴장(tension)** 이지, T1b가 틀렸다는 **증명이 아닙니다.** 같은 조건으로 다시 재기 전에는 어느 쪽도 결론이 아닙니다.
 
-### 2.3 깨면 안 되는 불변식
+### 2.3 불변식·검증 게이트·함정 — 목록의 정본은 영문판
 
-| 불변식 | 위치 | 이유 |
-|---|---|---|
-| `_visualYaw[…] =` 쓰기 **7곳 전부 무조건** | `CrowdRoot.cs:1205, 1430, 1440, 1526, 1536, 1631, 1673` | GPU 경로의 yaw 입력이다. 게이팅하면 크라우드 방향이 스폰 값에 얼어붙는다 |
-| `_visualSpeed01[…] =` 쓰기 **5곳 전부 무조건** | `CrowdRoot.cs:1204, 1427, 1523, 1630, 1672` | GPU 애니메이션 위상(`_phase01`) 적분 입력이다 |
-| 리더 `SetHeadingAndSpeed` **게이팅 금지** | `CrowdRoot.cs:1206` | S4b2 계약이 리더 트랜스폼을 라이브로 유지한다. 리더는 ≤4명(SimTick의 0.09%)이라 이득도 없다 |
-| 정지 시 yaw 유지 읽기 2곳 유지 | `CrowdRoot.cs:1439`, `:1535` | `float headingDeg = _visualYaw[index];` — 과거 `transform.eulerAngles.y` 읽기의 대체물 |
-| `*JobWait`은 `CCMove`의 **inclusive 중첩** | `CrowdRoot.cs:1390`~`:1394`, `:1608`~`:1612` | 합산 금지, 이중 차감 금지 |
-| 렌더 경로 게이트는 **픽셀 허용오차**, PNG MD5 아님 | [3장](#3-공통-컨벤션과-검증-게이트) | 스크린샷 하네스 출력이 바이트 재현되지 않는다 |
+**깨면 안 되는 불변식 목록, 검증 게이트 목록, 함정 목록은 [`CHANGELOG.en.md`](CHANGELOG.en.md)의 `Current state / next step` → `Standing invariants` / `Traps`와 `Conventions / gates`에 있습니다. 이 문서는 그 목록을 복제하지 않습니다.**
 
-### 2.4 함정
+의도적인 분업입니다. 그 항목들은 **휘발성 사실**(코드 줄 번호, 게이트 임계, 해시)이라 코드가 움직일 때마다 갱신돼야 합니다. 두 문서에 같은 목록을 두면 한쪽만 갱신돼 조용히 어긋납니다. 그래서 **열거된 사실은 영문판 한 곳**에만 두고, 이 문서는 **"왜 그런가"** 를 담습니다.
 
-- **GPU 경로에서 팔로워/뉴트럴의 `transform.rotation`은 이제 영구히 stale**입니다. 이미 stale이던 위치에 회전이 합류한 상태입니다(기존 주석 `CrowdRoot.cs:740`이 "버려진 트랜스폼/CharacterController" 상태를 설명합니다). 앞으로 팔로워·뉴트럴의 `transform.rotation`이나 `.forward`를 읽는 기능을 추가하면 **조용히 스폰 시점 값**을 받습니다.
-- **`fdf909d`(T1a)는 `dcb3bfb`와 결합되어 있습니다.** 되돌릴 때는 함께 되돌려야 합니다. 이유는 [6.5절](#6-fdf909d-t1a-죽은-회전-쓰기-제거)에 있습니다.
-- **Unity는 에디트 모드에서 지연 `Object.Destroy`를 거부합니다.** 이 프로젝트의 모든 에디트 모드 하네스(`CrowdShotHarness`, `CrowdProfileHarness`, `CrowdOracleHarness`)는 런타임 코드가 "파괴했다"고 믿는 객체를 계속 보게 됩니다. 덧붙여 `GetComponentsInChildren<SkinnedMeshRenderer>(true)`는 비활성 객체까지 세므로 에디트 모드에서 `smr == 0` 단언은 여전히 실패합니다. 플레이 모드 성능 하네스는 프레임마다 yield하므로 영향이 없습니다.
-- **`CrowdPerfHarnessP95`의 CSV 열 `simtick_median_ms`는 중앙값도 아니고 `SimTick` 전용도 아닙니다.** 열 이름 하나에 결함이 두 개 겹쳐 있습니다.
-  1. **중앙값이 아니다** — `CrowdPerfHarnessP95.cs:413`이 `totalSimMs / totalSteps`, 즉 0.02초 스텝당 **산술 평균**을 계산합니다. (같은 행의 `full_median`·`render_median`은 실제로 `Percentile(…, 0.50)`입니다 — `:409`, `:412`.)
-  2. **`SimTick` 전용이 아니다** — 계측 구간(`CrowdPerfHarnessP95.cs:364-367`)은 `StepSim()` **전체**를 감싸고, `StepSim`은 fixed-step `SimTick` 루프 뒤에 `RenderInterpolate(alpha)`를 **프레임당 1회** 호출합니다(`:472`). 하네스 주석(`:363`)도 이 구간을 "fixed-step accumulator + RenderInterpolate"로 명시합니다. 즉 `simtick = SimTick + RenderInterpolate / 프레임당 스텝수`입니다. `render_median`은 **별개 구간**(`RenderSceneAndSync`, `:371-374`)이라 이중 계상은 없습니다.
-  - 결과: 분할 상환 제수가 arm마다 달라서 이 열은 **순수 `SimTick`으로 arm 간 비교가 안 됩니다.** `RenderInterpolate`는 **별도로 계측되지 않으므로** 순수 `SimTick`은 이 하네스로 **범위만 잡히고 측정되지는 않습니다.** 자세한 대수는 [6.9절](#6-fdf909d-t1a-죽은-회전-쓰기-제거)에 있습니다.
+각 불변식·함정이 *왜* 그런지는 해당 항목 절에 있습니다.
+
+| 찾는 것 | 이유가 적힌 곳 |
+|---|---|
+| `_visualYaw`/`_visualSpeed01` 쓰기를 왜 전부 무조건 유지하는가, 리더 호출을 왜 게이팅하지 않는가 | [6.4절](#6-fdf909d-t1a-죽은-회전-쓰기-제거) |
+| `fdf909d`와 `dcb3bfb`를 왜 함께 되돌려야 하는가 | [6.5절](#6-fdf909d-t1a-죽은-회전-쓰기-제거) |
+| GPU 경로 `transform.rotation`이 왜 영구히 stale인가 | [6.6절](#6-fdf909d-t1a-죽은-회전-쓰기-제거) |
+| `simtick_median_ms`가 왜 중앙값도 `SimTick` 전용도 아닌가 | [6.9.1절](#6-fdf909d-t1a-죽은-회전-쓰기-제거) |
+| 에디트 모드가 왜 지연 `Destroy`를 거부하고 무엇이 깨지는가 | [7.3절](#7-dcb3bfb-에디트-모드-rig-유령-수정) |
+| 렌더 게이트가 왜 MD5가 아니라 픽셀 허용오차인가 | [7.8절](#7-dcb3bfb-에디트-모드-rig-유령-수정) |
+| `*JobWait`이 왜 `CCMove`와 이중 차감이 되는가 | [5.4절](#5-ff60d39-측정-증거와-계획-정정) · [8.3절](#8-1485848-분리-계측-세그먼트-7개-추가) |
 
 ---
 
@@ -149,6 +146,8 @@
 
 `[Docs]` · `Docs/CrowdCity/Perf/t1a_p95_{before,after}_r{1,2}.csv` 4개 + `Perf/MANIFEST.md` §7(`+178 / −2`) · **코드·런타임 표면 변경 없음**
 
+> **직접 확인하는 법.** 두 arm이 정말 다른 코드였는지: `git grep -c -F 'if (!_gpuRenderActive)' ff60d39 -- '*CrowdRoot.cs'` → `7`, 같은 명령의 `dcb3bfb` → `1`. 증거 본문은 `git show e0f81e4 -- Docs/CrowdCity/Perf/MANIFEST.md`의 §7.3~§7.7.
+
 `ff60d39`가 남긴 세 번째 공백("GPU 경로 실측 없음")을 닫는 증거 커밋입니다. 수치·A/B/B/A 근거·유효성 게이트·증폭 모델·`RenderInterpolate` 접힘·범위 한계는 모두 [6장 `fdf909d` 항목](#6-fdf909d-t1a-죽은-회전-쓰기-제거)에 있고 **여기서 반복하지 않습니다.** T1a 수치를 인용할 일이 있으면 `Perf/MANIFEST.md` §7.7 (a)~(g)를 먼저 읽으세요.
 
 증거 문서에만 있고 CSV에는 보이지 않는 두 가지만 남깁니다.
@@ -177,6 +176,10 @@ A/B 측정에서 "정말 다른 코드를 쟀는가"는 가장 조용하게 실�
 ## 5. ff60d39 측정 증거와 계획 정정
 
 `[Docs]` · `Docs/CrowdCity/Perf/simopt10k_step1_r{1,2,3}.txt` + `Docs/CrowdCity/Perf/MANIFEST.md` 신설, `SIM_OPT_10K_PLAN.md` §2·§4 재작성. **코드·빌드·런타임 표면 변경 없음.**
+
+> **직접 확인하는 법.** 판정의 근거 수치 7행을 한 번에 보려면:
+> `grep -E '^10000,(Follower|Neutral)(Prepass|GridSnapshot|Present|JobWait)' Docs/CrowdCity/Perf/simopt10k_step1_r1.txt`
+> 직렬 5행(`*Prepass`·`FollowerGridSnapshot`·`*Present`)을 더하면 14.47, 잡 대기 2행(`*JobWait`)을 더하면 2.78이 나옵니다. `r2`/`r3`로 바꿔 런 간 흔들림도 직접 보세요.
 
 ### 5.1 이 측정이 답하려 한 질문
 
@@ -304,6 +307,9 @@ A/B 측정에서 "정말 다른 코드를 쟀는가"는 가장 조용하게 실�
 ## 6. fdf909d T1a 죽은 회전 쓰기 제거
 
 `[Perf]` · `Assets/@Project/Crowd/Scripts/CrowdRoot.cs` `+26 / −10`
+
+> **직접 확인하는 법 (코드).** `git show fdf909d -- Assets/@Project/Crowd/Scripts/CrowdRoot.cs` — 추가된 `if (!_gpuRenderActive)` 6개와 삭제된 로컬 2개가 전부입니다.
+> **직접 확인하는 법 (수치).** `awk -F, '/^10000,/{print FILENAME": "$10}' Docs/CrowdCity/Perf/t1a_p95_*.csv` → AFTER 10.416 / 10.158, BEFORE 23.916 / 22.310. arm별 평균차가 헤드라인 −12.83입니다(10번째 필드 = `simtick_median_ms`, 읽는 법은 [6.9.1절](#691-simtick-열에-renderinterpolate가-접혀-있고-그-접힘이-헤드라인을-과소평가한다) 주의).
 
 ### 6.1 무엇을 바꿨나
 
@@ -535,6 +541,8 @@ arm 평균은 **BEFORE 14.25% vs AFTER 10.99%** 로, **부하가 높은 쪽이 B
 
 `[Fix]` · `Assets/@Project/Human/Scripts/Human.cs` `+2`줄(주석 포함)
 
+> **직접 확인하는 법.** 변경 자체는 `git show dcb3bfb --stat` → `Human.cs | 2 ++` 한 줄로 끝납니다. 유령을 **재현**하려면 그 2줄을 되돌린 트리에서 `CrowdShotHarness`를 돌리고(`-executeMethod CrowdShotHarness.RunFromBatch -shotOut <dir> -shotNeutral 700 -shotTicks 150`, `-nographics` 금지) `gpu_on.png`에서 빨간 리더 그룹이 두 번 찍히는지 보면 됩니다. 단 "704회" 로그 카운트는 세션 scratchpad 로그에서 나온 값이라 저장소만으로는 재현되지 않습니다 — 검증 신호는 [7.7절](#7-dcb3bfb-에디트-모드-rig-유령-수정)대로 **픽셀/육안**입니다.
+
 ### 7.1 무엇을 바꿨나
 
 `Human.DestroyVisualRig()`(`Human.cs:72`)에서, 기존 지연 `Destroy(_animator.gameObject)`(`Human.cs:79`) **직전에** `_animator.gameObject.SetActive(false);`(`Human.cs:78`)를 추가했습니다. `Destroy` 호출은 그대로 둡니다.
@@ -630,6 +638,8 @@ arm 평균은 **BEFORE 14.25% vs AFTER 10.99%** 로, **부하가 높은 쪽이 B
 ## 8. 1485848 분리 계측 세그먼트 7개 추가
 
 `[Tooling]` · `CrowdSimProfiler.cs` `+18 / −3`, `CrowdRoot.cs` `+14 / −0`
+
+> **직접 확인하는 법.** "로직이 안 바뀌었다"는 핵심 주장은 `git show 1485848 --stat`으로 즉시 보입니다 — `CrowdRoot.cs | 14 ++++++++++++++`, **`-` 기호가 하나도 없습니다**(삭제 0줄). 계측 커버리지는 `grep -E '^10000,(FollowerSteer|FollowerPrepass|FollowerGridSnapshot|FollowerJobWait|FollowerPresent),' Docs/CrowdCity/Perf/simopt10k_step1_r1.txt` → 하위 4개 합 11.7414 ÷ 부모 11.7482 = **99.94%** 입니다.
 
 ### 8.1 왜 세그먼트를 쪼개야 했나
 

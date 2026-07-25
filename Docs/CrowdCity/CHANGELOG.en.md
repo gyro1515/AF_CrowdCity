@@ -21,7 +21,7 @@ Measured so far: the §2 serial-vs-job split (headless, `CrowdProfileHarness`), 
 
 ### Immediately next — this is a RE-DECISION, not new work
 
-`SIM_OPT_10K_PLAN.md` §4 currently says "next = T1b". **That verdict is in question. Do not start T1b before resolving it.**
+`SIM_OPT_10K_PLAN.md` §2 concluded "T1b 확정" and §4 promoted it to next. **That verdict is in question. Do not start T1b before resolving it.** §4 item 3 has been corrected to "잠정 다음 — 재측정 대기" (provisionally next, awaiting re-measurement); **§2's own verdict text is still uncorrected** — it is the re-measurement's job to settle it.
 
 Why: §2 was measured **headless**, which runs the SMR path (`CrowdRenderer.Init` returns `false` on a null graphics device — `CrowdRenderer.cs:98..102`), so `_gpuRenderActive == false` and every `*Present` figure **includes the very writes T1a removed**. The plan recorded the break-even explicitly: at 10k the verdict flips if **more than 86.1%** of `Present` cost is SMR-only (`SIM_OPT_10K_PLAN.md` §2). T1a's measured gain is **−12.83 ms/tick**, which is **~94%** of the 13.58 ms combined `Present` @10k (`FollowerPresent` 8.87 + `NeutralPresent` 4.71).
 
