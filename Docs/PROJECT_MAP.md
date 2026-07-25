@@ -146,7 +146,7 @@ The three Burst jobs are in §6.
 
 - innerloop batch constant `SteeringForceBatch = 64` — `CrowdRoot.cs:29`
 - native grid snapshot (job input) — `CrowdRoot.cs:1317`
-- serial prepass / serial present pass — followers `:1215-1313` / `:1397-1448`, neutrals `:1557-1581` / `:1616-1637`
+- serial prepass / serial present pass (each bracketed by `CrowdSimProfiler.Begin/End(Seg.…)`, all inside `SteerFollowersAndNeutrals` `:1212`) — followers `:1215-1313` / `:1397-1448`, neutrals `:1557-1581` / `:1616-1637`
 - serial `CC.Move` fallback path (`!sdfActive`) — followers `:1450-1544`, neutrals `:1639-1679`
 - all jobs: `FloatMode.Strict` + `FloatPrecision.Standard`
 
@@ -159,7 +159,7 @@ The three Burst jobs are in §6.
 | bake tool (editor, once) | `Assets/@Project/City/Editor/WallFieldBaker.cs:24` · menu `:90` · `BakeParams.Default` `:45` |
 | validator | `Assets/@Project/City/Editor/WallFieldValidator.cs:27` (menu), `:57` (`Validate`) |
 | output assets | `Assets/@Project/City/Generated/WallSdf.asset` + `WallSdf.bytes` |
-| live values (`.asset`) | `cellSize 0.1` `:18` · `cols 928 / rows 914` `:19-20` · `yMin 0.8 / yMax 3.2` `:21-22` · `maxDistance 2.5` `:23` · `bilinearBias 0.05` `:24` · `colliderCount 40` `:25` |
+| live values (`.asset`) | `cellSize 0.1` `:18` · `cols 928 / rows 914` `:19-20` · `yMin 0.8 / yMax 3.1999998` `:21-22` · `maxDistance 2.5` `:23` · `bilinearBias 0.05` `:24` · `colliderCount 40` `:25` |
 | runtime load | `CrowdRoot.cs:339-362` → `Crowd/Core/WallField.cs:52` |
 | query | `Crowd/Core/WallField.cs:171` (`Phi`), `:198` (`Gradient`) |
 | move resolve | `Crowd/Core/WallSolver.cs:54` |
@@ -192,7 +192,7 @@ The three Burst jobs are in §6.
 | internals (`Resources.Load<GameObject>` + `GetComponent<T>`) | `:68` |
 | loaded prefabs | `Game/Resources/Prefabs/{GameplayRoot,InputRoot,CameraRoot}.prefab` · `Crowd/Resources/Prefabs/CrowdRoot.prefab` · `Hud/Resources/UI/HudRoot.prefab` · `DevTools/Resources/UI/DevHudRoot.prefab` |
 | non-Resources serialized prefabs | `Human/Prefabs/Human.prefab` · `Hud/Prefabs/{CrowdLabel,RivalMarker}.prefab` · `City/Prefabs/GeneratedBuildings/Building_00…36.prefab` |
-| validator (duplicate keys · root contract · wiring · source-policy) | `Assets/@Project/Game/Editor/ResourcePathValidator.cs:70` (menu), `:81` (`Validate`) — target type lists `:49-63`, canonical loader path constant `:30` |
+| validator (duplicate keys · root contract · wiring · source-policy) | `Assets/@Project/Game/Editor/ResourcePathValidator.cs:70` (menu), `:81` (`Validate`) — target type lists `PrefabRootTypes` `:52-58` / `UiRootTypes` `:61-65`, canonical loader path constant `:32` |
 | rule authority | `CLAUDE.md` §11.5 |
 
 ---
@@ -204,7 +204,7 @@ The three Burst jobs are in §6.
 | bus implementation (static) | `Assets/@Project/Manager/EventManager/Scripts/EventManager.cs:75` |
 | `GetPublisher<T>` / `GetSubscriber<T>` | `:82` / `:91` |
 | `ClearAll` / auto-clear at play-session start | `:119` / `:127-128` |
-| per-subscriber exception isolation (**Editor only**) | `:166`, `:189` |
+| per-subscriber exception isolation (**Editor only**) | `:189-207` (Editor-only null-callback log in `Subscribe` `:166`) |
 | the 2 event payloads | `Crowd/Contracts/Events/CrowdEvents.cs:6`, `:34` |
 | publish sites (the only ones) | `CrowdRoot.cs:1953`, `:1964`, `:1976` (all inside `PublishTickEvents` `:1945`) |
 | subscribers | `GameSession.cs:54` · `HudRoot.cs:119` · `CameraRoot.cs:125` |
@@ -230,7 +230,7 @@ The three Burst jobs are in §6.
 | Item | Location |
 |---|---|
 | city source FBX / atlas | `Assets/@Project/City/Externals/City.fbx`, `city_atlas.png` |
-| 37-building split generator | `Assets/@Project/City/Editor/CityBuildingsGenerator.cs:14` (expectation constants `:16-25`) |
+| 37-building split generator | `Assets/@Project/City/Editor/CityBuildingsGenerator.cs:14` (path constants `:16-21`, expected-count constants `:22-25`) |
 | generated output | `City/Generated/BuildingMeshes/Building_00…36.asset`, `City/Prefabs/GeneratedBuildings/` |
 | occluded material | `City/Materials/City_Occluded.mat` |
 | Human source FBX / animator controller | `Human/Externals/Human_Base.fbx`, `Human/Animations/HumanWalk.controller` |
