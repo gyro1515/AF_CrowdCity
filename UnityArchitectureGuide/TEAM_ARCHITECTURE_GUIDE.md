@@ -29,7 +29,7 @@
 - FeatureRoot는 자기 기능의 생성, 해제, 규칙, 런타임 상태를 소유한다.
 - 부모는 자식을 직접 호출하고, 자식은 C# event/callback으로 알린다.
 - EventBus를 기본 통신 방식으로 쓰지 않는다. 먼저 직접 호출, C# event/callback, 상위 바인딩으로 충분한지 확인한다.
-- 단, 하나의 fact를 HUD, Tutorial, Analytics, Sound처럼 2개 이상 독립 경계 객체가 관찰해야 한다면 session-scoped MVP-light EventBus를 제한적으로 사용할 수 있다.
+- 단, 하나의 fact를 HUD, Tutorial, Analytics, Sound처럼 2개 이상 독립 경계 객체가 관찰해야 한다면 session-scoped MVP-light EventBus를 제한적으로 사용할 수 있다. **(이 프로젝트 예외 — 따르지 말 것: `CLAUDE.md`/`AGENTS.md` §0.2가 이 프로젝트에서는 EventBus 구현을 미리 두는 것을 금지한다. 프로젝트 규칙이 이 일반 가이드보다 우선한다.)**
 - ScriptableObject에 현재 플레이 상태를 저장하지 않는다.
 - 구독한 생명주기와 같은 생명주기에서 해제한다.
 - 비동기 작업에는 취소와 예외 처리 기준을 둔다.

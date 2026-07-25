@@ -1,6 +1,6 @@
 # WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
 
-> **검증 기준 커밋: `47cbb79`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
+> **검증 기준 커밋: `ee73897`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
 
 > **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 다음 패스에 작성 예정).
 > **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고, 이번 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 다음 패스 몫이다.
