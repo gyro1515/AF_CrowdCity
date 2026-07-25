@@ -74,6 +74,8 @@ public sealed class Human : MonoBehaviour
         // _animator.gameObject == root의 유일한 자식(rig 조상). 이 단일 자식을 파괴하면 SMR+Animator+전체 본이 함께 사라진다.
         if (_animator != null)
         {
+            // 지연 Destroy는 edit mode에서 거부돼 rig가 살아남아 계속 렌더되므로, 먼저 비활성화해 모든 경로에서 rig 렌더 중단을 결정적으로 만든다.
+            _animator.gameObject.SetActive(false);
             Destroy(_animator.gameObject);
         }
     }
