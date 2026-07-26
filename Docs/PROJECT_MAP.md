@@ -2,7 +2,7 @@
 
 > **Question this document answers: "where is it?"** Reader is an AI. **Pointers only** — no explanation, no rationale, no measurements.
 > Current state, invariants, gates and traps live in [`WORK_STATE.md`](WORK_STATE.md); explanation and rationale live in the per-area human guide. `CLAUDE.md` §1.1 is authoritative for the boundary between the three.
-> Line numbers are coordinates as of the referenced commit. If one is off, re-find by symbol name and fix this file.
+> Line numbers are coordinates as of commit `ecdfd45`. If one is off, re-find by symbol name and fix this file.
 
 ---
 
@@ -14,11 +14,12 @@
 | `Assets/@Project/{City,Crowd,DevTools,Game,Hud,Human,Manager}/` | feature folders |
 | `Assets/@Project/Scenes/GameScene.unity` | the only scene. Roots: `GameArea` (`City`/`Human`), `Main Camera`, `Directional Light`, `Global Volume`, `GameSceneController` |
 | `Assets/Settings/`, `Assets/TextMesh Pro/` | URP settings, TMP Essential (tracked infrastructure) |
-| `Packages/manifest.json` | Unity `6000.3.9f1`, URP, Input System, Burst/Collections/Mathematics |
+| `Packages/manifest.json` | URP, Input System, Burst/Collections/Mathematics |
+| `ProjectSettings/` | editor version `6000.3.9f1` — `ProjectVersion.txt:1` · `Unit` physics layer (layer 8) — `TagManager.asset:16`, consumed by `CrowdRoot.cs:39` (`UnitLayerName`) and `RivalAiDriver.cs:25` (`WallProbeMask`) |
 | `Docs/` | documents (§16) |
 | `UnityArchitectureGuide/` | general reference material (not a project authority) |
 
-Per-feature folder convention: `Scripts/` · `Editor/` · `Contracts/` · `Core/` · `Tests/Editor/` · `Resources/{Prefabs,UI}/` · `Externals/` · `Generated/` · `Prefabs/` · `Materials/` · `VAT/`
+Per-feature folder convention: `Scripts/` · `Editor/` · `Contracts/` · `Core/` · `Tests/Editor/` · `Resources/{Prefabs,UI}/` · `Externals/` · `Generated/` · `Prefabs/` · `Materials/` · `Animations/` · `VAT/`
 
 Only two asmdefs: `Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef`, `Assets/@Project/Crowd/Tests/Editor/Project.CrowdCity.Core.Tests.asmdef`. Everything else is `Assembly-CSharp`.
 
@@ -91,7 +92,7 @@ The three Burst jobs are in §6.
 |---|---|
 | constants (spawn/grid/wall clearance `0.43`/VAT period) | `:15-39` |
 | serialized fields `_humanPrefab`/`_wallSdfAsset`/`_useSdfSolver`/`_crowdRenderer`/`_spawnBatchSize` | `:54`, `:61`, `:69`, `:72`, `:153` |
-| visual-only arrays `_visualPrev/_visualCur/_visualRender/_visualYaw/_visualSpeed01/_phase01` | `:104-115` |
+| visual-only arrays `_visualPrev/_visualCur/_visualRender/_visualYaw` · `_visualSpeed01/_phase01` | `:104-107` · `:114-115` |
 | `_gpuRenderActive` | `:119` |
 | observation API `IsSdfActive`/`OracleAgentCount`/`LastScheduledFollowerCount`/`OracleReadAgent` | `:177`, `:199`, `:205`, `:211` |
 | `Initialize` (kernel allocation + WallField load + publisher acquisition) | `:227` |
@@ -100,6 +101,7 @@ The three Burst jobs are in §6.
 | `SpawnLeaders` / `SpawnNeutralRange` / `FinalizeSpawn` | `:526` / `:578` / `:632` |
 | rig-destroy call sites (both inside `if (_gpuRenderActive)`) | `:567-570`, `:623-626` |
 | **`SimTick`** (10 pinned phases) | `:659` |
+| ├ apply pending match state ① (flag set by `OnMatchStateChanged` `:799`) | `:666-671` |
 | ├ `PrevPos` snapshot / `sdfActive` capture | `:680` / `:684` |
 | ├ Restore (leaders only on the SDF path) | `:690` |
 | ├ `UpdateHeadings` ② | `:693` → `:1130` |
@@ -204,7 +206,7 @@ The three Burst jobs are in §6.
 | bus implementation (static) | `Assets/@Project/Manager/EventManager/Scripts/EventManager.cs:75` |
 | `GetPublisher<T>` / `GetSubscriber<T>` | `:82` / `:91` |
 | `ClearAll` / auto-clear at play-session start | `:119` / `:127-128` |
-| per-subscriber exception isolation (**Editor only**) | `:189-207` (Editor-only null-callback log in `Subscribe` `:166`) |
+| per-subscriber exception isolation (**Editor only**) | `:189-207` (Editor-only null-callback log in `Subscribe` `:162` — log at `:167`) |
 | the 2 event payloads | `Crowd/Contracts/Events/CrowdEvents.cs:6`, `:34` |
 | publisher acquisition (the only one) | `CrowdRoot.cs:333-334` |
 | publish sites (the only ones) | `CrowdRoot.cs:1953`, `:1964`, `:1976` (all inside `PublishTickEvents` `:1945`; called from `FinalizeSpawn` `:640` and `SimTick` ⑩ `:717`) |
@@ -250,10 +252,10 @@ The three Burst jobs are in §6.
 |---|---|
 | Setup Game Scene | `Game/Editor/GameSceneSetup.cs:236` (`Apply` `:237`) |
 | Setup City Buildings | `GameSceneSetup.cs:326` |
-| Bake Human Prefab | `GameSceneSetup.cs:1116` |
-| Bake Crowd Renderer | `GameSceneSetup.cs:1698` |
-| Bake Feature Root Prefabs | `GameSceneSetup.cs:1926` |
-| Bake Dev HUD | `GameSceneSetup.cs:2175` |
+| Bake Human Prefab (Resources + CC and Human) | `GameSceneSetup.cs:1116` |
+| Bake Crowd Renderer (VAT material + CrowdRenderer child) | `GameSceneSetup.cs:1698` |
+| Bake Feature Root Prefabs (Resources) | `GameSceneSetup.cs:1926` |
+| Bake Dev HUD (Resources) | `GameSceneSetup.cs:2175` |
 | Validate Game Scene | `Game/Editor/GameSceneValidator.cs:49` (`Validate` `:62`) — pinned CC spec constants `:37-41` |
 | Validate Resource Paths | `Game/Editor/ResourcePathValidator.cs:70` |
 | Bake Wall SDF | `City/Editor/WallFieldBaker.cs:90` |
