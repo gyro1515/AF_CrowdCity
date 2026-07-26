@@ -1,9 +1,9 @@
 # WORK_STATE — in-flight work state (repo-wide, for cold starts)
 
-> **Verified-against commit: `ea752a6`** — this document was confirmed true as of that commit. If `git rev-parse --short HEAD` differs from that hash, do not trust this document until you have read the commits in between — the procedure is the "Session start" rule in `CLAUDE.md`/`AGENTS.md`.
+> **Verified-against commit: `f6f59b6`** — this document was confirmed true as of that commit. If `git rev-parse --short HEAD` differs from that hash, do not trust this document until you have read the commits in between — the procedure is the "Session start" rule in `CLAUDE.md`/`AGENTS.md`.
 
-> **The question this document answers: "What is in flight, and what must not be broken?"** The reader is AI. It is a repo-wide document, split into **per-area sections**. Structure ("where is it") belongs to `Docs/PROJECT_MAP.md`; explanation and rationale ("why is it built this way") belongs to the per-area human guide — `CLAUDE.md` §1.1 is the authority on the boundary between the three (both have been written — `4cd9260` created `PROJECT_MAP.md`, `a28aee3` created the CrowdCity guide [`CROWD_GUIDE.md`](CrowdCity/CROWD_GUIDE.md)).
-> **Everything below is the CrowdCity area section.** On 2026-07-26 it was renamed and moved from `Docs/CrowdCity/SIM_OPT_HANDOFF.md` (`ce53e44`); that pass changed only the name, the path, and self-references. The per-area section restructure has not been done yet (not started).
+> **The question this document answers: "What is in flight, and what must not be broken?"** The reader is AI. It is a repo-wide document, split into **per-area sections**. Structure ("where is it") belongs to `Docs/PROJECT_MAP.md`; explanation and rationale ("why is it built this way") belongs to the per-area human guide — `CLAUDE.md` §1.1 is the authority on the boundary between the three.
+> **Everything below is the CrowdCity area section.** The per-area section restructure has not been done yet (not started).
 
 ---
 
@@ -17,15 +17,6 @@ Branch: **`feat/crowd-sim-10k`** (resume on another PC with `git fetch && git ch
 ### Current state / next step
 
 Instrumentation, the edit-mode rig fix, and T1a are all done and measured. Three things have been measured: ① the §2 "serial vs job-wait" split (**SMR path**, headless `CrowdProfileHarness`), ② T1a's GPU-path gain (play mode, `CrowdPerfHarnessP95`), and ③ the same split **re-measured on the GPU path** (edit-mode `CrowdProfileHarness`, without `-nographics`).
-
-| Item | Commit | State |
-|---|---|---|
-| Split instrumentation — 7 profiler Segs | `1485848` | Done, oracle byte-identical |
-| Edit-mode rig ghost fix | `dcb3bfb` | Done, screenshot-verified |
-| T1a — removed dead `transform.rotation` writes on the GPU path | `fdf909d` | Done, correctness + performance measured |
-| §2 measurement evidence + plan correction | `ff60d39` | Done (docs only) |
-| T1a GPU-path A/B measurement evidence | `e0f81e4` | Done (docs only) |
-| GPU-path segment re-measurement + verdict correction | `47cbb79` | Done (docs only), measurement tree `f9c1cdc` |
 
 **The re-decision is finished.** `CrowdProfileHarness` was run 3 times without `-nographics` (with `_gpuRenderActive == true` proven 3 ways — `Perf/MANIFEST.md` §8.3) and the same segments were measured again. Results:
 
@@ -43,14 +34,11 @@ This branch's optimization plan was built **on the premise that "10k is the prob
 - **No target has been chosen yet. It is open.** What is needed is not a more precise 10k measurement but **a different discriminator** (scaling exponent / parallel-segment behaviour on a real device with fewer worker cores / render tier ceiling). **None of those three axes has been measured yet.** Do not pick by segment share.
 - **The old rationale `T2 is deprioritized — 13.5% ceiling` is void.** That was an SMR-path number; on the GPU path job-wait is **31.5%** of Total. This does not mean T2 won — it means that deprioritization argument must not be reused.
 
-**🔻 Full documentation audit (2026-07-26) — closed. All 113 findings were processed, and this document's share of them is corrected in the body below.**
-
-The 3 authoritative documents plus `Perf/MANIFEST.md` were compared exhaustively against code, git, and raw data, producing **113 findings** (`PROJECT_MAP` 12 · `WORK_STATE` 49 · `CROWD_GUIDE` 38 · `MANIFEST` 14). The 96 in-file findings were closed by `58f8b68` (including the retraction of the "3400 = render-bound" claim), the round-2 cross-verification results by `eacd1bb`, the 1 verification-stamp mechanism finding by `1fa2fdb`, and the 16 cross-document boundary findings by `821ab01` (12 relocated, 4 deliberately left) and `a431ff0` (§3 workflow contract → `CLAUDE.md`/`AGENTS.md`). The raw results under `Docs/Audit/2026-07-26/` were a temporary work list, not a fourth document (`CLAUDE.md` §1.1), so they were deleted — read them with `git show ecdfd45 -- Docs/Audit/2026-07-26/`.
+The raw results under `Docs/Audit/2026-07-26/` were a temporary work list, not a fourth document (`CLAUDE.md` §1.1), so they were deleted — read them with `git show ecdfd45 -- Docs/Audit/2026-07-26/`.
 
 **If you pull it back out of history, one trap: that report is single-agent output, so it is not trusted input.** Every item was re-verified against a primary source (`.cs` / `.asset` / raw `Perf/` files / `git`) before being applied, and findings the re-verification refuted were not applied — round-2 cross-verification likewise confirmed 22 and refuted 7. The report's prose totals also disagree with its own tables (the tables are authoritative).
 
-**4 items deliberately left here even though the boundary rules put them outside this document's remit** (they have no destination, or moving them destroys the fact — do not try to move them again):
-- The 2026-07-19 "done" list and the 2026-07-17 marker section — their designated destination is "git history", which makes it a **deletion**, not a relocation, and both sections carry live traps (the Burst 22.95→14.04 "do not re-cite" warning, and the local-memory-not-synced warning).
+**2 items deliberately left here even though the boundary rules put them outside this document's remit** (they have no destination, or moving them destroys the fact — do not try to move them again):
 - The `14.86` commit-lineage account — its designated destination `CROWD_GUIDE.md` §15 already carries the **lesson** (an old document is confidently wrong), but what remains here is the **evidence** for a live correction, and per `CLAUDE.md` §1.1 Rule 2 an AI may not read the human guide as a source of fact.
 - The §9.6 render tier table — its designated destination `CROWD_GUIDE.md` forbids numeric tables and invented targets in its own §0/§16 and explicitly disclaims ownership of this verdict in §10. Moving it would break the destination document's own contract.
 
@@ -96,13 +84,7 @@ The 3 authoritative documents plus `Perf/MANIFEST.md` were compared exhaustively
 
 ### Done (committed and pushed)
 - Burst hot jobs enabled (FloatMode.Strict): 10k SimTick 22.95→14.04ms (−38.8%) — ⚠️ **the harness, the mode, and the raw artifacts are all missing.** `433b5fe` was the first to write it down, and no file under `Perf/` and nothing in `MANIFEST.md` holds matching data. The two committed datasets (SMR 20.56 / GPU 9.56) are post-T1a code and therefore not directly comparable, which also leaves no way to trace back which mode either endpoint belongs to → **do not re-cite this delta as evidence** (that Burst is enabled at all is confirmed in code)
-- GPU crowd renderer toggle → GameConfigSO, default ON (Animator/SMR removed, automatic fallback on unsupported devices)
-- Density-field separation: added, then removed (unusable — bouncing)
 - Config defaults: useGpuCrowdRenderer=ON, CombatFlatConvertRate=ON, SeparationVisitBudget=0 (cap reverted — caused jitter in dense clusters), neutralCount=3000 (the "60fps in the editor" basis for this was retracted under "Key status" below), ConvertPerSecond=100
-- DevHudRoot: dev-only starting-population selector + FPS overlay (gate: Debug.isDebugBuild && !batchmode) — for measuring per-population in a build
-- Chunked (multi-frame) spawning — eases the spawn freeze at high populations
-- Leader-radial separation A/B toggle (SeparationMode, default OFF = Pairwise, byte-identical) — works but striped; needs a policy
-- Measurement/screenshot editor harnesses, the CLAUDE.md Codex `< /dev/null` rule
 
 ### Key status
 
@@ -129,11 +111,9 @@ The 3 authoritative documents plus `Perf/MANIFEST.md` were compared exhaustively
 1. [user] Development build + DevHudRoot FPS, measuring real frame time per population → the true pipeline 60fps population + a sim-vs-render bottleneck verdict.
 2. [art] Decimated render mesh (~200–500 vert) — the mobile shipping gate for the GPU renderer. **The verdict that this is the key lever for raising population was retracted in the retracted item above** — reviving it requires "Remaining work" item 1 first.
 3. [deferred until sim becomes the bottleneck] Leader-radial policy: (a) fix bucket → exact cell occupancy count (Codex: hash collisions inflate occ → false positives → stripes), (b) T/gain/tangential tuning.
-4. ~~[after build measurement] Native position authority — remove the per-tick 10k transform round trip (Restore+Mirror) = the largest remaining serial sim gain (needs a determinism re-baseline).~~ **[Done — P3]** `ff27407` (S3: followers/neutrals author `buffer.Pos` directly) → `d124de3` (S4a: gate `Restore` behind `if (!sdfActive || IsLeader[i])`, move the pre-pass and wander raycast onto `PrevPos`) → `b564fb6` (S4b1: native `_visualYaw`) → `20cab38` (S4b2: stop writing follower/neutral transforms on the GPU path). On the SDF path `MirrorPositionsToBuffer` now mirrors **live leaders only (≤4)** (`CrowdRoot.cs:1741`). No re-baseline was needed — every stage was byte-identical to oracle `4F79282E…` (mechanism-only change, simulation result unchanged).
 5. Scope B: the §4 milestone Burst golden baseline (extended snapshot fields, numeric tolerance, player AOT build).
 6. Manual checks: DevHudRoot button/FPS behaviour, no popping after chunked spawn, whether pop-in during GPU-path spawning is acceptable (fixable with progressive reveal).
 7. Harness cleanup (DestroyImmediate after Shutdown — minor).
-8. ~~[user] **Commit the artifact for the oracle md5 gate value** — `4F79282EB20A79023B45F2EB2DE5271B` in the gate section exists only in this document and is therefore not established by the repo. Run the new-machine procedure from the gate section once and leave the md5 of `phaseC_oracle_snapshot_n2000_s12345.bin` in a tracked file (this needs a Unity run, so a docs pass cannot handle it).~~ **[Done]** `fa6eae7` added [`Perf/oracle_baseline_n2000_s12345.md`](CrowdCity/Perf/oracle_baseline_n2000_s12345.md): two independent batchmode runs at `4ee8466` both produced `4F79282EB20A79023B45F2EB2DE5271B` (four simulations in total, verify ON), with the summary/events CSV md5s recorded alongside. The `.bin` (about 17.2 MB) stays untracked — the file is a **checksum record, not the snapshot**, so re-verification is a re-run plus a checksum comparison (gate section above).
 
 ### Deliberately deferred MINOR items (raised in MVP cross-verification → accepted and deferred, re-confirmed against code at `c9e61a4`)
 
@@ -149,8 +129,6 @@ The following were raised by CODEX/Claude review back in the MVP era but were **
 | `HudRoot` per-event `ToString()` allocation | `HudRoot.cs:780` (`SetCrowdCount`) ← bus handler `:339` | Presentation path; both sides accepted it for MVP |
 | `EventManager` `GetInvocationList()` allocation on the editor path | `EventManager.cs:196` (`#if UNITY_EDITOR` branch) | **Off-limits authoritative infrastructure; do not edit** |
 
-**1 item resolved:** "unnecessary prefab rewrites" is closed — every authoring path now has a load-or-create / save-only-when-changed guard (`GameSceneSetup.cs:1141-1144`, `:1438-1446`, `:1486-1491`, `:1567-1572`, `:1664-1669`).
-
 ### Workflow
 - Loop: optimize → raise neutralCount → repeat. Goal = a stable 60fps in the editor. ConvertPerSecond=100 is intended tuning.
 - Cross-verification: Codex (gpt-5.6-sol ultra) synchronous with `< /dev/null` ↔ Claude, until consensus.
@@ -158,11 +136,9 @@ The following were raised by CODEX/Claude review back in the MVP era but were **
 ---
 
 ## 🔄 Other-PC resume marker (updated 2026-07-17)
-- **Baseline HEAD = `5caae09`** (branch `feat/crowd-sdf-perf`) — pushed to `origin/feat/crowd-sdf-perf` (advanced from the previous marker's `fb14a41`). On the other PC everything arrives via `git pull` (branch `feat/crowd-sdf-perf`). No local uncommitted work or stashes → nothing lost.
 - **Rays (`Physics.Raycast`) are for wall detection, but had a layermask bug, fixed in `5caae09`.** There are only two: `Assets/@Project/Crowd/Scripts/RivalAiDriver.cs:205` (`ProbeClearance` — declared at `:200`, called from `ApplyWallAvoidance`, wall avoidance) and `Assets/@Project/Crowd/Scripts/CrowdRoot.cs:1697` (`RepickWanderHeading` — declared at `:1685`, wall detection for the wander heading). Both are for wall detection, but **they were being fired without a layermask (`Physics.DefaultRaycastLayers`), so Unit (crowd) colliders were being mistaken for walls — a real bug** — the previous marker checked only the rays' *purpose*, never the layermask, and so wrongly concluded "already cleaned up". Excluding the Unit layer from the mask **FIXED** it in `5caae09` (current mask computation `CrowdRoot.cs:240`·`:250`).
 - **Crowd-to-crowd (agent-to-agent) tests are not rays; they go through `SpatialGrid.QueryCircle`.** In the current tree there are **4 call sites** (recruit = `RecruitResolver.cs:75`, combat = `CombatResolver.cs:287`·`:487`, AI neutral density = `RivalAiDriver.cs:129`), and **separation is no longer a `QueryCircle` caller** — it reproduces the same enumeration inline inside a Burst job (`SteeringForceJob.cs:104-155`; uncapped-enumeration comment `:91` / cap truncation `:143-148`). The native grid snapshot the job reads is built by `CrowdRoot.cs:1317`. → That said, the 2 wall rays above **really were hitting crowd (Unit)** because of the missing layermask (a misclassification) — **fixed** in `5caae09` by excluding Unit from the mask. Note this misclassification is a correctness issue: the **attribution** of frame time (`Update` self) is **unmeasured** — that self contains both `SimTick` and `RenderInterpolate` (the retracted item in the "Key status" section).
-- **Next task (user intent) = Burst compiler + Job system = plan §3 `M-sim-2` (=M2).** Split 3 ways: M2-a (Native SoA) → M2-b (Burst canonical) → M2-c (IJobParallelFor).
-- **However, the plan/gates made these prerequisites for M2:** `M-sim-0` measurement → `M-sim-1` (grid query density capping). **`M-sim-0` was subsequently executed** — the instrumentation infrastructure is `5c05a27`, and 3 headless 5000/10000 profile runs are committed as `Perf/simopt10k_step1_r{1,2,3}.txt` (`ff60d39`). There is no baseline CSV labelled 'M-sim-0' and the artifacts are labelled `step1_serialsplit_*`, so searching by that name finds nothing. The Burst/job path (M2) has also already landed (`SteeringForceJob`·`FollowerSdfMoveJob`·`NeutralSdfMoveJob` in `Crowd/Core`). The point where user intent (straight to Burst) diverged from the plan order (measure first) is **resolved, because both landed** — this line is a 2026-07-17 statement.
+- There is no baseline CSV labelled 'M-sim-0' and the artifacts are labelled `step1_serialsplit_*`, so searching by that name finds nothing.
 - ⚠ **Memory (local `~/.claude`) does not sync between PCs.** This document (git-tracked) is the only handover source between PCs.
 
 ### 📌 Diagnosis update (2026-07-17, profiler evidence `Docs/Photo/PRO.PNG`, `PRO2.PNG`)
