@@ -44,7 +44,7 @@ MonoBehaviour:
     LeaderProtection: 1
     SeparationVisitBudget: 0
     CombatFlatConvertRate: 1
-    UseDynamicConvertRate: 0
+    UseDynamicConvertRate: 1
     ConvertPerSecondPerMember: 0.1
   aiDecideInterval: 0.4
   fleeSizeRatio: 1.15
