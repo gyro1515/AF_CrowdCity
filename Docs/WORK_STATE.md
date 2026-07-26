@@ -1,6 +1,6 @@
 # WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
 
-> **검증 기준 커밋: `9f23df4`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
+> **검증 기준 커밋: `d136350`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
 
 > **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 작성됐다 — `4cd9260`이 `PROJECT_MAP.md`를, `a28aee3`이 CrowdCity 가이드 [`CROWD_GUIDE.md`](CrowdCity/CROWD_GUIDE.md)를 신설했다).
 > **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고(`ce53e44`), 그 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 다음 패스 몫이다.
@@ -42,6 +42,16 @@
 - **다음 타깃은 20k~50k에서 무엇이 먼저 깨지는가로부터 재도출해야 한다.** 10k 세그먼트 점유율로 고르면 안 된다 — 그 지점에서 두 후보가 동률이고, 동률인 두 값의 순위는 노이즈가 정한다.
 - **타깃은 아직 정하지 않았다. 열려 있다.** 필요한 것은 더 정밀한 10k 측정이 아니라 **다른 판별자**다(스케일 지수 / 워커 코어가 적은 실기기의 병렬 구간 거동 / 렌더 티어 상한). **세 축 어느 것도 아직 측정되지 않았다.** 세그먼트 점유율로 고르면 안 된다.
 - **`T2는 후순위 — 상한 13.5%`라는 이전 근거는 무효다.** 그건 SMR 경로 값이고 GPU 경로에서는 잡 대기가 Total의 **31.5%**다. T2가 이겼다는 뜻이 아니라, 그 후순위 논거를 다시 쓰면 안 된다는 뜻이다.
+
+**🔻 진행 중 — 문서 전수 감사(2026-07-26). 이 문서 자체가 감사 대상이었고, 수정은 0건이다.**
+
+정본 3문서 + `Perf/MANIFEST.md`를 코드·git·원시 데이터와 전수 대조했다. 결과 원문은 [`Docs/Audit/2026-07-26/`](Audit/2026-07-26/) — `PROJECT_MAP` **12** · `WORK_STATE` **49** · `CROWD_GUIDE` **38** · `MANIFEST` **14**, 합계 **113건**. **아직 하나도 고쳐지지 않았다.** 수정은 별개 패스이며, 그 패스를 끝내는 커밋이 저 디렉터리를 삭제한다(임시 작업 목록이지 네 번째 문서가 아니다 — `CLAUDE.md` §1.1).
+
+콜드스타트가 **이 문서에서 지금 믿으면 안 되는 것** 셋(전부 현재 트리에서 재확인함):
+
+- **§9.1 "밀도 캡 — full storage + bounded lane query"(315행)** — 착수자를 `SpatialGrid.QueryCircleCapped`(`SpatialGrid.cs:274`)로 보내지만 그 메서드는 **프로덕션 호출자가 0**이다(유일한 호출자는 `Crowd/Tests/Editor/DensityCapTests.cs`). 살아 있는 캡은 `SteeringForceJob.cs:104-155`의 **중복 인라인 사본**이고, `CrowdRoot.cs:1357`에서 무조건 스케줄된다.
+- **§5 "Step 1 — M-sim-0: 실측"(233행)** — 이미 랜딩된 4개 수정을 미완으로 서술한다. 특히 "현 하네스는 `AddComponent<CrowdRoot>`"는 거짓이다 — 하네스는 라이브 프리팹을 로드한다(`CrowdProfileHarness.cs:157` `ResourceLoader.LoadPrefab<CrowdRoot>()`; `AddComponent<CrowdRoot>`는 트리 전체에서 경고 주석으로만 존재). 지시대로 따르면 끝난 작업을 재실행하고 유효한 baseline을 불신하게 된다.
+- **죽은 좌표 3개** — "다른 PC 재개 마커(2026-07-17)" 절의 151·152·159·160행이 인용한다. `CrowdRoot.cs:929`는 빈 줄, `:1099`·`:1125`는 닫는 중괄호다. 실제 위치는 separation = `SteeringForceJob.cs:91`(무캡)/`:143`(캡), wander 벽 레이 = `CrowdRoot.cs:1697`, 에이전트별 SDF `WallSolver.Resolve` = `CrowdRoot.cs:1723`. 같은 절의 `RecruitResolver.cs:74`→**`:75`**, `CombatResolver.cs:271`→**`:287`**, `:461`→**`:487`**도 off-by-N이다.
 
 ### 깨면 안 되는 불변식
 
