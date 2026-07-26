@@ -135,10 +135,10 @@ r2만 r1/r3의 약 2.3배 부하에서 돌았다. 그러나 **잡 대기가 계�
 - **`*JobWait`은 `CCMove`와 inclusive 중첩이다.** `Begin(CCMove) → Begin(*JobWait) → Complete() → End(*JobWait) → End(CCMove)` 순으로 엄격히 중첩되어 있다(`1485848`). **합산 금지, 이중 차감 금지.**
 - **`CCMove`는 다섯 지점을 합산하는 단일 버킷이다** — `CrowdRoot.cs:1185`(리더 `ApplyHorizontalMove`) / `:1390`(팔로워 SDF 이동 잡 대기) / `:1479`(팔로워 CC 폴백) / `:1608`(중립 SDF 이동 잡 대기) / `:1657`(중립 CC 폴백). 따라서 `CCMove`를 특정 분기의 몫으로 간주하는 산식은 성립하지 않는다.
 - **SDF ON에서 `CCMove` ≠ `CharacterController.Move`.** 실제 CC.Move 호출 수는 0이고(하네스가 단언), 이 구간은 `WallSolver.Resolve`(SDF 이동 해소)의 **병렬 벽시계**다.
-- **하위 세그 합 ≠ 부모.** `FollowerSteer`의 하위 4개 합은 부모의 99.66~99.95%, `NeutralMove`의 하위 3개는 99.97~99.98%다. 잔차는 어떤 하위 세그에도 속하지 않는 job 배선 구간이고, **부모마다 코드 영역이 다르다**(하나로 뭉쳐 읽지 말 것):
+- **하위 세그 합 ≠ 부모.** `FollowerSteer`의 하위 4개 합은 부모의 99.66~99.95%, `NeutralMove`의 하위 3개는 99.97~99.98%다. **이 문서의 잔차 백분율은 전부 원시 파일의 `mean_ms` 열로 계산한다** — (부모 − 하위 세그 합) ÷ 부모 — 같은 계산을 `pct_of_total` 열로 하면 원시 파일 반올림 때문에 값이 달라지므로(§8 5k는 0.63 / 0.63 / 0.83%가 아니라 0.64 / 0.62 / 0.85%가 된다) **두 규약을 섞지 말 것**이고, 4자리 값의 차분이라 정밀도는 5k에서 약 ±0.03pp(10k는 ±0.01pp 미만)여서 "0.83"은 이 규약이 내는 값이지 그보다 정밀한 사실이 아니다. 잔차는 어떤 하위 세그에도 속하지 않는 job 배선 구간이고, **부모마다 코드 영역이 다르다**(하나로 뭉쳐 읽지 말 것):
   - `FollowerSteer` — 계측 공백은 `CrowdRoot.cs:1320-1389`이고 그 안에 `SteeringForceJob` 구조체 배선 + `Schedule`(`:1321-1357`)**과 `FollowerSdfMoveJob` 구조체 배선(`:1364-1389`)이 함께** 들어 있다.
   - `NeutralMove` — 위 코드를 전혀 지나지 않는다. 공백은 `:1582-1607`이고 내용은 **`NeutralSdfMoveJob` 구조체 배선(`:1586-1607`)**이다.
-  - **잔차 상한 ≤0.34%는 이 데이터셋(§1~§6)의 측정값이며 §8로 옮겨지지 않는다.** §8 데이터셋의 `FollowerSteer` 잔차는 5k에서 0.63 / 0.63 / 0.84%, 10k에서 0.14 / 0.13 / 0.19%이고 `NeutralMove`는 0.05~0.09%다 — 최대 0.84%로 ≤0.34%의 약 2.5배다.
+  - **잔차 상한 ≤0.34%는 이 데이터셋(§1~§6)의 측정값이며 §8로 옮겨지지 않는다.** §8 데이터셋의 `FollowerSteer` 잔차는 5k에서 0.63 / 0.63 / 0.83%, 10k에서 0.14 / 0.13 / 0.19%이고 `NeutralMove`는 0.05~0.09%다 — 최대 0.83%로 ≤0.34%의 약 2.5배다.
 - **SUMMARY의 `moved_agents=3` / `leader_disp_m=0`은 "sim이 아무 일도 하지 않았다"는 뜻이 아니다.** 이 두 열은 하네스의 이동 자기검증(`CrowdProfileHarness.cs:297-306`, 주석 "edit 모드 CC.Move 동작 확인용")이고 `Human` clone의 `transform.position`만 비교한다(`:481-487`). SDF 경로에서 팔로워/중립 transform은 `SimTick` 안에서 아예 쓰이지 않고(`CrowdRoot.cs:1418` 주석: "SDF 경로는 transform을 미러링하지 않으므로 … `RenderInterpolate`가 렌더 프레임에만 쓴다") 그 `RenderInterpolate`(`:747`, `:755`)를 이 하네스는 호출하지 않는다 → 팔로워/중립은 논리 위치(`buffer.Pos`)로만 움직인다. transform이 움직이는 것은 리더뿐이고(`ApplyHorizontalMove` → `:1728`), player 리더는 하네스가 `SetPlayerHeading`을 부르지 않아 `moving = t != PlayerTeam || _playerHasHeading`(`:1180`)에서 false다. 즉 **`3` = rival 리더 3기(rivalCount=3), `leader_disp_m=0` = player 리더 정지**이며, 여섯 개 원시 파일의 모든 SUMMARY 행이 `3` / `0`인 이유다.
 - **`FollowerJobWait`은 순수 move 잡 비용이 아니다.** `forceHandle`을 의존성으로 스케줄한 잡의 `.Complete()`를 재므로 `SteeringForceJob`의 잔여 실행분을 흡수한다.
 - **`*Present`는 상한(upper bound)이다.** 헤드리스는 SMR 경로(`_gpuRenderActive == false`)라 `*Present`가 GPU 빌드에서는 게이팅되는 `transform.rotation` + `Animator.speed` 쓰기(T1a, `fdf909d`)까지 포함한다. GPU 빌드의 실제 `*Present`는 이보다 싸다. 단 `Quaternion.Euler(0f, X, 0f).eulerAngles.y`(`CrowdRoot.cs:1430`, `:1440`, `:1631`)는 그 게이트 **밖**에 있어 GPU 빌드에서도 남는다. → **§8이 이 상한과 실제 값의 간격을 실측했다**(10k `*Present` 합 13.58 → 2.22 ms, −83.6%).
@@ -178,7 +178,7 @@ r2만 r1/r3의 약 2.3배 부하에서 돌았다. 그러나 **잡 대기가 계�
 | 씬 | `Assets/@Project/Scenes/GameScene.unity`, `GameSceneController` 비활성 |
 | 스케일 | `-perfCounts 10000` (agents 10004) |
 | 프레임 / 워밍업 | 300 프레임 / 2.0초 — **하네스 기본값 유지** |
-| sim cadence | `FixedStep = 0.02`, `MaxStepsPerFrame = 4`, 실제 `Time.deltaTime` 누산 (`CrowdPerfHarnessP95.cs:164-165`, `:459`) |
+| sim cadence | `FixedStep = 0.02`, `MaxStepsPerFrame = 4`, 실제 `Time.deltaTime` 누산 (`CrowdPerfHarnessP95.cs:164-165`, `:457-459`) |
 | 런 수 | **arm당 2런** (BEFORE r1/r2, AFTER r1/r2) |
 
 `SeparationVisitBudget = 48`은 CSV 1행 헤더에 찍혀 있지만 그 줄은 **하드코딩 문자열**(`CrowdPerfHarnessP95.cs:96`)이라 실효값 판독이 아니다 — 실제 강제 지점은 `:290`이고 양 arm이 같은 코드를 지나므로 arm 간 동일하다는 것은 성립한다. **이 값은 하네스가 강제한 것이고 출하 asset은 0이다** — 문서 머리의 경고와 §7.7-h를 함께 읽을 것.
@@ -339,7 +339,7 @@ Editor + Mono 스크립팅 백엔드, Ryzen 5 5600X(6C/12T) + RTX 4080, D3D11에
 - **왜 별도 측정인가:** §7은 T1a의 이득 크기를 쟀지만 **세그먼트 분해가 없다**(`CrowdPerfHarnessP95`는 `Seg`를 출력하지 않는다). "직렬이 여전히 잡보다 큰가"는 §1~§6과 **같은 세그먼트 축**에서만 답할 수 있다.
 
 > ⚠️ **원시 파일이 스스로를 잘못 소개한다 — 이 세 파일에 대한 가장 중요한 주의.**
-> `simopt10k_gpupath_r{1,2,3}.txt`의 헤더 7행은 `# 주의: edit-mode headless 측정(Animator/스키닝/렌더 제외).`이다. 이 문장은 **하네스가 하드코딩한 상수**(`CrowdProfileHarness.cs:399`)이며 실행 인자를 반영하지 않는다. **이 세 파일은 헤드리스가 아니다** — `-nographics` 없이 돌려 `_gpuRenderActive == true`인 상태의 측정이고(§8.3에서 증명), Animator/스키닝도 "제외"가 아니라 rig가 `SetActive(false)`된 상태다(§8.8-a). 파일명(`gpupath`)과 `# label:`만이 정확한 표시다. 헤드리스 데이터셋은 `simopt10k_step1_r*.txt`(§1~§6)다.
+> `simopt10k_gpupath_r{1,2,3}.txt`의 헤더 7행은 `# 주의: edit-mode headless 측정(Animator/스키닝/렌더 제외).`이다. 이 문장은 **하네스가 하드코딩한 상수**(`CrowdProfileHarness.cs:399`)이며 실행 인자를 반영하지 않는다. **이 세 파일은 헤드리스가 아니다** — `-nographics` 없이 돌려 `_gpuRenderActive == true`인 상태의 측정이고(§8.3 — 단 그 증명은 **미보존 로그 판독**이라 커밋된 산출물로는 재검증되지 않는다), Animator/스키닝도 "제외"가 아니라 rig가 `SetActive(false)`된 상태다(§8.8-a). 파일명(`gpupath`)과 `# label:`만이 정확한 표시다 — 다만 둘 다 호출자가 준 자유 텍스트라 그 자체가 증거는 아니다(근거는 §8.3). 헤드리스 데이터셋은 `simopt10k_step1_r*.txt`(§1~§6)다.
 > **헤더 1행(`# Phase C 단계 0 baseline profile`)은 여기서도, step1 3개에서도 틀렸다** — 같은 하드코딩 상수(`:393`)로 6개 파일 전부에 찍힌다. §1의 경고 상자를 볼 것.
 
 ### 8.1 측정 환경
@@ -419,7 +419,7 @@ grep -c 'Destroy may not be called from edit mode' <logfile>   # 로그 미보�
 
 착수 직전 한 번 **30.8%**가 읽혀 규칙대로 **미뤘다.** 원인을 추적한 결과 Xbox Game Bar의 broadcast/DVR 서비스가 **1코어의 약 141%**를 점유하고 있었다. 강제로 죽이지 않고 잦아들 때까지 기다려 **약 11%**로 떨어진 뒤 r1을 시작했다. 즉 규칙이 실제로 발동했고 폐기가 아니라 **연기**로 처리했다.
 
-세 런의 부하는 §3(8.3~19.4%, 폭 11.1pp)과 같은 대역이고 **§3보다 좁다**(10.4~16.9%, 폭 6.6pp). 그래도 §8.8-e대로 이 데이터셋의 런 간 변동은 §1~§6보다 **훨씬 크다** — 원인은 부하가 아니라 GPU 활성 에디터 프로세스 자체다.
+세 런의 부하는 §3(8.3~19.4%, 폭 11.1pp)과 같은 대역이고 **§3보다 좁다**(10.38~16.94%, 폭 6.6pp). 그래도 §8.8-e대로 이 데이터셋의 런 간 변동은 §1~§6보다 **훨씬 크다** — **다만 그 원인은 측정하지 않았다.** 커밋된 3런에서 ambient(10.38 → 13.56 → 16.94%)와 `Total`(9.2103 → 9.5586 → 10.6246) · `FollowerJobWait`(2.7128 → 2.9004 → 3.4216)이 같은 방향으로 단조 증가하므로 부하를 배제할 수 없고(n=3이라 이 동조 자체도 증거가 아니다), §8.8-e도 "변동은 최고부하 런(r3)에 몰려 있다"고 적는다. GPU 활성 에디터 프로세스는 **후보**이지 확인된 원인이 아니다.
 
 ### 8.5 판정 규칙과 결과
 
@@ -500,14 +500,14 @@ grep -c 'Destroy may not be called from edit mode' <logfile>   # 로그 미보�
 
 ### 8.8 판독 시 주의
 
-§5의 세그먼트 **의미론**(`*JobWait`은 `CCMove`와 inclusive 중첩 / `CCMove`는 5지점 단일 버킷 / 하위 세그 합 ≠ 부모 / SEGMENTS는 mean이고 SUMMARY의 `simtick_median_ms`와 다른 통계 / `moved_agents`·`leader_disp_m`은 이동 자기검증)은 **이 데이터셋에도 그대로 적용된다.** ⚠️ **단 §5가 함께 적어 둔 수치는 의미론이 아니라 §1~§6 데이터셋의 측정값이므로 옮겨지지 않는다** — 특히 잔차 상한은 여기서 ≤0.34%가 아니라 최대 0.84%다(§5의 잔차 항목 마지막 줄에 §8 값을 적어 뒀다). 아래는 §8에만 해당하는 추가 주의다.
+§5의 세그먼트 **의미론**(`*JobWait`은 `CCMove`와 inclusive 중첩 / `CCMove`는 5지점 단일 버킷 / 하위 세그 합 ≠ 부모 / SEGMENTS는 mean이고 SUMMARY의 `simtick_median_ms`와 다른 통계 / `moved_agents`·`leader_disp_m`은 이동 자기검증)은 **이 데이터셋에도 그대로 적용된다.** ⚠️ **단 §5가 함께 적어 둔 수치는 의미론이 아니라 §1~§6 데이터셋의 측정값이므로 옮겨지지 않는다** — 특히 잔차 상한은 여기서 ≤0.34%가 아니라 최대 0.83%다(§5의 잔차 항목 마지막 줄에 §8 값을 적어 뒀다 — 그 값은 `mean_ms` 열 규약의 산출이고 5k 정밀도는 약 ±0.03pp다). 아래는 §8에만 해당하는 추가 주의다.
 
 **(a) rig는 파괴되지 않았다 — 비활성일 뿐 살아 있다.** edit mode는 지연 `Destroy`를 거부하므로(§8.3의 15008건이 바로 그 거부다) `Human.DestroyVisualRig`가 실행한 것은 `SetActive(false)`(`Human.cs:78`)까지이고 `Destroy`(`:79`)는 무효였다. 즉 `_renderer`/`_animator`는 **fake-null이 아니라 실제 살아 있는 객체**다. 결과가 두 가지다.
 
 - **여기서 측정된 것은 순수하게 T1a의 6개 게이트뿐이다.** 출하 빌드는 그 위에 "본 계층이 애초에 없어서 생기는 절감"을 추가로 얻는다 — 그건 이 측정에 **없다.**
 - 반대로 **헤드리스 대조군(§1~§6)에서는 `transform.rotation` 쓰기가 살아 있는 본 체인 전체에 dirty 플래그를 전파한다.** `Assets/@Project/Human/Prefabs/Human.prefab`의 Transform 수는 **45개**(root 1 + rig 서브트리 44)다. 따라서 §8.6의 `*Present` 델타(−83.6%)는 **출하 빌드에서 T1a가 실제로 절감하는 양의 상한(upper bound)** 이다 — 출하 빌드에는 dirty를 전파할 자식이 없으므로 SMR 쪽 기준선 자체가 더 싸다.
 
-**(b) `Human.SetTeamMaterial`의 `sharedMaterial` 대입은 두 모드 모두에서 실행되며, 그 비용은 `CommitPublish`에 실린다.** (a)대로 `_renderer`가 살아남으므로 `if (_renderer != null)`(`Human.cs:47`)이 참이다. 호출부는 팀 전환 4곳(`CrowdRoot.cs:1790`, `:1813`, `:1929`, `:1938`)이고 **네 곳 모두 `CommitOutcomes()`(`:1780`) 안**이다 — `:1790`·`:1813`은 직접, `:1929`·`:1938`은 그 helper `RouteToSurvivor`(`:1925`)·`Neutralize`(`:1935`)이며 두 helper의 호출부도 `CommitOutcomes` 안(`:1865`·`:1869`·`:1881`·`:1885`)뿐이다. `CommitOutcomes()`의 유일한 호출 지점은 `:712`이고 `Seg.CommitPublish`가 감싼다(`:711`/`:713`). **따라서 이 대입은 `Recruit`/`Combat`에 실리지 않는다** — `Recruit`(`:705`~`:707`)/`Combat`(`:708`~`:710`)이 감싸는 것은 `_recruitResolver.Resolve`/`_combatResolver.Resolve`, 즉 `Human`을 전혀 만지지 않는 `Crowd/Core` 순수 커널뿐이다. 실린 곳인 `CommitPublish`의 10k 중앙값은 SMR 0.0080 / GPU 0.0089 ms/tick(Total의 0.04% / 0.09%)이라, **실기기에서 `_renderer`가 진짜 fake-null이 되어 이 대입이 건너뛰어져도 싸지는 것은 `CommitPublish`이고 `Recruit`/`Combat`은 영향받지 않는다.** 단 이 항은 **두 데이터셋에 똑같이 들어 있어 차분(§8.6)에는 영향이 없다.**
+**(b) `Human.SetTeamMaterial`의 `sharedMaterial` 대입은 두 모드 모두에서 실행되며, 그 비용은 `CommitPublish`에 실린다.** (a)대로 `_renderer`가 살아남으므로 `if (_renderer != null)`(`Human.cs:47`)이 참이다. 호출부는 팀 전환 4곳(`CrowdRoot.cs:1790`, `:1813`, `:1929`, `:1938`)이고 **네 곳 모두 `CommitOutcomes()`(`:1780`) 안**이다 — `:1790`·`:1813`은 직접, `:1929`·`:1938`은 그 helper `RouteToSurvivor`(`:1925`)·`Neutralize`(`:1935`)이며 두 helper의 호출부도 `CommitOutcomes` 안(`:1865`·`:1869`·`:1881`·`:1885`)뿐이다. `CommitOutcomes()`의 유일한 호출 지점은 `:712`이고 `Seg.CommitPublish`가 감싼다(`:711`/`:713`). **따라서 이 대입은 `Recruit`/`Combat`에 실리지 않는다** — `Recruit`(`:705`~`:707`)/`Combat`(`:708`~`:710`)이 감싸는 것은 `_recruitResolver.Resolve`/`_combatResolver.Resolve`, 즉 `Human`을 전혀 만지지 않는 `Crowd/Core` 순수 커널뿐이다. 실린 곳인 `CommitPublish`의 10k 중앙값은 SMR 0.0080 / GPU 0.0089 ms/tick(Total의 0.04% / 0.09%)이라, **실기기에서 `_renderer`가 진짜 fake-null이 되어 이 대입이 건너뛰어져도 싸지는 것은 `CommitPublish`이고 `Recruit`/`Combat`은 영향받지 않는다.** 단 이 항이 §8.6의 차분을 움직이지 않는 이유는 "두 데이터셋에 똑같이 들어 있어서"가 **아니다** — (a)대로 SMR 쪽 renderer는 활성이고 GPU 쪽은 비활성이라 대입 비용이 같다는 보장이 없고 setter별 측정도 없다. 이유는 **위치**다: 이 대입은 전부 `CommitPublish` 안에 있어 §8.6의 `*Present`·`Steer`·`JobWait` 행 어디에도 들어가지 않고, `Total` 행에 실리는 몫은 0.0089 − 0.0080 = **+0.0009 ms**로 `Total` 델타 −11.0 ms의 0.01% 미만이다.
 
 **(c) 렌더 작업은 측정 구간에 들어오지 않았다.** 하네스는 `SimTick`만 호출하고 `RenderInterpolate`를 호출하지 않는다(§6과 동일). 따라서 GPU를 켰음에도 이 수치에는 **메인스레드 렌더 비용도 GPU 드라이버 변동도 없다** — 인스턴스 draw 발행 지점(`CrowdRoot.cs:763`, `RenderInterpolate` 내부)에 도달하지 않는다. 뒤집어 말하면 **`RenderInterpolate`는 §1~§6과 똑같이 여전히 미계측이다.** §7.7-(g)가 닫은 공백은 play-mode 측정에 대한 것이고 여기서는 열려 있다.
 
@@ -515,7 +515,7 @@ grep -c 'Destroy may not be called from edit mode' <logfile>   # 로그 미보�
 
 **(e) 런 간 변동이 §1~§6보다 크고, 그 변동이 병렬 구간에 편중된다.** 이 데이터셋의 spread는 10k에서 **1.1285 ms**로 §1~§6의 **0.1967 ms**보다 약 5.7배 크다. 내역을 보면 편중이 뚜렷하다 — 직렬 합의 변동폭 0.3866 vs 잡 대기 합의 변동폭 **0.7419**(약 1.9배). 변동은 최고부하 런(r3)에 몰려 있고 r3에서만 부호가 뒤집힌다.
 
-원인은 부하 통제 실패가 아니라 **모드 자체**로 본다 — GPU를 켠 에디터 프로세스는 렌더/드라이버 스레드를 띄우고 있어 잡 워커가 쓸 코어를 간헐적으로 잠식한다. §8.6에서 `FollowerJobWait`·`CCMove`가 SMR 경로보다 8% 높게 나온 것도 같은 방향이다.
+**원인은 측정하지 않았다**(§8.4와 같은 판정). 유력한 후보는 **모드 자체**다 — GPU를 켠 에디터 프로세스는 렌더/드라이버 스레드를 띄우고 있어 잡 워커가 쓸 코어를 간헐적으로 잠식하고, §8.6에서 `FollowerJobWait`·`CCMove`가 SMR 경로보다 8% 높게 나온 것도 같은 방향이다. **다만 부하 통제 실패도 배제되지 않는다** — 커밋된 3런에서 ambient(10.38 → 13.56 → 16.94%)와 `Total`(9.2103 → 9.5586 → 10.6246)이 같은 방향으로 단조 증가해 이 데이터에서 모드와 부하가 분리되지 않는다(n=3).
 
 **방향이 결론에 유리하게 작용한다는 점이 중요하다.** 이 편중은 **T2 대상(병렬)을 계통적으로 크게 보이게** 만든다. 그런데도 T2가 이기지 못했다 — 10k는 동률이고 5k는 T1b가 3.17배로 이긴다. 즉 "T2로 가라"는 결론은 이 데이터에서 **편향의 도움을 받아도 나오지 않는다.**
 
