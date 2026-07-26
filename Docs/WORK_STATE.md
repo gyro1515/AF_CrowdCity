@@ -1,6 +1,6 @@
 # WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
 
-> **검증 기준 커밋: `1fa2fdb`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
+> **검증 기준 커밋: `33e49ab`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
 
 > **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 작성됐다 — `4cd9260`이 `PROJECT_MAP.md`를, `a28aee3`이 CrowdCity 가이드 [`CROWD_GUIDE.md`](CrowdCity/CROWD_GUIDE.md)를 신설했다).
 > **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고(`ce53e44`), 그 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 아직 하지 않았다(미착수).
@@ -49,7 +49,12 @@
 
 **이 문서 49건 중 41건**(FALSE·UNVERIFIABLE·MODE-MISSING·IMPRECISE·OFF-BY-N·RULE4)**은 아래 본문에 반영됐다.** 죽은 좌표, 이미 랜딩된 작업을 미완으로 적은 서술, 모드 누락, 저장소 근거 없는 수치는 본문이 정정본이다. 감사 보고서는 단일 에이전트 산출물이라 신뢰 입력이 아니므로 항목마다 1차 소스(`.cs`/`.asset`/`Perf/` 원시 파일/`git`)로 재검증했고, 재검증에서 반증된 지적은 반영하지 않았다.
 
-**남은 8건은 BOUNDARY** — 다른 문서 소관 내용이 이 문서에 중복 거주하는 건들이다(§2 대상 코드 색인 → `PROJECT_MAP.md`, §3 운영 모델 → `CLAUDE.md`, §8 파일 인덱스 → `PROJECT_MAP.md`, 2026-07-19 "완료" 목록 → git 히스토리, §9.1 "의미 훼손이 작다고 본 근거"·§9.6 렌더 티어 표·`14.86` 3커밋 계보 서술 → `CROWD_GUIDE.md`, 2026-07-17 마커 절 → git 히스토리). 옮기려면 두 문서를 같은 커밋에서 고쳐야 하므로 별개 패스로 남겼다.
+**남은 8건은 BOUNDARY**(다른 문서 소관 내용이 이 문서에 중복 거주하는 건들)였고, **경계 이관 패스에서 4건이 처리됐다** — §2 대상 코드 색인 → `PROJECT_MAP.md` §3·§4·§5·§14 포인터로 대체, §3 운영 모델 → `CLAUDE.md` 포인터로 대체(`CLAUDE.md`에 없는 4항목만 이관 대기로 명시 잔류), §8 파일 인덱스 → `PROJECT_MAP.md` §16 포인터로 대체, §9.1 "의미 훼손이 작다고 본 근거" → `CROWD_GUIDE.md` §8로 이동.
+
+**나머지 4건은 의도적으로 이 문서에 남겼다**(목적지가 없거나 옮기면 사실이 사라지는 건들):
+- 2026-07-19 "완료" 목록과 2026-07-17 마커 절 — 지정 목적지가 "git 히스토리"라 이관이 아니라 **삭제**이고, 두 절 모두 살아 있는 함정(Burst 22.95→14.04 "재인용 금지" 경고, 로컬 메모리 미동기 경고)을 안고 있다.
+- `14.86` 커밋 계보 서술 — 지정 목적지 `CROWD_GUIDE.md` §15는 이미 그 **교훈**을 담고 있으나(오래된 문서가 확신 있게 틀린다), 여기 남은 것은 살아 있는 정정의 **증거**이고 사람용 가이드는 `CLAUDE.md` §1.1 Rule 2에 따라 AI가 사실 근거로 읽을 수 없다.
+- §9.6 렌더 티어 표 — 지정 목적지 `CROWD_GUIDE.md`는 자기 §0·§16에서 수치 표와 지어낸 목표치를 금지하고 §10에서 이 판정의 소유를 명시적으로 거부한다. 옮기면 목적지 문서의 자체 계약을 깬다.
 
 ### 깨면 안 되는 불변식
 
@@ -60,6 +65,8 @@
 | 리더 `SetHeadingAndSpeed` **게이팅 금지** | `CrowdRoot.cs:1206` | S4b2 계약이 리더 트랜스폼을 라이브로 유지. 리더 ≤4명(`LeaderMove` = Total의 **0.09%** — **SMR 경로 10k**. GPU 경로 10k는 0.21%)이라 이득도 없다 |
 | 정지 시 yaw 유지 읽기 2곳 유지 | `CrowdRoot.cs:1439`, `:1535` | `float headingDeg = _visualYaw[index];` |
 | `*JobWait`은 `CCMove`의 **inclusive 중첩** | `CrowdRoot.cs:1390`~`:1394`, `:1608`~`:1612` | 합산 금지, 이중 차감 금지 |
+| 세 Burst 잡 전부 `[BurstCompile(FloatMode = FloatMode.Strict, FloatPrecision = FloatPrecision.Standard)]` | `SteeringForceJob.cs:16`, `FollowerSdfMoveJob.cs:20`, `NeutralSdfMoveJob.cs:21` | 결정성 계약. FastMath나 기본 FloatMode는 재결합·근사를 허용해 오라클 바이트 동일 게이트를 깬다(사양 서술은 §9.2) |
+| 전투의 방향·예산은 **틱 시작 인원수(`_startCounts`)로만** 계산 | 스냅샷 `CombatResolver.cs:239-241`·`:261` → 소비 `:353`, `:387`, `:416`, `:547`. 쌍 열거는 고정 중첩 루프 `:336-338`, `:412-414` | **쌍 열거 순서 순열 불변성이 이 규칙에서만 나온다.** 열거 루프가 고정이라 순열을 만들 자리가 없고, 전용 테스트가 실제로 흔드는 것은 agent 삽입 순서뿐이다(`CombatResolverTests.cs:302`) → 중간에 조정된 인원수를 쓰면 **테스트는 그대로 통과하면서 이 불변성만 조용히 사라진다**(근거 서술은 `CrowdCity/CROWD_GUIDE.md` §9) |
 | 렌더 경로 게이트는 **픽셀 허용오차**, PNG MD5 아님 | 아래 게이트 절 | 스크린샷 하네스 출력이 바이트 재현되지 않는다 |
 | EventBus는 **이벤트 타입 2개**(`CrowdCountChangedEvent`, `CrowdEliminatedEvent`)뿐 | 페이로드 `Crowd/Contracts/Events/CrowdEvents.cs:6`, `:34` | static `EventManager` 사용의 정식 예외가 "정확히 2개 · 경계 객체만"을 영향 범위로 걸고 승인됐다. 타입을 늘리면 그 예외 근거가 무효가 된다(근거 서술은 `CrowdCity/CROWD_GUIDE.md` §11) |
 | 발행자는 **`CrowdRoot` 하나**, 구독자는 **경계 객체만** | 발행 `CrowdRoot.cs:333-334` 취득 → `PublishTickEvents` 내부에서만 발행 · 구독 `GameSession.cs:61-62`, `HudRoot.cs:168-169`, `CameraRoot.cs:184-185`(+ 에디터 하네스 `CrowdOracleHarness.cs:231-232`) | 리프(`Human`·라벨·마커)를 버스에 붙이면 CLAUDE.md §13 금지 패턴. 모든 `Subscribe`는 같은 lifecycle에 `Unsubscribe` 짝이 있어야 한다 |
@@ -188,34 +195,24 @@ AF_CrowdCity의 CPU 프레임 핫스팟은 `GameplayRoot.Update`다(사용자 Pr
 4. 메모리(있으면): `crowd-scaleup-architecture.md`(이 작업의 상위 결정), `phasec-ccmove-bottleneck.md`(SDF/WallSolver 배경), `agents-verify-as-unity-senior.md`, `codex-cross-verify-command.md`.
 
 ## 2. 대상 코드 (리팩토링으로 이동/개명됐을 수 있음 — 현재 트리에서 재확인)
-- 커널(순수 C#): `Assets/@Project/Crowd/Core/` — `AgentBuffer`, `SpatialGrid`, `CombatResolver`, `RecruitResolver`, `WallField`, `WallSolver`, `SimTuning`.
-- 오케스트레이션: `Assets/@Project/Crowd/Scripts/` — `CrowdRoot`(SimTick), `CrowdModel`, `RivalAiDriver`, `CrowdSimProfiler`.
-- 하네스(Editor): `Assets/@Project/Game/Editor/` — `CrowdProfileHarness`(성능), `CrowdOracleHarness`(결정성 오라클).
-- 루프: `Assets/@Project/Game/Scripts/GameplayRoot.cs`(`FixedStepSeconds` 0.02s=50Hz — `:12`, `MaxStepsPerFrame` 4 — `:13`).
+- **커널·오케스트레이션·하네스·고정 스텝 루프의 파일·타입·진입점 좌표는 `Docs/PROJECT_MAP.md`가 정본이다** — 커널(`Crowd/Core`) §4, Crowd 오케스트레이션(`Crowd/Scripts`) §5, 검증 하네스(`Game/Editor`) §14, 루프와 케이던스(`GameplayRoot`) §3. 여기서 같은 색인을 두 번 두지 않는다(구조는 이 문서의 소관이 아니다 — `CLAUDE.md` §1.1 Rule 1).
 - 브랜치: **`feat/crowd-sim-10k`**(이전 `feat/crowd-sdf-perf`에서 이어짐 — 그 브랜치도 여전히 존재하나 작업은 `feat/crowd-sim-10k`에서만 한다). 감사 추적: 설계 라운드 산출물(`codex_burst_*.txt`)은 워킹트리에 없다 — `git show fb14a41:<파일>`로 히스토리에서 복구(§8 참조).
 
-## 3. 운영 모델 (CLAUDE.md 준수 — 반드시 지킬 것)
-- **메인 에이전트 = 매니저만**. 조사/파일읽기/분석/구현/편집/테스트/diff 리뷰는 **전부 서브에이전트에 위임**. 메인은 목표·범위·성공기준 정의, 위임, 판정, 최종보고만.
-- **한 파일 = 한 오너**. 두 서브에이전트가 같은 파일 동시 편집 금지. 비자명 작업은 구현자와 검증자를 다른 서브에이전트로.
-- **교차검증**: 설계·검증은 **Claude 서브에이전트 + Codex**로 독립 수행 후 **합의점 도달까지** 반복(사용자 표준 방식).
-  - Claude 서브에이전트: Opus 5, xhigh, "유니티 시니어 게임 프로그래머" 관점.
-  - Codex(읽기전용) 호출 템플릿:
-    ```
-    codex exec -m gpt-5.6-sol -c model_reasoning_effort=ultra -c service_tier=fast --skip-git-repo-check --sandbox read-only "<PROMPT>" < /dev/null
-    ```
-    파일 쓰기 필요 시 `--sandbox workspace-write`. stdin은 `< /dev/null`로 닫아 hang 방지. 긴 프롬프트는 파일에 쓰고 `"$(cat promptfile)"`.
-- 서브에이전트 보고 형식: 정확히 `Conclusion / Changed files / Verification commands and results / Risks or blockers` 네 제목만. 프로세스 로그·소스 덤프 금지.
-- **새 세션의 최초 행동 = 문서/코드 조사를 서브에이전트에 위임**(메인이 직접 읽으면 매니저 전용 규칙 위반). 메인은 확인된 결론만 받아 Step 0 구성.
-- **교차검증 reviewer는 항상 read-only**, 동일 HEAD SHA·frozen 작업트리·동일 요구사항/Decision Log/검증결과를 입력받는다. (Codex는 파일쓰기 필요 시에만 `workspace-write`; 설계·검증 리뷰는 read-only.)
-- **합의 종료 조건 = 미해결 BLOCKER/MAJOR 0건.** reviewer 의견이 끝내 충돌하면 임의 봉합 말고 **사용자가 최종 결정**. 참조: 메모리 `autonomous-decisions-via-cross-verification`.
-- **셸 주의**: 주 셸 = PowerShell(win32). codex 템플릿의 `< /dev/null` 등 POSIX 문법은 **Bash 툴**로 실행. 필수 CLI/인증/지정 모델(codex `gpt-5.6-sol`, Claude `Opus 5`)이 없으면 임의 대체 말고 **중단→사용자 확인**.
+## 3. 운영 모델
+
+- **정본은 `CLAUDE.md` / `AGENTS.md`다.** 메인=매니저 전용 위임 모델, 서브에이전트 보고 4제목 형식, 한 파일=한 오너, Codex↔Claude 교차검증 절차와 합의 요구, 두 에이전트의 모델·effort·`codex exec` 기본 호출형(`< /dev/null` 포함) — 전부 그 파일의 "Main/Subagent Operating Model" · "Cross-Verification" · "Agent settings" 절에 있다. 워크플로우 계약은 이 문서가 소유하지 않는다(`CLAUDE.md` §1.1 Rule 1·Rule 3). 여기서 재기술하지 않는다.
+- **아래 4건은 `CLAUDE.md`에 아직 없는 항목이다** — `CLAUDE.md`/`AGENTS.md`는 이 문서의 소관이 아니므로 그 미러 쌍의 오너가 같은 커밋에서 이관해야 한다. 이관될 때까지는 여기가 유일한 기록이다.
+  - Codex 호출 플래그: 설계·검증 리뷰는 `--skip-git-repo-check --sandbox read-only`, 파일 쓰기가 필요할 때만 `--sandbox workspace-write`. 긴 프롬프트는 파일에 써서 `"$(cat promptfile)"`로 넘긴다.
+  - **교차검증 reviewer는 항상 read-only**이고, 동일 HEAD SHA·frozen 작업트리·동일 요구사항/Decision Log/검증결과를 입력으로 받는다.
+  - **합의 종료 조건 = 미해결 BLOCKER/MAJOR 0건.** reviewer 의견이 끝내 충돌하면 임의 봉합하지 말 것(사용자 부재 시의 처리는 `CLAUDE.md`의 자율 결정 규칙).
+  - **셸**: 주 셸 = PowerShell(win32)이므로 `< /dev/null` 등 POSIX 문법은 **Bash 툴**로 실행한다. 필수 CLI·인증·지정 모델이 없으면 임의 대체 말고 **중단→사용자 확인**.
 - **성능 목표 수치를 지금 지어내지 말 것** — M-sim-0 실측 + 디바이스 budget 후 확정. 현재 문서의 모든 수치는 외삽.
 
 ---
 
 ## 4. 리팩토링 세션에게 (rebase가 매끄럽도록 남겨줄 것)
 리팩토링 중 아래를 **깨지 않거나, 바뀌면 명확히 기록**해 두면 sim-opt rebase가 쉬워진다:
-1. **SimTick 단계 순서 계약** 유지: restore → heading → leader move → follower/neutral steer → mirror → grid rebuild → recruit → combat → commit → publish. (병렬화의 "이웃은 직전 tick 스냅샷" 전제가 mirror/rebuild가 steer 뒤라는 순서에 의존.)
+1. **SimTick 단계 순서 계약** 유지: **`PrevPos` 스냅샷** → restore → heading → leader move → follower/neutral steer → mirror → grid rebuild → recruit → combat → commit → publish. (①`PrevPos` 복사(`CrowdRoot.cs:680`)는 번호 없는 선행 단계이며 restore(`:690`)보다 **앞**이다 — 이동 단계가 `buffer.Pos`를 직접 저작하므로 "직전 tick 위치"를 읽는 코드(라이벌 AI, wander raycast 원점, 잡의 자기 위치)가 이 스냅샷을 봐야 오염되지 않는다. ②병렬화의 "이웃은 직전 tick 스냅샷" 전제는 mirror/rebuild가 steer 뒤라는 순서에 의존.)
 2. **AgentId 고유성 + population slot 안정성**(삽입순 오름차순 index 불변) 유지 — 결정성 canonical order의 근간.
 3. **`SpatialGrid.QueryCircle` 경계**(누가 호출하는지: combat per non-neutral + per leader `CombatResolver.cs:287`·`:487`, recruit per neutral `RecruitResolver.cs:75`, AI 중립 밀도 `RivalAiDriver.cs:129`. **separation은 호출자가 아니다** — `SteeringForceJob.cs:104-155`가 같은 열거를 잡 안에서 인라인 재현한다)를 명확히 — 밀도 캡핑이 이 지점을 대체한다. 시그니처가 바뀌면 기록.
 4. **`CrowdSimProfiler`의 Seg 열거** 유지(하네스가 의존). 이름/의미 바뀌면 기록.
@@ -278,19 +275,7 @@ AF_CrowdCity의 CPU 프레임 핫스팟은 `GameplayRoot.Update`다(사용자 Pr
 
 ## 8. 파일 인덱스
 
-**추적 중인 문서는 이게 전부다.** 아래에 없는 `Docs/` 하위 문서를 인용하는 서술을 만나면 그 서술이 낡은 것이다.
-
-| 문서 | 답하는 질문 / 성격 | 독자 |
-|---|---|---|
-| `CLAUDE.md` · `AGENTS.md` (repo root) | 작업 규칙. **같은 커밋에 둘 다** 갱신하는 미러 쌍 | AI |
-| `Docs/PROJECT_MAP.md` | **어디에 있는가** — 포인터 전용(영문), 설명·측정값 없음 | AI |
-| **`Docs/WORK_STATE.md`(이 문서)** | **무엇이 진행 중이고 무엇을 깨면 안 되는가** — 불변식·게이트·함정의 정본, 그리고 **§9 미착수 설계 사양의 정본** | AI |
-| `Docs/CrowdCity/CROWD_GUIDE.md` | **왜 이렇게 만들었는가**(한국어) — **사람 전용.** AI가 유지보수는 하되 작업 중 사실 근거로 읽지 않는다 | 사람 |
-| `Docs/CrowdCity/Perf/MANIFEST.md` | 측정 증거 — 환경·verbatim 커맨드라인·부하 통제·판정 규칙·판독 주의 | AI · 사람 |
-| `Docs/CrowdCity/Perf/*.txt` · `*.csv` | 원시 측정 출력 | — |
-| `Docs/Photo/` | 프로파일러 캡처 — `PRO.PNG`·`PRO2.PNG`는 2026-07-17 진단 근거, `PRO3.PNG`는 위 "핵심 현황"의 철회 근거로 인용된다 | AI · 사람 |
-| `Assets/@Project/City/README.md` | City 에셋 파이프라인 로컬 노트 | AI · 사람 |
-| `UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md` | 일반 참고 자료 — **프로젝트 권위 아님** | 사람 |
+**추적 중인 문서 목록의 정본은 `Docs/PROJECT_MAP.md` §16이다** — 어떤 문서가 무엇을 담당하는지, 그리고 그 표가 exhaustive라는 선언까지 거기 있다. 여기서 같은 색인을 두 번 두지 않는다. **그 표에 없는 `Docs/` 하위 문서를 인용하는 서술을 만나면 그 서술이 낡은 것이다.** 다만 이 문서가 직접 인용하는 캡처의 용도만 여기 적어 둔다 — `Docs/Photo/PRO.PNG`·`PRO2.PNG`는 2026-07-17 진단 근거, `PRO3.PNG`는 위 "핵심 현황"의 철회 근거다.
 
 **삭제된 문서(히스토리에서 복구 가능 — `git log --diff-filter=D -- <경로>`):**
 
@@ -337,10 +322,7 @@ AF_CrowdCity의 CPU 프레임 핫스팟은 `GameplayRoot.Update`다(사용자 Pr
 8. radius를 통과한 것만 고정 크기 **max-heap `(distSq, AgentId)`** 에 적재한다.
 9. canonical key로 정렬해 반환한다.
 
-**의미 훼손이 작다고 본 근거**(캡이 결과를 바꾸는 정도의 상한):
-- recruit는 "최근접 1명"만 쓰므로, k가 최근접을 포함하면 사실상 무손실.
-- combat의 touchCount는 `clamp01(touch / PairNormalizer)`로 **포화**한다 → 고밀도에서 대부분 1.0이라 캡 영향이 작다.
-- leader는 `ownLocal <= 1`(홀로인가)이 핵심이라 소수 카운트로 정확하고, enemy 최다팀 tie는 낮은 팀 id.
+**의미 훼손이 작다고 본 근거**(recruit 최근접 1명 · combat touchCount 포화 · leader 국소 카운트)는 **설명이지 사양이 아니므로** 사람용 가이드 `CrowdCity/CROWD_GUIDE.md` §8이 담는다. 여기 남는 것은 그 논거가 아니라 아래 게이트다.
 
 **게이트:** `CandidatesVisited ≤ QueryCount × LaneCount × B` counter 증명 + dense에서 work/N이 밀도에 무증가 + cap 미발동 fixture는 legacy 바이트 동일 + **cap 발동 fixture는 바이트 동일 불요 → 거동 A/B("no perceptible difference": recruit 지연/claimant/strength deficit/conversion·elimination/separation 편차) 승인 후에만 오라클 갱신.** 성공조건은 **초선형 work term 제거**(상수배 아님). 밀도 캡은 **게임플레이 변경**이므로 순수 성능 리팩터와 **분리 커밋**한다.
 

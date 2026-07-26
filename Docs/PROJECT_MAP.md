@@ -150,7 +150,7 @@ The three Burst jobs are in §6.
 - native grid snapshot (job input) — `CrowdRoot.cs:1317`
 - serial prepass / serial present pass (each bracketed by `CrowdSimProfiler.Begin/End(Seg.…)`, all inside `SteerFollowersAndNeutrals` `:1212`) — followers `:1215-1313` / `:1397-1448`, neutrals `:1557-1581` / `:1616-1637`
 - serial `CC.Move` fallback path (`!sdfActive`) — followers `:1450-1544`, neutrals `:1639-1679`
-- all jobs: `FloatMode.Strict` + `FloatPrecision.Standard`
+- `[BurstCompile]` attribute lines (the determinism invariant they carry is owned by `Docs/WORK_STATE.md`) — `SteeringForceJob.cs:16` · `FollowerSdfMoveJob.cs:20` · `NeutralSdfMoveJob.cs:21`
 
 ---
 
@@ -161,7 +161,7 @@ The three Burst jobs are in §6.
 | bake tool (editor, once) | `Assets/@Project/City/Editor/WallFieldBaker.cs:24` · menu `:90` · `BakeParams.Default` `:45` |
 | validator | `Assets/@Project/City/Editor/WallFieldValidator.cs:27` (menu), `:57` (`Validate`) |
 | output assets | `Assets/@Project/City/Generated/WallSdf.asset` + `WallSdf.bytes` |
-| live values (`.asset`) | `cellSize 0.1` `:18` · `cols 928 / rows 914` `:19-20` · `yMin 0.8 / yMax 3.1999998` `:21-22` · `maxDistance 2.5` `:23` · `bilinearBias 0.05` `:24` · `colliderCount 40` `:25` |
+| **live values (authority)** — field coordinates only, read the asset for the values | `Assets/@Project/City/Generated/WallSdf.asset` — `cellSize` `:18` · `cols`/`rows` `:19-20` · `yMin`/`yMax` `:21-22` · `maxDistance` `:23` · `bilinearBias` `:24` · `colliderCount` `:25` |
 | runtime load | `CrowdRoot.cs:339-362` → `Crowd/Core/WallField.cs:52` |
 | query | `Crowd/Core/WallField.cs:171` (`Phi`), `:198` (`Gradient`) |
 | move resolve | `Crowd/Core/WallSolver.cs:54` |
@@ -269,14 +269,14 @@ The three Burst jobs are in §6.
 
 | Harness | Entry point | Mode | Output |
 |---|---|---|---|
-| `CrowdProfileHarness` | `.cs:46` (`RunFromBatch`) | edit mode (SMR vs GPU path decided by presence of `-nographics`) | segment text report |
+| `CrowdProfileHarness` | `.cs:46` (`RunFromBatch`) | edit mode | segment text report |
 | `CrowdOracleHarness` | `.cs:35` | edit mode headless | `phaseC_oracle_snapshot_n{n}_s{seed}.bin` `:158` · `phaseC_oracle_determinism.txt` `:380` · summary/events CSV |
 | `CrowdPerfHarnessP95` | `.cs:49` (driver `:160`) | **play mode**, graphics required | 14-column CSV `:44` (`simtick` computation `:413`, `StepSim` timing span `:364-367`, `RenderInterpolate` call `:472`) |
 | `CrowdPerfHarness` (base variant) | `.cs:40` | play mode | text append |
 | `CrowdShotHarness` | `.cs:28` | edit mode, graphics required | `gpu_on.png` `:147` · `gpu_on_top.png` `:148` · `gpu_on_closeup.png` `:149` · `smr_off.png` `:184` |
 | `CrowdFlatRateShotHarness` | `.cs:30` | edit mode, graphics required | PNG per tick milestone |
 
-Arguments, environment and reading caveats: `Docs/CrowdCity/Perf/MANIFEST.md`. Gate values: `Docs/WORK_STATE.md`.
+Arguments, environment, which path each invocation actually measures, and reading caveats: `Docs/CrowdCity/Perf/MANIFEST.md`. Gate values: `Docs/WORK_STATE.md`.
 
 ---
 
@@ -309,4 +309,4 @@ Arguments, environment and reading caveats: `Docs/CrowdCity/Perf/MANIFEST.md`. G
 | `Assets/@Project/City/README.md` | City asset-pipeline local note |
 | `UnityArchitectureGuide/TEAM_ARCHITECTURE_GUIDE.md` | general reference (not a project authority) |
 
-That table is exhaustive — those files are the only tracked documents. Unimplemented sim-optimization specs (density cap, canonical order, `DeterministicRng`, T2/T3a/T3b, the mobile 10k floor) live in `Docs/WORK_STATE.md` §9; change history lives in git. The retired `CHANGELOG.md` · `SIM_OPT_PLAN.md` · `SIM_OPT_10K_PLAN.md` · `DESIGN.md` · `INTERFACES.md` · `STATUS.md` · `PREFAB_CONSTRUCTION_PLAN.md` · `GameLogicExplainer.html` · `Sessions/` are recoverable from history; `Docs/WORK_STATE.md` §8 records where each one's surviving content went.
+That table is exhaustive — those files are the only tracked documents. Unimplemented sim-optimization specs (density cap, canonical order, `DeterministicRng`, T2/T3a/T3b, the mobile 10k floor) live in `Docs/WORK_STATE.md` §9; change history lives in git. Retired documents — which ones, and where each one's surviving content went — are listed in `Docs/WORK_STATE.md` §8.
