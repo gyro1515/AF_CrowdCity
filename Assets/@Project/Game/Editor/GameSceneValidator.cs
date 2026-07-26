@@ -727,6 +727,7 @@ public static class GameSceneValidator
         Check(config.Sim.RecruitRadius > 0f, $"Sim.RecruitRadius({config.Sim.RecruitRadius})는 0보다 커야 함", failures);
         Check(config.Sim.CombatRadius > 0f, $"Sim.CombatRadius({config.Sim.CombatRadius})는 0보다 커야 함", failures);
         Check(config.Sim.ConvertPerSecond >= 0f, $"Sim.ConvertPerSecond({config.Sim.ConvertPerSecond})는 0 이상이어야 함", failures);
+        Check(config.Sim.ConvertPerSecondPerMember >= 0f, $"Sim.ConvertPerSecondPerMember({config.Sim.ConvertPerSecondPerMember})는 0 이상이어야 함", failures);
         Check(config.Sim.PairNormalizer >= 1, $"Sim.PairNormalizer({config.Sim.PairNormalizer})는 1 이상이어야 함", failures);
 
         Check(config.AiDecideInterval > 0f, $"AiDecideInterval({config.AiDecideInterval})은 0보다 커야 함", failures);

@@ -186,6 +186,7 @@ public sealed class CombatResolver
     /// 2단계: 모든 crowd pair의 변환 방향과 예산은 변경 불가능한 시작 시점 count에서만 나온다(도중에 조정하지 않는다).
     ///   strictly 큰 쪽이 작은 쪽에서 ConvertPerSecond * clamp01(접촉 pair 수 / PairNormalizer) * dt 만큼을
     ///   ordered (winner, loser) pair 누적값(<see cref="CombatState"/>)에 호출을 넘어 누적한다.
+    ///   tuning.UseDynamicConvertRate=true면 그 ConvertPerSecond 자리에 (이긴 팀의 시작 count * ConvertPerSecondPerMember)를 쓴다.
     ///   이번 호출에 접촉 pair가 없는 pair는 누적값을 0으로 되돌린다. 시작 count가 같으면 변환하지 않고 누적값을 유지한다.
     /// 3단계: victim은 전역으로 중재한다. 후보는 지는 팀의 non-leader member 중 winning 팀 member와 접촉한 agent이고,
     ///   가장 가까운 접촉 member 순으로, 거리 동률은 낮은 agent Id 순으로 변환한다. leader는 이 단계에서 절대 변환되지 않고,
@@ -233,6 +234,8 @@ public sealed class CombatResolver
         bool leaderProtection = tuning.LeaderProtection;
         // flat 전향율 토글: ON이면 접촉 pair 수를 세지 않고, 접촉이 있는 팀 pair에 최대 전향율(clamp01=1.0)을 적용한다.
         bool flatConvertRate = tuning.CombatFlatConvertRate;
+        // 동적 전향율 토글: ON이면 초당 전향 수를 고정값이 아니라 이긴 팀의 시작 count에 비례해 2단계에서 계산한다.
+        bool dynamicConvertRate = tuning.UseDynamicConvertRate;
         float[] accumulators = state.Accumulators;
 
         // ---- 1단계: 시작 count 스냅샷 + 팀 pair별 접촉 수 + agent별 적 팀 최근접 접촉 거리 ----
@@ -356,7 +359,12 @@ public sealed class CombatResolver
                     float strength = flatConvertRate
                         ? 1f
                         : Mathf.Clamp01(_pairTouchCounts[pairIndex] / (float)tuning.PairNormalizer);
-                    accumulators[pairIndex] += tuning.ConvertPerSecond * strength * dt;
+                    // 동적 모드: 초당 전향 수를 이긴 팀의 시작 count에 비례시킨다. 여기서도 읽는 것은 오직 시작 count
+                    // 스냅샷(_startCounts)이며, 방향 판정과 같은 값을 쓰므로 2단계의 순서 무의존 계약이 그대로 유지된다.
+                    float convertPerSecond = dynamicConvertRate
+                        ? _startCounts[w] * tuning.ConvertPerSecondPerMember
+                        : tuning.ConvertPerSecond;
+                    accumulators[pairIndex] += convertPerSecond * strength * dt;
                 }
                 // 시작 count가 같거나 작은 쪽 방향이면 누적하지 않고 그대로 유지한다.
             }

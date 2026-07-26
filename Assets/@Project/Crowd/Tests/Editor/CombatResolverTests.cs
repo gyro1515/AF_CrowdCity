@@ -36,6 +36,10 @@ public sealed class CombatResolverTests
         tuning.LeaderProtection = true;
         tuning.SeparationVisitBudget = 0; // 분리 조회 예산 cap OFF(기본): 전투 테스트는 예산과 무관하다.
         tuning.CombatFlatConvertRate = false; // flat 전향율 OFF(기본): 기존 접촉 pair 가중 규칙을 검증한다.
+        tuning.UseDynamicConvertRate = false; // 동적 전향율 OFF(기본): 고정 ConvertPerSecond 경로를 검증한다.
+        // 계수는 0으로 둔다. 토글이 OFF인데도 동적 분기를 타는 회귀가 생기면 전향율이 0이 되어, 기존 rate-limited
+        // 테스트들이 "전향 0건"으로 시끄럽게 실패한다(조용히 통과하지 않는다).
+        tuning.ConvertPerSecondPerMember = 0f;
         return tuning;
     }
 
@@ -65,6 +69,18 @@ public sealed class CombatResolverTests
     {
         SimTuning tuning = Default();
         tuning.LeaderProtection = false;
+        return tuning;
+    }
+
+    // 동적 전향율(UseDynamicConvertRate=true) 경로 검증용. RateLimited()에서 토글을 켜고 member당 계수를 준다.
+    // 동적 모드에서 ConvertPerSecond는 절대 읽히면 안 되므로 터무니없는 값으로 오염시켜 둔다: 잘못된 분기를 타면
+    // 예산이 폭발해 첫 호출에 전향이 쏟아지므로, 테스트가 조용히 통과하는 대신 시끄럽게 실패한다.
+    private static SimTuning DynamicRate(float perMember)
+    {
+        SimTuning tuning = RateLimited();
+        tuning.UseDynamicConvertRate = true;
+        tuning.ConvertPerSecondPerMember = perMember;
+        tuning.ConvertPerSecond = 100000f;
         return tuning;
     }
 
@@ -1120,7 +1136,205 @@ public sealed class CombatResolverTests
         }
     }
 
+    /// <summary>
+    /// [UseDynamicConvertRate=true] 전향율이 이긴 팀의 <b>틱 시작 인원수</b>에 비례함을 검증한다. 접촉 배치를 그대로 두고
+    /// 접촉 반경 밖에 승자 팀원만 더해 시작 count를 2배로 만들면(접촉 pair 수와 포화된 clamp는 그대로) 전향까지 걸리는
+    /// 호출 수가 절반이 된다. 즉 달라진 변수는 전향율 하나뿐이다.
+    /// </summary>
+    [Test]
+    public void DynamicRate_ConversionRate_ScalesWithWinnerStartCount()
+    {
+        // (a) 승자 team0 시작 count 6 => rate = 6 * 0.25 = 1.5/s. dt=0.2 -> 0.3/호출. 3호출 0.9(<1) => 전향 없음, 4호출 1.2 => 1건.
+        {
+            using AgentBuffer buffer = new AgentBuffer(Cap);
+            AddDynamicRateContactLayout(buffer);
+
+            SpatialGrid grid = NewGrid(buffer);
+            CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+            CombatState state = new CombatState(TeamCount);
+            CombatOutcome outcome = new CombatOutcome(Cap);
+            SimTuning tuning = DynamicRate(0.25f);
+
+            for (int call = 1; call <= 3; call++)
+            {
+                resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+                Assert.AreEqual(0, outcome.Conversions.Count, "count 6, call " + call + ": 누적 " + (0.3f * call) + " < 1");
+            }
+
+            resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+            Assert.AreEqual(1, outcome.Conversions.Count, "count 6이면 4호출째(누적 1.2)에 전향 1건");
+            Assert.AreEqual(0, outcome.Eliminations.Count, "team1 리더는 반경 밖이라 제거되지 않는다");
+            Assert.AreEqual(0, outcome.Conversions[0].ToTeam, "전향 대상 팀은 team0");
+        }
+
+        // (b) 같은 접촉 배치 + 접촉 반경 밖 team0 팔로워 6명 => 시작 count만 12가 된다. 접촉 pair 수(24)도 포화 clamp(1.0)도
+        //     그대로이므로 바뀌는 것은 전향율뿐: rate = 12 * 0.25 = 3.0/s -> 0.6/호출 -> 2호출째에 전향.
+        {
+            using AgentBuffer buffer = new AgentBuffer(Cap);
+            AddDynamicRateContactLayout(buffer);
+            for (int i = 0; i < 6; i++)
+            {
+                buffer.Add(20 + i, 0, false, V(60.0f + i, 60.0f));
+            }
+
+            SpatialGrid grid = NewGrid(buffer);
+            CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+            CombatState state = new CombatState(TeamCount);
+            CombatOutcome outcome = new CombatOutcome(Cap);
+            SimTuning tuning = DynamicRate(0.25f);
+
+            resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+            Assert.AreEqual(0, outcome.Conversions.Count, "count 12여도 1호출 누적 0.6 < 1이면 전향 없음");
+
+            resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+            Assert.AreEqual(1, outcome.Conversions.Count, "시작 count가 2배면 절반의 호출(2호출째)에 전향한다");
+            Assert.AreEqual(0, outcome.Eliminations.Count);
+            Assert.AreEqual(0, outcome.Conversions[0].ToTeam, "전향 대상 팀은 team0");
+        }
+    }
+
+    /// <summary>
+    /// [UseDynamicConvertRate=true] 전향율이 <b>호출마다 다시</b> 계산되고, 그때 이미 쌓여 있던 소수 누적값과 정상적으로
+    /// 합쳐짐을 검증한다. count 6로 0.6을 쌓아 둔 뒤 count를 12로 올리면 그 다음 한 호출(+0.6)만으로 1.2가 되어 전향한다 —
+    /// 전향율이 갱신되지 않았다면 0.9(<1)로 전향이 없고, 누적값이 유실됐다면 0.6(<1)으로 역시 전향이 없다.
+    /// </summary>
+    [Test]
+    public void DynamicRate_RateRecomputedPerCall_ComposesWithExistingCarry()
+    {
+        using AgentBuffer buffer = new AgentBuffer(Cap);
+        AddDynamicRateContactLayout(buffer);
+        // 접촉 반경 밖 team3 6명. 나중에 team0으로 옮겨 승자의 시작 count만 6 -> 12로 바꾸는 데 쓴다.
+        // 원거리라 접촉 pair가 없고 리더도 없어, 옮기기 전까지 어느 판정에도 관여하지 않는다.
+        for (int i = 0; i < 6; i++)
+        {
+            buffer.Add(20 + i, 3, false, V(60.0f + i, 60.0f));
+        }
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+        SimTuning tuning = DynamicRate(0.25f);
+
+        // 1단계: count 6 -> rate 1.5 -> 0.3/호출. 2호출로 0.6을 쌓는다(아직 전향 없음).
+        for (int call = 1; call <= 2; call++)
+        {
+            resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+            Assert.AreEqual(0, outcome.Conversions.Count, "carry 적립 call " + call);
+        }
+
+        // 2단계: 원거리 team3 6명을 team0으로 옮겨 시작 count를 12로 만든다(팀 변경이므로 grid 재구성 필요).
+        for (int i = 0; i < buffer.Count; i++)
+        {
+            if (buffer.Team[i] == 3)
+            {
+                buffer.Team[i] = 0;
+            }
+        }
+        grid.Rebuild(buffer);
+
+        // rate가 3.0으로 갱신되어 0.6 + 0.6 = 1.2 >= 1 => 전향 1건.
+        resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+        Assert.AreEqual(1, outcome.Conversions.Count,
+            "갱신된 전향율(0.6)이 기존 누적(0.6)에 더해져 1.2가 되어야 한다 — 갱신 안 됐다면 0.9, 누적 유실이면 0.6으로 전향 없음");
+        Assert.AreEqual(0, outcome.Conversions[0].ToTeam, "전향 대상 팀은 team0");
+
+        // 방출분(1)만 소모되고 남은 0.2는 그대로 이월된다: 0.2 + 0.6 = 0.8(<1) => 전향 없음, 그다음 1.4 => 전향 1건.
+        resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+        Assert.AreEqual(0, outcome.Conversions.Count, "남은 0.2 + 0.6 = 0.8 < 1이면 전향 없음");
+        resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+        Assert.AreEqual(1, outcome.Conversions.Count, "0.8 + 0.6 = 1.4 >= 1이면 전향 1건");
+    }
+
+    /// <summary>
+    /// [UseDynamicConvertRate=true] 계수가 0이면 승자 인원수가 아무리 많아도 전향율이 0이라 아무도 전향하지 않음을 검증한다.
+    /// (이 성질은 RateLimitConversion=ON에서만 성립한다 — OFF면 예산 게이트 자체가 없어 접촉 즉시 전향한다. 이 fixture는 ON이다.)
+    /// </summary>
+    [Test]
+    public void DynamicRate_ZeroPerMember_ConvertsNobody()
+    {
+        using AgentBuffer buffer = new AgentBuffer(Cap);
+        AddDynamicRateContactLayout(buffer);
+
+        SpatialGrid grid = NewGrid(buffer);
+        CombatResolver resolver = new CombatResolver(TeamCount, Cap);
+        CombatState state = new CombatState(TeamCount);
+        CombatOutcome outcome = new CombatOutcome(Cap);
+        SimTuning tuning = DynamicRate(0f);
+
+        for (int call = 1; call <= 20; call++)
+        {
+            resolver.Resolve(buffer, grid, tuning, 0.2f, state, outcome);
+            Assert.AreEqual(0, outcome.Conversions.Count, "계수 0이면 누적이 0에 머물러 전향이 없다 (call " + call + ")");
+            Assert.AreEqual(0, outcome.Eliminations.Count, "call " + call);
+        }
+    }
+
+    /// <summary>
+    /// [UseDynamicConvertRate=true] 동적 전향율도 <b>agent 삽입 순서의 순열에 불변</b>임을 검증한다. 전향율이 틱 시작
+    /// 스냅샷(_startCounts)에서만 나오므로 삽입 순서가 바뀌어도 같은 값이 되어야 한다.
+    /// 예산이 정확히 1이 되도록 계수를 잡아, 가장 가까운 victim 1명만 전향한다 — 고정 ConvertPerSecond 분기를 탔다면
+    /// 오염값(100000) 때문에 예산이 폭발해 전향/제거가 쏟아지므로 아래 서명 비교에서 즉시 드러난다.
+    /// </summary>
+    [Test]
+    public void DynamicRate_ThreeWayContact_PermutationInvariant()
+    {
+        Spec[] specs =
+        {
+            S(0, 0, true, 0.00f, 0.00f),
+            S(1, 0, false, 0.10f, 0.00f),
+            S(2, 0, false, 0.20f, 0.00f),
+            S(3, 0, false, 0.30f, 0.00f),
+            S(4, 1, true, 0.00f, 0.10f),
+            S(5, 1, false, 0.10f, 0.10f),
+            S(6, 1, false, 0.20f, 0.10f),
+            S(7, 2, true, 0.00f, 0.20f),
+            S(8, 2, false, 0.10f, 0.20f),
+        };
+
+        int n = specs.Length;
+        int[] canonical = new int[n];
+        int[] reversed = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            canonical[i] = i;
+            reversed[i] = n - 1 - i;
+        }
+        int[] shuffled = Shuffle(canonical, 987654321);
+
+        // team0 시작 count 4 * 계수 1.0 = rate 4.0, 접촉 pair 12 -> clamp 포화 1.0, dt 0.3 => 예산 1.2 -> 1명만 전향.
+        SimTuning tuning = DynamicRate(1f);
+        string sigCanonical = RunScenario(specs, canonical, 0.3f, tuning);
+        string sigCanonicalAgain = RunScenario(specs, canonical, 0.3f, tuning);
+        string sigReversed = RunScenario(specs, reversed, 0.3f, tuning);
+        string sigShuffled = RunScenario(specs, shuffled, 0.3f, tuning);
+
+        Assert.AreEqual("5->0|", sigCanonical,
+            "동적 예산 1 => 최근접 tie에서 낮은 id(5) 1명만 team0으로 전향, 제거 없음 (고정 rate 분기였다면 예산 폭발로 전혀 다른 서명이 된다)");
+        Assert.AreEqual(sigCanonical, sigCanonicalAgain, "동일 입력은 동일 결과여야 한다");
+        Assert.AreEqual(sigCanonical, sigReversed, "역순(팀 역순 포함) 삽입도 같은 결과여야 한다");
+        Assert.AreEqual(sigCanonical, sigShuffled, "셔플 삽입도 같은 결과여야 한다");
+    }
+
     // ---- helpers ----
+
+    // 동적 전향율 테스트용 공통 접촉 배치. team0(승자) 6명이 원점 부근에 밀집하고, team1(패자) 5명 중 팔로워 4명만 접촉한다
+    // (리더는 멀리 두어 stage-4 제거를 배제). 접촉 pair 24 >= PairNormalizer 8이라 clamp01이 1.0으로 포화해 strength가
+    // 상수 1이 되고, 남는 변수는 전향율 하나뿐이다.
+    private static void AddDynamicRateContactLayout(AgentBuffer buffer)
+    {
+        buffer.Add(0, 0, true, V(0.00f, 0.00f));
+        buffer.Add(1, 0, false, V(0.10f, 0.00f));
+        buffer.Add(2, 0, false, V(0.20f, 0.00f));
+        buffer.Add(3, 0, false, V(0.00f, 0.10f));
+        buffer.Add(4, 0, false, V(0.10f, 0.10f));
+        buffer.Add(5, 0, false, V(0.20f, 0.10f));
+        buffer.Add(6, 1, true, V(50.0f, 50.0f));
+        buffer.Add(7, 1, false, V(0.10f, 0.20f));
+        buffer.Add(8, 1, false, V(0.20f, 0.20f));
+        buffer.Add(9, 1, false, V(0.00f, 0.30f));
+        buffer.Add(10, 1, false, V(0.10f, 0.30f));
+    }
 
     private static CrowdConversion ResolveUntilFirstConversion(
         CombatResolver resolver, AgentBuffer buffer, SpatialGrid grid, SimTuning tuning,
@@ -1205,6 +1419,11 @@ public sealed class CombatResolverTests
     // 주어진 삽입 순서로 시나리오를 실행하고, Id 기준으로 정규화한 결과 서명을 돌려준다.
     private static string RunScenario(Spec[] specs, int[] order, float dt)
     {
+        return RunScenario(specs, order, dt, Default());
+    }
+
+    private static string RunScenario(Spec[] specs, int[] order, float dt, SimTuning tuning)
+    {
         using AgentBuffer buffer = new AgentBuffer(Cap);
         for (int k = 0; k < order.Length; k++)
         {
@@ -1216,7 +1435,7 @@ public sealed class CombatResolverTests
         CombatResolver resolver = new CombatResolver(TeamCount, Cap);
         CombatState state = new CombatState(TeamCount);
         CombatOutcome outcome = new CombatOutcome(Cap);
-        resolver.Resolve(buffer, grid, Default(), dt, state, outcome);
+        resolver.Resolve(buffer, grid, tuning, dt, state, outcome);
 
         List<string> conversions = new List<string>();
         for (int i = 0; i < outcome.Conversions.Count; i++)

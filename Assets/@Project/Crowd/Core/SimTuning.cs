@@ -66,4 +66,16 @@ public struct SimTuning
     /// </summary>
     [UnityEngine.Tooltip("전투 전향율 flat 토글. OFF(false)=기존 규칙(rate = ConvertPerSecond * clamp01(접촉 pair 수 / PairNormalizer)). ON(true)=접촉이 하나라도 있으면 clamp01=1.0로 보고 최대 전향율(ConvertPerSecond)을 적용하며 접촉 pair 수 계수를 계산하지 않는다.")]
     public bool CombatFlatConvertRate;
+
+    /// <summary>
+    /// 초당 전향 수를 고정값 대신 이긴 팀의 틱 시작 인원수에 비례시키는 동적 전향율 토글이다. 기본값 false(고정 ConvertPerSecond).
+    /// </summary>
+    [UnityEngine.Tooltip("동적 전향율 토글. OFF(false)=고정 전향율(ConvertPerSecond)을 쓴다. ON(true)=이긴 팀의 틱 시작 인원수 * ConvertPerSecondPerMember를 전향율로 쓰고 ConvertPerSecond는 쓰지 않는다(이긴 쪽은 항상 더 큰 팀이므로 커질수록 더 빨리 빼앗는 눈덩이 효과가 의도된 것이다).")]
+    public bool UseDynamicConvertRate;
+
+    /// <summary>
+    /// UseDynamicConvertRate=true일 때 이긴 팀 member 1명당 붙는 초당 전향 수(나눗셈이 아니라 곱셈 계수)다. 기본값 0.1(인원수 ÷ 10과 같음).
+    /// </summary>
+    [UnityEngine.Tooltip("동적 전향율 계수(배수). 이긴 팀의 틱 시작 인원수 1명당 초당 전향 수이며, UseDynamicConvertRate=false면 쓰이지 않는다. 0이면 전향이 일어나지 않는다 — 단 이는 RateLimitConversion=ON일 때만 성립한다. RateLimitConversion=OFF면 전향 예산 게이트 자체가 없어(접촉 즉시 전향) 이 값도, UseDynamicConvertRate 토글도 아무 효과가 없다.")]
+    public float ConvertPerSecondPerMember;
 }

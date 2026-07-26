@@ -71,10 +71,10 @@ Only two asmdefs: `Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef`, `A
 | `CrowdSimState` (Persistent owner) | `CrowdSimState.cs:14` | ctor `:131` · `PrevPos` `:45` · `CommandedVelocity` `:52` · `FollowerList` `:57` · `Grid*` snapshot `:121-125` · `Dispose` `:179` |
 | `SpatialGrid` (hash grid) | `SpatialGrid.cs:11` | `Rebuild` `:124` · `QueryCircle` `:178` · `QueryTeamMask` `:242` · `QueryCircleCapped` `:274` · `CopyNativeSnapshot` `:101` · `HashCell` `:352` |
 | `RecruitResolver` | `RecruitResolver.cs:34` | `Resolve` `:45` · grid query `:75` |
-| `CombatResolver` (+`CombatState`/`CombatOutcome`) | `CombatResolver.cs:135` (`:67`, `:98`) | `Resolve` `:214` · footprint mask `:279` · contact query `:287` · victim sort `:446`,`:579` · leader query `:487` |
+| `CombatResolver` (+`CombatState`/`CombatOutcome`) | `CombatResolver.cs:135` (`:67`, `:98`) | `Resolve` `:215` · footprint mask `:282` · contact query `:290` · convert-rate branch `:364` · budget gate `:432` · victim sort `:454`,`:587` · leader query `:495` |
 | `MatchRules` | `MatchRules.cs:38` | `PlayerTeam = 0` `:43` · `ResolveStandings` `:50` · `ResolveWinner` `:82` |
 | `FollowerSteering` | `FollowerSteering.cs:7` | `SlotOffset` `:16` |
-| `SimTuning` (config struct) | `SimTuning.cs:8` | fields `:14-68` |
+| `SimTuning` (config struct) | `SimTuning.cs:8` | fields `:14-80` |
 | `WallField` / `WallFieldView` | `WallField.cs:15` / `:136` | `Load` `:52` · `AsView` `:112` · `Dispose` `:119` · `Phi` `:171` · `Gradient` `:198` |
 | `WallSdfAsset` (SO) | `WallSdfAsset.cs:17` | `CurrentSchemaVersion` `:20` · `EditorInitialize` `:98` |
 | `WallSolver` (pure function) | `WallSolver.cs:16` | `Resolve(WallField…)` `:44` · `Resolve(in WallFieldView…)` `:54` · `Depenetrate` `:112` · constants `:19-31` |
@@ -175,7 +175,7 @@ The three Burst jobs are in §6.
 | What | Where |
 |---|---|
 | SO type definition | `Assets/@Project/Game/Scripts/GameConfigSO.cs:9` · `Sim` property `:127` · `UseGpuCrowdRenderer` `:221` · `OnValidate` clamps `:247` |
-| **live values (authority)** | `Assets/@Project/Game/GameConfig.asset` — `neutralCount` `:17` · `followerMaxSpeed` `:20` · `followerArriveRadius` `:31` · `followerMaxAccel` `:33` · `followerTrailingOffset` `:34` · `sim` block `:36-46` · `neutralAnimationSpeed` `:56` · `neutralMaxScale` `:57` · `useGpuCrowdRenderer` `:64` · `teamMaterials` `:71-76` |
+| **live values (authority)** | `Assets/@Project/Game/GameConfig.asset` — `neutralCount` `:17` · `followerMaxSpeed` `:20` · `followerArriveRadius` `:31` · `followerMaxAccel` `:33` · `followerTrailingOffset` `:34` · `sim` block `:36-48` · `neutralAnimationSpeed` `:58` · `neutralMaxScale` `:59` · `useGpuCrowdRenderer` `:66` · `teamMaterials` `:73-78` |
 | HUD style SO | `Assets/@Project/Hud/Scripts/TMPTextStyleSO.cs:8` / asset `Assets/@Project/Hud/CrowdCountTextStyle.asset` |
 | session state | `Assets/@Project/Game/Scripts/GameSession.cs:12` (read interface `Game/Contracts/Runtime/IGameSessionReadOnly.cs:29`, `MatchState` `:7`) |
 | runtime crowd state | `Crowd/Scripts/CrowdModel.cs:9` + `Crowd/Core/CrowdSimState.cs:14` (authoritative position/team) |
