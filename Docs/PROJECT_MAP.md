@@ -21,7 +21,7 @@
 
 Per-feature folder convention: `Scripts/` · `Editor/` · `Contracts/` · `Core/` · `Tests/Editor/` · `Resources/{Prefabs,UI}/` · `Externals/` · `Generated/` · `Prefabs/` · `Materials/` · `Animations/` · `VAT/`
 
-Only two asmdefs: `Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef`, `Assets/@Project/Crowd/Tests/Editor/Project.CrowdCity.Core.Tests.asmdef`. Everything else is `Assembly-CSharp`.
+Only two asmdefs: `Assets/@Project/Crowd/Core/Project.CrowdCity.Core.asmdef`, `Assets/@Project/Crowd/Tests/Editor/Project.CrowdCity.Core.Tests.asmdef`. Everything else is `Assembly-CSharp`, or `Assembly-CSharp-Editor` for the non-asmdef `Editor/` folders (`City/Editor`, `Game/Editor`, `Human/Editor`).
 
 ---
 
@@ -159,7 +159,8 @@ The three Burst jobs are in §6.
 | Step | Location |
 |---|---|
 | bake tool (editor, once) | `Assets/@Project/City/Editor/WallFieldBaker.cs:24` · menu `:90` · `BakeParams.Default` `:45` |
-| validator | `Assets/@Project/City/Editor/WallFieldValidator.cs:27` (menu), `:57` (`Validate`) |
+| validator (`SourceHash` vs live city · re-bake determinism) | `Assets/@Project/City/Editor/WallFieldValidator.cs:27` (menu), `:57` (`Validate`) |
+| artifact integrity check (payload CRC · payload length · pinned interpretation constants · `schemaVersion`) | `Assets/@Project/Game/Editor/ResourcePathValidator.cs:321` (`ValidateWallSdfIntegrity`), `:343` (`CheckWallSdfIntegrity`) — pinned constants `:55-61`, CRC32 reused from `City/Editor/WallFieldBaker.cs:647` |
 | output assets | `Assets/@Project/City/Generated/WallSdf.asset` + `WallSdf.bytes` |
 | **live values (authority)** — field coordinates only, read the asset for the values | `Assets/@Project/City/Generated/WallSdf.asset` — `cellSize` `:18` · `cols`/`rows` `:19-20` · `yMin`/`yMax` `:21-22` · `maxDistance` `:23` · `bilinearBias` `:24` · `colliderCount` `:25` |
 | runtime load | `CrowdRoot.cs:339-362` → `Crowd/Core/WallField.cs:52` |
@@ -194,7 +195,7 @@ The three Burst jobs are in §6.
 | internals (`Resources.Load<GameObject>` + `GetComponent<T>`) | `:68` |
 | loaded prefabs | `Game/Resources/Prefabs/{GameplayRoot,InputRoot,CameraRoot}.prefab` · `Crowd/Resources/Prefabs/CrowdRoot.prefab` · `Hud/Resources/UI/HudRoot.prefab` · `DevTools/Resources/UI/DevHudRoot.prefab` |
 | non-Resources serialized prefabs | `Human/Prefabs/Human.prefab` · `Hud/Prefabs/{CrowdLabel,RivalMarker}.prefab` · `City/Prefabs/GeneratedBuildings/Building_00…36.prefab` |
-| validator (duplicate keys · root contract · wiring · source-policy) | `Assets/@Project/Game/Editor/ResourcePathValidator.cs:70` (menu), `:81` (`Validate`) — target type lists `PrefabRootTypes` `:52-58` / `UiRootTypes` `:61-65`, canonical loader path constant `:32` |
+| validator (duplicate keys · root contract · wiring · source-policy · WallSdf integrity) | `Assets/@Project/Game/Editor/ResourcePathValidator.cs:82` (menu), `:93` (`Validate`) — target type lists `PrefabRootTypes` `:64-70` / `UiRootTypes` `:73-77`, canonical loader path constant `:34` |
 | rule authority | `CLAUDE.md` §11.5 |
 
 ---
@@ -257,7 +258,7 @@ The three Burst jobs are in §6.
 | Bake Feature Root Prefabs (Resources) | `GameSceneSetup.cs:1926` |
 | Bake Dev HUD (Resources) | `GameSceneSetup.cs:2175` |
 | Validate Game Scene | `Game/Editor/GameSceneValidator.cs:49` (`Validate` `:62`) — pinned CC spec constants `:37-41` |
-| Validate Resource Paths | `Game/Editor/ResourcePathValidator.cs:70` |
+| Validate Resource Paths | `Game/Editor/ResourcePathValidator.cs:82` |
 | Bake Wall SDF | `City/Editor/WallFieldBaker.cs:90` |
 | Validate Wall SDF | `City/Editor/WallFieldValidator.cs:27` |
 | Bake Human VAT | `Human/Editor/HumanVatBaker.cs:68` |
@@ -291,6 +292,7 @@ Arguments, environment, which path each invocation actually measures, and readin
 | `Crowd/Tests/Editor/MatchRulesTests.cs:7` | standings / winner |
 | `Crowd/Tests/Editor/DensityCapTests.cs:10` | separation visit-budget cap |
 | `Game/Editor/CameraRootLifecycleTests.cs` | CameraRoot lifecycle |
+| `Game/Editor/ResourcePathValidatorWallSdfTests.cs` | WallSdf payload CRC / length / pinned constants |
 | `City/Editor/CityBuildingsGeneratorTests.cs` | building-split determinism |
 
 ---

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -16,6 +17,7 @@ using UnityEngine;
 /// (3) 구 카테고리(Resources 바로 아래 Roots 폴더) 잔존 asset 금지(카테고리 개편 후 잔존물 백스톱).
 /// (4) 단일 소비자 asset이 소비 feature root 프리팹의 직렬화 필드로 배선됐는지.
 /// (5) source-policy: ResourceLoader.cs 외 프로젝트 소스가 런타임 Resources 로드를 호출하지 않는지.
+/// (6) 베이크 산출물 WallSdf의 무결성: payload CRC·payload 길이·런타임 해석 파라미터·schemaVersion의 상수 pin.
 ///
 /// 로드 키 = 경로에서 마지막 "/Resources/" 이후 부분, 확장자 제거, forward slash, 소문자.
 /// 중복 실패는 "충돌 asset 중 하나 이상이 이 프로젝트(Assets/@Project) 소유일 때"만 보고한다.
@@ -48,6 +50,16 @@ public static class ResourcePathValidator
     private const string VatNormalTexPath = "Assets/@Project/Human/VAT/HumanWalkVatNormal.asset";
     private const string FontAssetPath = "Assets/TextMesh Pro/Resources/Fonts & Materials/LiberationSans SDF - Fallback.asset";
 
+    // WallSdf 해석 파라미터 pin: 런타임 WallField.Load가 필드로 복사하는 7개 값(WallField.cs:84-91)이다.
+    // 값은 City/Generated/WallSdf.asset의 현재 직렬화 값이며, 재베이크로 값이 바뀌면 같은 커밋에서 여기도 갱신한다.
+    private const int WallSdfCols = 928;
+    private const int WallSdfRows = 914;
+    private const float WallSdfCellSize = 0.1f;
+    private const float WallSdfOriginX = -46.399998f;
+    private const float WallSdfOriginZ = -45.7f;
+    private const float WallSdfMaxDistance = 2.5f;
+    private const float WallSdfBilinearBias = 0.05f;
+
     // Prefabs 카테고리 로직 root. 런타임(ResourceLoader.LoadPrefab&lt;T&gt;)이 클래스 이름으로 "Prefabs/&lt;이름&gt;"을 로드한다.
     private static readonly Type[] PrefabRootTypes =
     {
@@ -75,7 +87,7 @@ public static class ResourcePathValidator
 
     /// <summary>
     /// 병합 Resources 중복 로드 키, feature root 프리팹의 씬-독립 계약, 구 카테고리(Roots) 잔존, 프리팹 직렬화 배선,
-    /// 그리고 ResourceLoader.cs 외 Resources 로드 금지(source-policy)를 검증한다.
+    /// ResourceLoader.cs 외 Resources 로드 금지(source-policy), 그리고 베이크 산출물 WallSdf의 무결성을 검증한다.
     /// </summary>
     /// <returns>모든 검사를 통과하면 true, 하나라도 실패하면 false를 반환한다.</returns>
     public static bool Validate()
@@ -93,6 +105,7 @@ public static class ResourcePathValidator
         CollectRemainingLegacyRootsAssets(failures);
         ValidateMovedSerializedRefs(failures);
         CheckCrowdRootSdfSolverEnabled(failures);
+        ValidateWallSdfIntegrity(failures);
         ValidateCrowdRendererRefs(failures);
         ValidateResourcesLoadPolicy(failures);
 
@@ -301,6 +314,85 @@ public static class ResourcePathValidator
                 "CrowdRoot 프리팹 '_useSdfSolver'가 1(SDF-ON, commit 55c8d19 의도)이 아님 — " +
                 "프리팹 재생성이 SDF solver를 조용히 껐을 수 있습니다.");
         }
+    }
+
+    // 베이크 산출물 WallSdf의 무결성을 저작 시점에 검사한다. WallSdf는 사용자가 쓸 수 없는 in-package 생성물이라
+    // 여기서 잡으면 조치가 "다시 굽는다"로 끝나지만, 런타임에서 잡으면 남는 수단이 CC.Move 폴백뿐이다(SDF가 걷어내려던 병목).
+    private static void ValidateWallSdfIntegrity(List<string> failures)
+    {
+        WallSdfAsset asset = AssetDatabase.LoadAssetAtPath<WallSdfAsset>(WallSdfAssetPath);
+        if (asset == null)
+        {
+            failures.Add($"WallSdf asset을 로드하지 못함: {WallSdfAssetPath}");
+            return;
+        }
+
+        if (asset.Payload == null)
+        {
+            failures.Add($"WallSdf asset의 payload(.bytes) 참조가 비어 있음: {WallSdfAssetPath}");
+            return;
+        }
+
+        CheckWallSdfIntegrity(asset, asset.Payload.bytes, failures);
+    }
+
+    // asset 메타와 payload 바이트를 대조한다: (a) payload CRC32 == 메타 payloadCrc, (b) payload 길이 == CellCount*float
+    // (런타임 계약 WallField.cs:66-70과 동일), (c) 런타임이 복사하는 해석 파라미터 7개 == 커밋된 상수, (d) schemaVersion == 코드 상수.
+    // payload 바이트를 인자로 받는 이유는 EditMode 테스트가 같은 길이의 1바이트 변형으로 (a)가 실제로 실패하는지
+    // 확인할 수 있게 하는 것뿐이다(프로덕션 호출자는 asset.Payload.bytes를 그대로 넘긴다).
+    internal static void CheckWallSdfIntegrity(WallSdfAsset asset, byte[] payloadBytes, List<string> failures)
+    {
+        int expectedLength = asset.CellCount * sizeof(float);
+        if (payloadBytes.Length != expectedLength)
+        {
+            failures.Add(
+                $"WallSdf payload 길이가 CellCount*float과 다름: actual={payloadBytes.Length} expected={expectedLength}");
+        }
+
+        uint actualCrc = WallFieldBaker.Crc32(payloadBytes);
+        if (actualCrc != asset.PayloadCrc)
+        {
+            failures.Add($"WallSdf payload CRC32가 메타 payloadCrc와 다름: actual={actualCrc:X8} meta={asset.PayloadCrc:X8}");
+        }
+
+        CheckPinnedInt("cols", asset.Cols, WallSdfCols, failures);
+        CheckPinnedInt("rows", asset.Rows, WallSdfRows, failures);
+        CheckPinnedFloat("cellSize", asset.CellSize, WallSdfCellSize, failures);
+        CheckPinnedFloat("originX", asset.OriginX, WallSdfOriginX, failures);
+        CheckPinnedFloat("originZ", asset.OriginZ, WallSdfOriginZ, failures);
+        CheckPinnedFloat("maxDistance", asset.MaxDistance, WallSdfMaxDistance, failures);
+        CheckPinnedFloat("bilinearBias", asset.BilinearBias, WallSdfBilinearBias, failures);
+
+        // schemaVersion은 위 7개와 달리 기대값이 코드 상수라 재베이크로는 바뀌지 않는다(layout 스키마가 오를 때만 함께 오른다).
+        CheckPinnedInt("schemaVersion", asset.SchemaVersion, WallSdfAsset.CurrentSchemaVersion, failures);
+    }
+
+    // pin 불일치 로그만 보고도 다음 행동을 알 수 있도록 두 메시지 끝에 붙이는 조치 안내다.
+    private const string PinRemedyHint =
+        " (재베이크가 의도된 것이면 같은 커밋에서 기대값을 갱신할 것: 이 파일 상단의 WallSdf* 상수 pin, schemaVersion은 WallSdfAsset.CurrentSchemaVersion)";
+
+    // 상수 pin은 정확 일치로 본다. 재베이크로 값이 바뀌면 실패해서 상수 갱신을 강제하는 것이 이 검사의 목적이다.
+    private static void CheckPinnedInt(string fieldName, int actual, int expected, List<string> failures)
+    {
+        if (actual != expected)
+        {
+            failures.Add($"WallSdf '{fieldName}'이(가) 상수 pin과 다름: asset={actual} expected={expected}{PinRemedyHint}");
+        }
+    }
+
+    private static void CheckPinnedFloat(string fieldName, float actual, float expected, List<string> failures)
+    {
+        if (actual != expected)
+        {
+            failures.Add(
+                $"WallSdf '{fieldName}'이(가) 상수 pin과 다름: asset={FormatFloat(actual)} expected={FormatFloat(expected)}{PinRemedyHint}");
+        }
+    }
+
+    // 상수를 다시 pin할 때 그대로 옮겨 적을 수 있도록 문화권 무관 round-trip(G9) 표기로 포맷한다.
+    private static string FormatFloat(float v)
+    {
+        return v.ToString("G9", CultureInfo.InvariantCulture);
     }
 
     // GPU-anim Stage 1 Chunk B: CrowdRoot 프리팹의 자식 CrowdRenderer가 저작돼 있으면 그 VAT refs와 CrowdRoot._crowdRenderer
