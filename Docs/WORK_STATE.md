@@ -1,6 +1,6 @@
 # WORK_STATE — 진행 중 작업 상태 (저장소 전역, 콜드스타트용)
 
-> **검증 기준 커밋: `33e49ab`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
+> **검증 기준 커밋: `821ab01`** — 이 문서는 이 커밋 시점에 사실임이 확인됐다(verified true as of this commit). `git rev-parse --short HEAD`가 이 해시와 다르면 그 사이 커밋들을 읽기 전까지 이 문서를 신뢰하지 않는다 — 절차는 `CLAUDE.md`/`AGENTS.md`의 "Session start" 규칙.
 
 > **이 문서가 답하는 질문: "지금 무엇이 진행 중이고, 무엇을 깨면 안 되는가?"** 독자는 AI다. 저장소 전역 문서이며 **영역별 절**로 나누어진다. 구조("어디에 있는가")는 `Docs/PROJECT_MAP.md`가, 설명·근거("왜 이렇게 만들었는가")는 영역별 사람용 가이드가 담당한다 — 세 문서의 경계는 `CLAUDE.md` §1.1이 정본이다(둘 다 작성됐다 — `4cd9260`이 `PROJECT_MAP.md`를, `a28aee3`이 CrowdCity 가이드 [`CROWD_GUIDE.md`](CrowdCity/CROWD_GUIDE.md)를 신설했다).
 > **아래 본문은 전부 CrowdCity 영역 절이다.** 2026-07-26에 `Docs/CrowdCity/SIM_OPT_HANDOFF.md`에서 개명·이동했고(`ce53e44`), 그 패스는 이름·경로·자기참조만 고쳤다. 영역별 절 재편은 아직 하지 않았다(미착수).
@@ -49,7 +49,7 @@
 
 **이 문서 49건 중 41건**(FALSE·UNVERIFIABLE·MODE-MISSING·IMPRECISE·OFF-BY-N·RULE4)**은 아래 본문에 반영됐다.** 죽은 좌표, 이미 랜딩된 작업을 미완으로 적은 서술, 모드 누락, 저장소 근거 없는 수치는 본문이 정정본이다. 감사 보고서는 단일 에이전트 산출물이라 신뢰 입력이 아니므로 항목마다 1차 소스(`.cs`/`.asset`/`Perf/` 원시 파일/`git`)로 재검증했고, 재검증에서 반증된 지적은 반영하지 않았다.
 
-**남은 8건은 BOUNDARY**(다른 문서 소관 내용이 이 문서에 중복 거주하는 건들)였고, **경계 이관 패스에서 4건이 처리됐다** — §2 대상 코드 색인 → `PROJECT_MAP.md` §3·§4·§5·§14 포인터로 대체, §3 운영 모델 → `CLAUDE.md` 포인터로 대체(`CLAUDE.md`에 없는 4항목만 이관 대기로 명시 잔류), §8 파일 인덱스 → `PROJECT_MAP.md` §16 포인터로 대체, §9.1 "의미 훼손이 작다고 본 근거" → `CROWD_GUIDE.md` §8로 이동.
+**남은 8건은 BOUNDARY**(다른 문서 소관 내용이 이 문서에 중복 거주하는 건들)였고, **경계 이관 패스에서 4건이 처리됐다** — §2 대상 코드 색인 → `PROJECT_MAP.md` §3·§4·§5·§14 포인터로 대체, §3 운영 모델 → `CLAUDE.md` 포인터로 대체(당시 `CLAUDE.md`에 없던 4항목은 이관 대기로 잔류했다가 후속 패스에서 미러 쌍 오너가 이관 완료 — reviewer 입력 조건·합의 종료 조건·셸 주의 3건 전량과 Codex CLI 플래그 전량이 `CLAUDE.md`/`AGENTS.md`로 갔고, 긴 프롬프트 셸 용법만 계약이 아니라 여기 잔류), §8 파일 인덱스 → `PROJECT_MAP.md` §16 포인터로 대체, §9.1 "의미 훼손이 작다고 본 근거" → `CROWD_GUIDE.md` §8로 이동.
 
 **나머지 4건은 의도적으로 이 문서에 남겼다**(목적지가 없거나 옮기면 사실이 사라지는 건들):
 - 2026-07-19 "완료" 목록과 2026-07-17 마커 절 — 지정 목적지가 "git 히스토리"라 이관이 아니라 **삭제**이고, 두 절 모두 살아 있는 함정(Burst 22.95→14.04 "재인용 금지" 경고, 로컬 메모리 미동기 경고)을 안고 있다.
@@ -200,12 +200,8 @@ AF_CrowdCity의 CPU 프레임 핫스팟은 `GameplayRoot.Update`다(사용자 Pr
 
 ## 3. 운영 모델
 
-- **정본은 `CLAUDE.md` / `AGENTS.md`다.** 메인=매니저 전용 위임 모델, 서브에이전트 보고 4제목 형식, 한 파일=한 오너, Codex↔Claude 교차검증 절차와 합의 요구, 두 에이전트의 모델·effort·`codex exec` 기본 호출형(`< /dev/null` 포함) — 전부 그 파일의 "Main/Subagent Operating Model" · "Cross-Verification" · "Agent settings" 절에 있다. 워크플로우 계약은 이 문서가 소유하지 않는다(`CLAUDE.md` §1.1 Rule 1·Rule 3). 여기서 재기술하지 않는다.
-- **아래 4건은 `CLAUDE.md`에 아직 없는 항목이다** — `CLAUDE.md`/`AGENTS.md`는 이 문서의 소관이 아니므로 그 미러 쌍의 오너가 같은 커밋에서 이관해야 한다. 이관될 때까지는 여기가 유일한 기록이다.
-  - Codex 호출 플래그: 설계·검증 리뷰는 `--skip-git-repo-check --sandbox read-only`, 파일 쓰기가 필요할 때만 `--sandbox workspace-write`. 긴 프롬프트는 파일에 써서 `"$(cat promptfile)"`로 넘긴다.
-  - **교차검증 reviewer는 항상 read-only**이고, 동일 HEAD SHA·frozen 작업트리·동일 요구사항/Decision Log/검증결과를 입력으로 받는다.
-  - **합의 종료 조건 = 미해결 BLOCKER/MAJOR 0건.** reviewer 의견이 끝내 충돌하면 임의 봉합하지 말 것(사용자 부재 시의 처리는 `CLAUDE.md`의 자율 결정 규칙).
-  - **셸**: 주 셸 = PowerShell(win32)이므로 `< /dev/null` 등 POSIX 문법은 **Bash 툴**로 실행한다. 필수 CLI·인증·지정 모델이 없으면 임의 대체 말고 **중단→사용자 확인**.
+- **정본은 `CLAUDE.md` / `AGENTS.md`다.** 메인=매니저 전용 위임 모델, 서브에이전트 보고 4제목 형식, 한 파일=한 오너, Codex↔Claude 교차검증 절차와 합의 요구(reviewer 입력 조건·합의 종료 조건 포함), 두 에이전트의 모델·effort·`codex exec` 기본 호출형(샌드박스 플래그·`< /dev/null`·Bash 툴 주의·모델 임의 대체 금지 포함) — 전부 그 파일의 "Main/Subagent Operating Model" · "Cross-Verification" · "Agent settings" 절에 있다. 워크플로우 계약은 이 문서가 소유하지 않는다(`CLAUDE.md` §1.1 Rule 1·Rule 3). 여기서 재기술하지 않는다.
+- **긴 Codex 프롬프트**: stdin이 `< /dev/null`로 닫혀 있어 프롬프트는 인자로만 들어간다 — 길면 파일에 써서 `"$(cat promptfile)"`로 넘긴다. (워크플로우 계약이 아니라 셸 용법이므로 이 한 건만 여기 남는다.)
 - **성능 목표 수치를 지금 지어내지 말 것** — M-sim-0 실측 + 디바이스 budget 후 확정. 현재 문서의 모든 수치는 외삽.
 
 ---
