@@ -87,3 +87,16 @@ crashlytics-build.properties
 # IDE / OS
 .idea/
 .DS_Store
+
+# ── 사내 게임잼에서 제공받은 에셋 + 그로부터 파생된 산출물 ──
+# 저작권이 이 저장소에 없어 공개본에 포함하지 않는다. 자세한 내용과 대체 절차는 README.md 참조.
+# 원본 임포트 파일
+/Assets/@Project/City/Externals/
+/Assets/@Project/City/Externals.meta
+/Assets/@Project/Human/Externals/
+/Assets/@Project/Human/Externals.meta
+# 위에서 에디터 도구가 구운 파생 산출물 (원본 지오메트리·애니메이션을 그대로 담고 있다)
+/Assets/@Project/City/Generated/BuildingMeshes/
+/Assets/@Project/City/Generated/BuildingMeshes.meta
+/Assets/@Project/Human/VAT/HumanWalkVat*.asset
+/Assets/@Project/Human/VAT/HumanWalkVat*.asset.meta

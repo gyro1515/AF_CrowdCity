@@ -14,6 +14,7 @@
 - 측정일: 2026-07-26
 - 대상 질문: 다음 단계가 **T1b**(직렬 제시 패스 잡화)인가 **T2**(잡 일 축소)인가
 - 원시 출력: 이 디렉터리의 `simopt10k_step1_r1.txt` / `r2.txt` / `r3.txt`
+- 경로 표기: 아래 커맨드라인의 `<repo>`는 저장소 루트다. 원본 로그에는 측정 머신의 절대 경로가 찍혀 있으나 공개 시 치환했다 — 인자 구조와 상대 경로는 그대로다.
 - 이 문서의 역할: **증거 기록**(환경·커맨드라인·부하 통제·판정 규칙·판독 주의) **이자 판정 본문**(§4 적용 결과 · §8.5). 그 판정이 남긴 현재 상태와 다음 단계는 [`../../WORK_STATE.md`](../../WORK_STATE.md) "운영 계약" 절이 정본이다.
 
 ---
@@ -52,7 +53,7 @@ C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Unity.exe
 -nographics
 -quit
 -projectPath
-D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity
+<repo>
 -executeMethod
 CrowdProfileHarness.RunFromBatch
 -profileScales
@@ -60,7 +61,7 @@ CrowdProfileHarness.RunFromBatch
 -profileLabel
 step1_serialsplit_r1
 -profileOut
-D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity\Docs\CrowdCity\Perf\simopt10k_step1_r1.txt
+<repo>\Docs\CrowdCity\Perf\simopt10k_step1_r1.txt
 -logFile
 <session scratchpad>\step1_profile_r1.log
 ```
@@ -191,11 +192,11 @@ after_r1 로그의 `COMMAND LINE ARGUMENTS` 원문이다. 나머지 3런은 `-pe
 C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Unity.exe
 -batchmode
 -projectPath
-D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity
+<repo>
 -executeMethod
 CrowdPerfHarnessP95.RunFromBatch
 -perfOut
-D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity\Docs\CrowdCity\Perf\t1a_p95_after_r1.csv
+<repo>\Docs\CrowdCity\Perf\t1a_p95_after_r1.csv
 -perfCounts
 10000
 -logFile
@@ -370,7 +371,7 @@ C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Unity.exe
 -batchmode
 -quit
 -projectPath
-D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity
+<repo>
 -executeMethod
 CrowdProfileHarness.RunFromBatch
 -profileScales
@@ -378,7 +379,7 @@ CrowdProfileHarness.RunFromBatch
 -profileLabel
 gpupath_r1
 -profileOut
-D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity\Docs\CrowdCity\Perf\simopt10k_gpupath_r1.txt
+<repo>\Docs\CrowdCity\Perf\simopt10k_gpupath_r1.txt
 -logFile
 <session scratchpad>\gpupath_profile_r1.log
 ```

@@ -33,10 +33,12 @@
 
 `<OUT>`만 런마다 다르고(run1/run2 서로 다른 디렉터리), `-logFile` 경로도 함께 달랐다. 나머지 인자는 동일하다.
 
+`<repo>`는 저장소 루트다(원본 로그의 측정 머신 절대 경로를 공개 시 치환했다).
+
 ```
 C:\Program Files\Unity\Hub\Editor\6000.3.9f1\Editor\Unity.exe ^
   -batchmode -nographics ^
-  -projectPath D:\UNITY\UNITY_PROJECT\ActionFitPro\AF_CrowdCity ^
+  -projectPath <repo> ^
   -quit ^
   -logFile <LOG> ^
   -executeMethod CrowdOracleHarness.RunFromBatch ^
